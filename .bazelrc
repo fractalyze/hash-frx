@@ -1,0 +1,16 @@
+# bazel 9 defaults to bzlmod (WORKSPACE is gone), so no enable flags needed.
+build --announce_rc
+test --test_output=errors
+
+# Tests are backend-agnostic; CPU is the default (not a requirement) so plain
+# `bazel test` is deterministic on any machine. CI overrides it per matrix leg
+# via --test_env (the GPU leg pins FRX_PLATFORMS=cuda). Pinning the backend
+# per-target in each py_test's env instead would make it unselectable from CI.
+test --test_env=FRX_PLATFORMS=cpu
+
+# Buildbarn remote execution (--config=remote) lives in its own file, imported
+# so the config resolves for local and CI runs alike.
+import %workspace%/.bazelrc.rbe
+
+# Local, machine-specific overrides (gitignored).
+try-import %workspace%/.bazelrc.user

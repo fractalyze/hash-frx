@@ -1,0 +1,25 @@
+# hash-frx runtime dependencies.
+#
+# Pulled from the Fractalyze package index alongside upstream PyPI:
+#   pip install -r requirements.in \
+#     --extra-index-url https://fractalyze.github.io/pypi/simple/
+#
+# hash-frx is application-agnostic, so it deliberately does NOT depend on any
+# proving-scheme, signature-scheme, or chain package. zk_dtypes (native
+# finite-field dtypes) arrives via frx but is pinned here directly, and the two
+# must move together: the frx extension-field lowering reads
+# `efinfo.modulus_low_coeffs` (zk_dtypes >= 0.0.6), and this frx build registers
+# the binary-field dtypes (tower t0..t7 + flat GHASH) in the frontend, which
+# requires zk_dtypes >= 0.0.10.
+#
+# The frx build is pinned to the one `zorch` pins. The symmetric layer is being
+# extracted from there, so a ported hash must be byte-comparable against its
+# origin — a simultaneous toolchain bump would make any mismatch ambiguous
+# between the port and the bump.
+absl-py
+numpy
+frx==0.10.0.dev20260723035840
+frxlib==0.10.0.dev20260723035840
+frx-cuda12-pjrt==0.10.0.dev20260723035840
+frx-cuda12-plugin==0.10.0.dev20260723035840
+zk-dtypes==0.0.10

@@ -1,0 +1,12 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_test")
+
+py_test(
+    name = "package_test",
+    size = "small",
+    srcs = ["package_test.py"],
+    deps = [
+        "//hash_frx",
+        requirement("absl_py"),
+    ],
+)
