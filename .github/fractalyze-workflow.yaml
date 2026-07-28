@@ -1,0 +1,38 @@
+# hash-frx — board extensions for the fractalyze-plugins workflow.
+#
+# hash-frx is a primitive library, so the board's primary axis is the
+# Primitive being worked on (NOT a consumer — hash-frx names no proving
+# scheme, signature scheme, or chain). The field is derived from the
+# issue's `area:*` label; `none` catches infra / cross-cutting work.
+# Two views: Primitive lanes for day-to-day, Milestone rollup for
+# week-over-week.
+#
+# Schema lives in `fractalyze/claude-plugins` (workflow plugin).
+
+board_extensions:
+  fields:
+    - name: Primitive
+      type: single_select
+      options: [Seam, Poseidon, Poseidon2, SHA2, BLAKE3, Keccak, Sponge, Fusion, Infra, none]
+      derive_from_labels:
+        Seam: area:seam
+        Poseidon: area:poseidon
+        Poseidon2: area:poseidon2
+        SHA2: area:sha2
+        BLAKE3: area:blake3
+        Keccak: area:keccak
+        Sponge: area:sponge
+        Fusion: area:fusion
+        Infra: area:infra
+        _fallback: none
+
+  views:
+    - name: Primitive kanban
+      type: board
+      group_by: Primitive
+      column_by: Status
+
+    - name: Milestone rollup
+      type: board
+      group_by: Milestone
+      column_by: Status
