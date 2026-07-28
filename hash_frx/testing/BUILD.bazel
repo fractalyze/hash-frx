@@ -87,3 +87,24 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_library(
+    name = "jit_cache",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "jit_cache.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
+py_library(
+    name = "fusion_ready",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "fusion_ready.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("frx")],
+)
