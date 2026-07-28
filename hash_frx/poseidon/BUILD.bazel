@@ -1,0 +1,19 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "poseidon",
+    srcs = [
+        "__init__.py",
+        "linear.py",
+        "params.py",
+        "poseidon.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:fusion",
+        "//hash_frx:permutation",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
