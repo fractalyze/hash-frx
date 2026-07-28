@@ -51,3 +51,39 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "permutation_test",
+    size = "small",
+    srcs = ["permutation_test.py"],
+    deps = [
+        "//hash_frx:permutation",
+        requirement("absl_py"),
+        requirement("frx"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "byte_hash_test",
+    size = "small",
+    srcs = ["byte_hash_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "linear_test",
+    size = "small",
+    srcs = ["linear_test.py"],
+    deps = [
+        ":random_field",
+        "//hash_frx:linear",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

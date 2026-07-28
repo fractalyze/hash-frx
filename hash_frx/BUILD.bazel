@@ -2,8 +2,8 @@ load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # The package marker. Carries `__version__`, which dev-release stamps; the
-# primitive libraries (seams, Poseidon, SHA-256, BLAKE3, Keccak) land alongside
-# it and depend on this for the package init.
+# primitive libraries (Poseidon, SHA-256, BLAKE3, Keccak) land alongside it and
+# depend on this for the package init.
 py_library(
     name = "hash_frx",
     srcs = ["__init__.py"],
@@ -27,4 +27,30 @@ py_library(
         ":_composite",
         requirement("frx"),
     ],
+)
+
+# The two seams a consumer codes against: a fixed-width permutation over a field
+# dtype, and its byte sibling. Neither names a concrete hash.
+py_library(
+    name = "permutation",
+    srcs = ["permutation.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
+)
+
+py_library(
+    name = "byte_hash",
+    srcs = ["byte_hash.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "linear",
+    srcs = ["linear.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
 )
