@@ -1,0 +1,10 @@
+# CI-only Bazel settings. Loaded explicitly by the CI workflow
+# (`bazel --bazelrc=.bazelrc.ci ...`); it is NOT auto-imported, so a local
+# `bazel test //...` still runs every target.
+#
+# Skip `local_only`-tagged tests in CI. Those vmap a composite marker, which
+# needs the CompositeOp op plus the batching rule that only the composite-capable
+# dev frxlib carries; CI runs the published wheel, which has neither. Run them
+# locally against that dev frxlib. Drop this filter (and the tags) once the
+# published frx pin carries the composite backport.
+test --test_tag_filters=-local_only

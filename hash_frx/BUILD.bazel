@@ -1,0 +1,10 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+# The package marker. Carries `__version__`, which dev-release stamps; the
+# primitive libraries (seams, Poseidon, SHA-256, BLAKE3, Keccak) land alongside
+# it and depend on this for the package init.
+py_library(
+    name = "hash_frx",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
