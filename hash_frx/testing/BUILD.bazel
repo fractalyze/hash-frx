@@ -108,3 +108,15 @@ py_library(
     visibility = ["//hash_frx:__subpackages__"],
     deps = [requirement("frx")],
 )
+
+py_test(
+    name = "sha256_test",
+    size = "medium",
+    srcs = ["sha256_test.py"],
+    deps = [
+        "//hash_frx:sha256",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

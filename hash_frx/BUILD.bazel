@@ -54,3 +54,18 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [requirement("frx")],
 )
+
+# Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash plus the `Sha256` /
+# `HostSha256` ByteHash implementations. A standalone hash, not a Permutation; no
+# zk_dtypes / x64 dependency.
+py_library(
+    name = "sha256",
+    srcs = ["sha256.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":byte_hash",
+        ":fusion",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
