@@ -1,3 +1,4 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # The package marker. Carries `__version__`, which dev-release stamps; the
@@ -7,4 +8,23 @@ py_library(
     name = "hash_frx",
     srcs = ["__init__.py"],
     visibility = ["//visibility:public"],
+)
+
+# The one place `lax.composite` is spelled — every marker in this package routes
+# through it.
+py_library(
+    name = "_composite",
+    srcs = ["_composite.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
+)
+
+py_library(
+    name = "fusion",
+    srcs = ["fusion.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":_composite",
+        requirement("frx"),
+    ],
 )
