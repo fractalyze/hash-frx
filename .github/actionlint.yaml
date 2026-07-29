@@ -1,0 +1,10 @@
+# actionlint.yaml
+#
+# Self-hosted runners are labelled by capability rather than by role, so a
+# workflow asks for the hardware it needs. actionlint rejects any runner label
+# it does not know about, so the labels this repo uses are declared here.
+
+self-hosted-runner:
+  labels:
+    - cpu
+    - gpu
