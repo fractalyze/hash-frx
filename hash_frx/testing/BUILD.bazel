@@ -137,3 +137,16 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "duplex_sponge_test",
+    size = "medium",
+    srcs = ["duplex_sponge_test.py"],
+    deps = [
+        "//hash_frx:duplex_sponge",
+        "//hash_frx/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

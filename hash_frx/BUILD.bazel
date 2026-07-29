@@ -81,3 +81,15 @@ py_library(
         requirement("frx"),
     ],
 )
+
+# Add-absorb duplex sponge — the interleaved absorb/squeeze sibling of `Sponge`,
+# the primitive a Fiat-Shamir transcript drives.
+py_library(
+    name = "duplex_sponge",
+    srcs = ["duplex_sponge.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":permutation",
+        requirement("frx"),
+    ],
+)
