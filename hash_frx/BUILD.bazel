@@ -93,3 +93,14 @@ py_library(
         requirement("frx"),
     ],
 )
+
+# Truncated-permutation compression — the n-to-1 Merkle fold over a Permutation.
+py_library(
+    name = "compression",
+    srcs = ["compression.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":permutation",
+        requirement("frx"),
+    ],
+)

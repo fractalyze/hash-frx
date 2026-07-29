@@ -150,3 +150,16 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "compression_test",
+    size = "small",
+    srcs = ["compression_test.py"],
+    deps = [
+        "//hash_frx:compression",
+        "//hash_frx/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
