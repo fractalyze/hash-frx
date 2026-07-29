@@ -1,0 +1,53 @@
+# Bumps the pinned frx build and opens a pull request with the recompiled lock.
+#
+# Fired by a repository_dispatch from `fractalyze/jax`'s notify-downstream
+# workflow, which runs after a successful Dev Release and hands every consumer
+# the same version string. hash-frx has to be listed in that dispatcher's
+# consumer loop; without it no event ever arrives and this workflow is inert.
+#
+# The dispatch — rather than a schedule of this repo's own — is what keeps the
+# pin in lockstep with `zorch`. Both repos bump off one event to one version, so
+# a consumer can install both, and a fusion change that lands in the pinned XLA
+# reaches both at the same moment. A cron firing on its own clock would pick up
+# whatever published in between, which is exactly the drift this exists to stop.
+#
+# `upstream_repo: jax` is not a leftover: pip-bump interpolates it into a
+# github.com/fractalyze/<repo>/commit link, and the repo publishing these wheels
+# is still named jax — only the wheels are frx.
+#
+# `zk-dtypes` is deliberately absent from `packages`. It moves with frx but on
+# its own release cadence, so it stays a hand-held pin in requirements.in.
+
+name: FRX Update
+
+on:
+  repository_dispatch:
+    types: [frx-update]
+
+concurrency:
+  group: frx-update
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    # Self-hosted CPU, not GitHub-hosted: the lock recompile is
+    # `bazel run //:requirements.update`, and the self-hosted pool is where
+    # bazel and its caches already live.
+    runs-on: [self-hosted, cpu]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A PAT rather than the default GITHUB_TOKEN: a push made with
+          # GITHUB_TOKEN does not trigger workflow runs, so the bump PR would
+          # open with no CI on it — and CI passing on the regenerated lock is
+          # the whole point of raising a PR instead of committing the bump.
+          token: ${{ secrets.BUMPER_GH_PAT }}
+
+      - name: Bump frx/frxlib/frx-cuda12 plugins
+        uses: fractalyze/github-actions/pip-bump@main
+        with:
+          upstream_repo: jax
+          version: ${{ github.event.client_payload.frx_version }}
+          upstream_commit: ${{ github.event.client_payload.commit }}
+          packages: frx frxlib frx-cuda12-pjrt frx-cuda12-plugin
+          github_token: ${{ secrets.BUMPER_GH_PAT }}
