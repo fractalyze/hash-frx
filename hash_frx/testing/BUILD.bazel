@@ -63,6 +63,8 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# No device work: pure numpy plus the `frx.typing` alias, so the CUDA plugin
+# wheels would be ~430 MB of runfiles for nothing.
 py_test(
     name = "byte_hash_test",
     size = "small",
@@ -72,7 +74,7 @@ py_test(
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
+    ],
 )
 
 py_test(
@@ -80,6 +82,7 @@ py_test(
     size = "small",
     srcs = ["linear_test.py"],
     deps = [
+        ":fusion_ready",
         ":random_field",
         "//hash_frx:linear",
         requirement("absl_py"),

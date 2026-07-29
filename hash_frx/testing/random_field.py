@@ -18,8 +18,7 @@ from frx import Array
 
 def _is_extension_dtype(dtype: Any) -> bool:
     """True for an algebraic extension field. `zk_dtypes.efinfo` is the extension
-    registry: it resolves extension metadata and raises for base fields and point
-    types."""
+    registry: it resolves extension metadata and raises for a base field."""
     try:
         zk_dtypes.efinfo(dtype)
         return True

@@ -31,9 +31,8 @@ class FusedRegionTest(absltest.TestCase):
         self.assertIn(FUSED_REGION_MARKER, txt)
 
     def test_marker_name_matches_the_xla_recognizer(self) -> None:
-        # The recognizer matches by name, so the string is an ABI, not a label.
-        # It stays `zorch.` because this marker is generic and `zorch` emits it
-        # too — unlike the hash-specific markers, which move to `hash_frx.`.
+        # The recognizer matches by name, so the string is an ABI, not a label,
+        # and an unrecognized name loses fusion silently rather than erroring.
         self.assertEqual(FUSED_REGION_MARKER, "zorch.fused_region")
 
 
