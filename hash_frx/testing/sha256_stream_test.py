@@ -86,7 +86,7 @@ class Sha256StreamTest(absltest.TestCase):
             self.assertEqual(bytes(digs[c]), ref, f"ctr={c}")
 
     def test_stream_threads_under_jit(self) -> None:
-        # The whole point: absorb + finalize are pure JAX on a fixed-shape pytree,
+        # The whole point: absorb + finalize are pure FRX on a fixed-shape pytree,
         # so they run under @jit unchanged (a `lax.scan` carry is the same contract).
         msg = bytes(range(70))
         extra = b"\x01\x02\x03\x04\x05\x06\x07\x08"

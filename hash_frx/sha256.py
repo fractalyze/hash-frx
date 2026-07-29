@@ -329,7 +329,7 @@ _BLOCK = 64  # SHA-256 block size in bytes
 @register_dataclass
 @dataclass(frozen=True)
 class Sha256State:
-    """Incremental SHA-256 state as a JAX pytree. Fixed shapes → scan-threadable.
+    """Incremental SHA-256 state as an FRX pytree. Fixed shapes → scan-threadable.
 
     The two byte counters share one `int32[2]` leaf rather than riding as two
     scalar fields: every absorb updates both, and as separate output/carry
