@@ -6,7 +6,6 @@ universal reference `hashlib.sha256`, named by no consumer.
 Merkle–Damgård chaining value as a fixed-shape pytree so a byte Fiat-Shamir
 transcript threads `@jit` / a `lax.scan` carry (`Sha256FieldTranscript`).
 """
-
 from __future__ import annotations
 
 import hashlib
