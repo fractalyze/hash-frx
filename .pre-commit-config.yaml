@@ -1,0 +1,63 @@
+repos:
+    # Runs at the commit-msg stage, so `pre-commit install` alone does not wire
+    # it up — see README for the install command that covers both stages.
+-   repo: https://github.com/fractalyze/fractal-lint
+    # Match the version the Commit Lint CI job runs, so a message that passes
+    # locally also passes CI.
+    rev: v0.8.0
+    hooks:
+    -   id: fractal-commit-lint
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+    -   id: debug-statements
+    -   id: name-tests-test
+    -   id: requirements-txt-fixer
+        exclude: requirements_lock_.*\.txt
+-   repo: https://github.com/psf/black
+    # The formatter, deliberately — NOT `ruff format`. zorch is black-formatted
+    # and these files are ported from it; the two disagree on call-chain and
+    # string-concatenation wrapping, so using ruff's formatter here would rewrite
+    # ported code and break the diff-clean-against-zorch property the ports rely
+    # on. Ruff below is a linter only.
+    rev: 24.1.1
+    hooks:
+    -   id: black
+        args: ["-l", "88"]
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix, --select=E501, --select=I, --select=F401]
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.1.0
+    hooks:
+      - id: mypy
+        # Enforces the full-annotation convention (disallow_untyped_defs lives in
+        # pyproject). Checks the whole hash_frx/ tree rather than just changed
+        # files, so cross-module inference stays consistent. numpy ships types;
+        # frx / zk_dtypes / absl are ignored in pyproject (no usable stubs).
+        pass_filenames: false
+        additional_dependencies: [numpy]
+-   repo: https://github.com/keith/pre-commit-buildifier
+    rev: 8.0.1
+    hooks:
+      - id: buildifier
+      - id: buildifier-lint
+-   repo: local
+    hooks:
+      - id: mont-test-dtypes
+        # Tests draw field and curve-point elements as the Montgomery-form
+        # dtypes — the production encoding (docs/reference/conventions.md
+        # "Testing"). Covers every zk_dtypes family that ships a `_mont` sibling:
+        # the fields (babybear/goldilocks/koalabear + extensions, bn254_sf) and
+        # the bn254 G1/G2 point types. A test that is genuinely ABOUT the
+        # canonical encoding opts out by putting `canonical-encoding test` in a
+        # comment on the same line.
+        name: tests use Montgomery-form zk_dtypes
+        language: pygrep
+        entry: 'zk_dtypes\.(babybear|goldilocks|koalabear|bn254_(sf|g[12]_(affine|jacobian|xyzz)))(x[0-9]+)?(?![_\w])(?!.*canonical-encoding test)'
+        files: '_test\.py$'

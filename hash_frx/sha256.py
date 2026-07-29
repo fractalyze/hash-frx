@@ -14,7 +14,6 @@ bytes) and returns uint8 `[B, 32]` digests, big-endian (standard SHA-256 output
 order). Length `L` is static, so padding is data-independent and done once on
 host. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in XLA).
 """
-
 from __future__ import annotations
 
 import hashlib
@@ -241,7 +240,9 @@ def serialize_digest(state: Array) -> Array:
             state & U32(0xFF),
         ],
         axis=-1,
-    ).astype(fnp.uint8)  # [B, 8, 4]
+    ).astype(
+        fnp.uint8
+    )  # [B, 8, 4]
     return out.reshape(b, 32)
 
 

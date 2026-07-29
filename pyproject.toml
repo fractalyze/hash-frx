@@ -1,0 +1,34 @@
+# Python tooling config. hash-frx builds via Bazel (MODULE.bazel) and is consumed
+# as a bzlmod module rather than a wheel, so there is no packaging section here —
+# `sig-frx` pins it with a `bazel_dep` + `git_override`. Add `[build-system]` and
+# `[project]` if a wheel is ever needed (tracked on the release issue).
+#
+# The tables below configure the tools that are not Bazel: pytest, which runs the
+# `*_test.py` modules outside the bazel graph, and mypy, which enforces the
+# full-annotation convention.
+
+[tool.pytest.ini_options]
+testpaths = ["hash_frx"]
+python_files = ["*_test.py", "test_*.py"]
+
+# Every def carries full type annotations (docs/reference/conventions.md); mypy's
+# disallow_untyped_defs is what enforces it, and it is also what makes the
+# seam-conformance pins (`if TYPE_CHECKING: _: type[Permutation] = ...`) bite —
+# without it those lines compile and prove nothing.
+[tool.mypy]
+python_version = "3.11"
+files = ["hash_frx"]
+mypy_path = "."
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Untyped (or, for frx, statically unresolvable) third parties:
+# frx ships .pyi stubs that do not parse under mypy, so its types are unusable
+# here — `frx.Array` collapses to Any. zk_dtypes ships no py.typed; absl stubs
+# only part of its surface. disallow_untyped_defs still enforces our own
+# annotations regardless, which is where the value is.
+[[tool.mypy.overrides]]
+module = ["frx.*", "frxlib.*", "zk_dtypes.*", "absl.*"]
+ignore_missing_imports = true
