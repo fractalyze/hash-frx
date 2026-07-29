@@ -10,12 +10,12 @@ lowering is asserted, not just the arithmetic.
 
 from __future__ import annotations
 
-import frx
 import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 from hash_frx.linear import apply_matrix, unrolled_sum
+from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.random_field import rand_field
 
 
@@ -31,10 +31,9 @@ class UnrolledSumTest(absltest.TestCase):
         x = rand_field(1, (4,), F)
         self.assertTrue(bool(fnp.array_equal(unrolled_sum([x]), x)))
 
-    def test_lowers_without_a_reduce(self) -> None:
+    def test_lowers_without_a_boundary_op(self) -> None:
         terms = [rand_field(i, (4,), F) for i in range(4)]
-        txt = frx.jit(lambda *t: unrolled_sum(list(t))).lower(*terms).as_text()
-        self.assertNotIn("stablehlo.reduce", txt)
+        assert_fusion_ready(lambda *t: unrolled_sum(list(t)), *terms, reduces=0)
 
 
 class ApplyMatrixTest(absltest.TestCase):
@@ -51,13 +50,11 @@ class ApplyMatrixTest(absltest.TestCase):
         s = rand_field(13, (w,), F)
         self.assertTrue(bool(fnp.array_equal(apply_matrix(eye, s), s)))
 
-    def test_lowers_without_a_dot_or_reduce(self) -> None:
+    def test_lowers_without_a_boundary_op(self) -> None:
         w = 4
         m = rand_field(14, (w, w), F)
         s = rand_field(15, (w,), F)
-        txt = frx.jit(apply_matrix).lower(m, s).as_text()
-        self.assertNotIn("stablehlo.dot", txt)
-        self.assertNotIn("stablehlo.reduce", txt)
+        assert_fusion_ready(apply_matrix, m, s, reduces=0)
 
     def test_rejects_a_non_1d_state(self) -> None:
         m = rand_field(16, (4, 4), F)

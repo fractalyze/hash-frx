@@ -8,11 +8,13 @@ pattern match. The name is deliberately generic: one marker fuses any
 straight-line region (a hash permutation, a fold, a sumcheck round, …), so it is
 not named after any single use.
 
-The `zorch.` prefix is not a hash namespace. This marker is emitted by `zorch`'s
-own sumcheck, constraint-eval and jagged regions as well as by the hashes here,
-so it names a shared contract rather than an owner — unlike the hash-specific
-markers, which carry `hash_frx.`. Whether it eventually takes a neutral name is
-tracked on fractalyze/hash-frx#12.
+Marker names are a wire ABI: Fractalyze XLA's recognizers match by name, and an
+unrecognized name does not error — the composite inlines and fusion is silently
+lost. So every marker in this package keeps the `zorch.` prefix it was recognized
+under, and a contract change stages through `composite.version` rather than a
+rename. The prefix is historical, not a claim of ownership; this marker in
+particular is generic, emitted by `zorch`'s own sumcheck, constraint-eval and
+jagged regions as well as by the hashes here.
 
 The decomposition must be straight-line element-wise — no loops, reductions, or
 gathers — so the region lowers to one kernel: a round sequence is unrolled into
