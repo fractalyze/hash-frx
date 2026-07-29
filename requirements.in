@@ -18,8 +18,8 @@
 # between the port and the bump.
 absl-py
 numpy
-frx==0.10.0.dev20260723035840
-frxlib==0.10.0.dev20260723035840
-frx-cuda12-pjrt==0.10.0.dev20260723035840
-frx-cuda12-plugin==0.10.0.dev20260723035840
+frx==0.10.1.dev20260729141027
+frxlib==0.10.1.dev20260729141027
+frx-cuda12-pjrt==0.10.1.dev20260729141027
+frx-cuda12-plugin==0.10.1.dev20260729141027
 zk-dtypes==0.0.10
