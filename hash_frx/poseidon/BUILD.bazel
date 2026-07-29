@@ -8,10 +8,12 @@ py_library(
         "linear.py",
         "params.py",
         "poseidon.py",
+        "sparse.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//hash_frx:fusion",
+        "//hash_frx:linear",
         "//hash_frx:permutation",
         requirement("frx"),
         requirement("numpy"),
