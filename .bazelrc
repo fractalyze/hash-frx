@@ -8,6 +8,21 @@ test --test_output=errors
 # per-target in each py_test's env instead would make it unselectable from CI.
 test --test_env=FRX_PLATFORMS=cpu
 
+# Never let Bazel synthesize an `__init__.py` into a runfiles tree.
+#
+# Runfiles entries are SYMLINKS back into the source tree, and a target that does
+# not itself provide a package's `__init__.py` gets an empty one generated. When
+# both happen to the same path — one target supplies the real file (symlink), a
+# sibling does not (synthesized empty) — the empty write can land through the
+# symlink and truncate the source. `__version__` lives in `hash_frx/__init__.py`
+# and is stamped only at release, so a truncated package init is invisible until
+# the wheel build.
+#
+# With this flag every `__init__.py` must come from some target's srcs, which is
+# already the convention here — so the generation path, and the hazard with it,
+# is gone by construction.
+build --incompatible_default_to_explicit_init_py
+
 # Buildbarn remote execution (--config=remote) lives in its own file, imported
 # so the config resolves for local and CI runs alike.
 import %workspace%/.bazelrc.rbe
