@@ -18,6 +18,7 @@ host. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in XLA).
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,7 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from frx import Array
+from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.fusion import fused_region
@@ -307,6 +309,174 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = fnp.asarray(_pad(msg_np))
     return sha256_chain(INITIAL_STATE, blocks)
+
+
+# ---------------------------------------------------------------------------
+# Streaming Merkle–Damgård midstate (the fixed-shape, scan-threadable core).
+#
+# `digest` above pads a whole message once on host; this keeps SHA-256's
+# incremental state so a byte Fiat-Shamir transcript can thread `@jit` / a
+# `lax.scan` carry (`Sha256FieldTranscript`, `sha256_field_transcript.py`). The
+# midstate is over every COMPLETE 64-byte block, plus the (<64 B) trailing partial
+# block and the running byte length — all fixed shapes. A squeeze
+# `SHA256(buffer ‖ ctr)` is `finalize(state, ctr_le8)`: a non-mutating copy that
+# pads at the current length, reproducing `digest`'s bytes incrementally.
+# ---------------------------------------------------------------------------
+
+_BLOCK = 64  # SHA-256 block size in bytes
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class Sha256State:
+    """Incremental SHA-256 state as an FRX pytree. Fixed shapes → scan-threadable.
+
+    The two byte counters share one `int32[2]` leaf rather than riding as two
+    scalar fields: every absorb updates both, and as separate output/carry
+    leaves each cost their own scalar kernel per state hand-off — measured as
+    two of the ~12 launches of a single transcript squeeze, and one per
+    iteration inside every FS `while_loop` carry."""
+
+    h: Array  # uint32[8] — midstate over all complete 64-byte blocks so far
+    pending: Array  # uint8[64] — trailing partial block, valid prefix [:counts[0]]
+    counts: Array  # int32[2] = [pending_len (0..63), total bytes absorbed]
+
+    @property
+    def pending_len(self) -> Array:
+        return self.counts[0]
+
+    @property
+    def total_len(self) -> Array:
+        return self.counts[1]
+
+
+def sha256_stream_init() -> Sha256State:
+    """A fresh incremental hash (no bytes absorbed)."""
+    return Sha256State(
+        h=INITIAL_STATE,
+        pending=fnp.zeros(_BLOCK, dtype=fnp.uint8),
+        counts=fnp.zeros(2, dtype=fnp.int32),
+    )
+
+
+def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
+    """Absorb `data` (uint8 [L], L static) into the incremental hash: fold every
+    newly-complete 64-byte block into the midstate, keep the `<64 B` remainder as
+    the new pending block. The block loop is a Python-unrolled, active-count-masked
+    schedule over STATIC slices (never a traced-index gather / scan-carry scatter)
+    — the CPU-safe pattern `transcript.DuplexTranscript` uses."""
+    length = data.shape[0]
+    pl = state.pending_len
+    combined_src = fnp.concatenate([state.pending, data.astype(fnp.uint8)])  # [64+L]
+    new_len = pl + fnp.int32(length)
+    active_blocks = new_len // _BLOCK
+    max_blocks = (_BLOCK - 1 + length) // _BLOCK  # static upper bound
+
+    # Drop the pending buffer's invalid gap [pending_len:64] from the stream: for
+    # stream position j, source index is j while j < pending_len, else shifted to
+    # skip past the gap.
+    total_slots = (max_blocks + 1) * _BLOCK
+    pos = fnp.arange(total_slots, dtype=fnp.int32)
+    src_idx = pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl)
+    src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
+    combined = combined_src[src_idx]  # [total_slots], valid prefix [0:new_len]
+
+    # Fold the newly-complete blocks through the marked chain. The live block
+    # count depends on pending_len by AT MOST one — (pl + L) // 64 spans
+    # {L // 64, (63 + L) // 64} — so run the chain at both static candidate
+    # counts and select; the discarded candidate is the only one that ever sees
+    # the gap-shifted junk tail block.
+    h = state.h
+    min_blocks = length // _BLOCK
+    if max_blocks == 0:
+        h_new = h
+    else:
+        words = block_to_words(
+            combined[: max_blocks * _BLOCK].reshape(1, max_blocks * _BLOCK)
+        )  # [1, max_blocks, 16]
+        h_hi = deserialize_digest(sha256_chain(h, words))[0]
+        if min_blocks == max_blocks:
+            h_new = h_hi
+        else:
+            h_lo = (
+                deserialize_digest(sha256_chain(h, words[:, :min_blocks]))[0]
+                if min_blocks > 0
+                else h
+            )
+            h_new = fnp.where(active_blocks == max_blocks, h_hi, h_lo)
+
+    tail_len = new_len - active_blocks * _BLOCK
+    tail = frx.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
+    slot = fnp.arange(_BLOCK, dtype=fnp.int32)
+    pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
+    # One fused counter update: [pending_len', total_len'] = [tail_len, total+L].
+    counts = fnp.stack([tail_len, state.counts[1] + fnp.int32(length)])
+    return Sha256State(h_new, pending, counts)
+
+
+def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
+    """`SHA256(absorbed ‖ extras[b])` for each row of `extras` (uint8 [B, E], E
+    static) — a non-mutating copy of the hash finished at the current length. One
+    call finishes a whole batch of counter blocks (the transcript's counter-mode
+    squeeze) sharing the base state. Returns uint8 [B, 32] big-endian digests.
+
+    The trailing content is `pending[:pending_len] ‖ extras[b]` (≤ 63 + E bytes),
+    so with the `0x80` byte and the 8-byte length it spans at most two blocks; the
+    second block is compressed unconditionally and selected away when one suffices.
+    """
+    batch, e = extras.shape
+    pl = state.pending_len
+    content_len = pl + fnp.int32(e)
+    msg_bytes = state.total_len + fnp.int32(e)
+    # SHA-256's 64-bit length field; the high 32 bits are zero for any message
+    # below 2**32 bits (512 MiB) — so the length is a uint32 and no x64 is needed.
+    bitlen = msg_bytes.astype(fnp.uint32) * fnp.uint32(8)
+    len_bytes = fnp.array([0, 0, 0, 0], dtype=fnp.uint8)
+    len_bytes = fnp.concatenate(
+        [
+            len_bytes,
+            fnp.stack(
+                [
+                    ((bitlen >> fnp.uint32(24)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                    ((bitlen >> fnp.uint32(16)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                    ((bitlen >> fnp.uint32(8)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                    (bitlen & fnp.uint32(0xFF)).astype(fnp.uint8),
+                ]
+            ),
+        ]
+    )  # [8] big-endian
+
+    two_blocks = content_len > fnp.int32(55)  # need a 2nd block for pad + length?
+    active_bytes = fnp.where(two_blocks, fnp.int32(128), fnp.int32(64))
+
+    pos = fnp.arange(128, dtype=fnp.int32)
+    # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:64].
+    combined_src = fnp.concatenate(
+        [fnp.broadcast_to(state.pending, (batch, _BLOCK)), extras.astype(fnp.uint8)],
+        axis=1,
+    )  # [B, 64+E]
+    src_idx = fnp.clip(
+        pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl), 0, _BLOCK + e - 1
+    )
+    content = combined_src[:, src_idx]  # [B, 128]
+
+    is_content = (pos < content_len)[None, :]
+    is_pad80 = (pos == content_len)[None, :]
+    len_start = active_bytes - fnp.int32(8)
+    is_len = ((pos >= len_start) & (pos < active_bytes))[None, :]
+    len_val = len_bytes[fnp.clip(pos - len_start, 0, 7)][None, :]
+    region = fnp.where(
+        is_content,
+        content,
+        fnp.where(is_pad80, fnp.uint8(0x80), fnp.where(is_len, len_val, fnp.uint8(0))),
+    )  # [B, 128]
+
+    # Both finalize shapes ride the marked chain from the shared midstate; the
+    # 1-vs-2-block choice is data-dependent, so emit both and select.
+    words = block_to_words(region)  # [B, 2, 16]
+    d2 = sha256_chain(state.h, words)
+    d1 = sha256_chain(state.h, words[:, :1])
+    return fnp.where(two_blocks, d2, d1)
 
 
 # ---------------------------------------------------------------------------
