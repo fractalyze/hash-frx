@@ -69,3 +69,15 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+# Padding-free overwrite sponge — the Merkle leaf hasher over a Permutation.
+py_library(
+    name = "sponge",
+    srcs = ["sponge.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fusion",
+        ":permutation",
+        requirement("frx"),
+    ],
+)
