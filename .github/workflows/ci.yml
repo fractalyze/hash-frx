@@ -1,0 +1,97 @@
+name: CI
+
+permissions: read-all
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+# Cancel in-progress runs for PRs (same head branch), but never cancel pushes
+# to main so that every merge gets a full CI run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # Two legs, and both are required. The CPU leg is what checks the primitives
+  # against their published vectors; the GPU leg is what makes the fusion
+  # markers mean anything, because a marker that stops being recognized still
+  # produces the right bytes on CPU. Runners are labelled by capability, not by
+  # role — a CPU box is `[self-hosted, cpu]` and a GPU box is
+  # `[self-hosted, gpu]` — so each leg lands on a box that advertises what it
+  # needs.
+  #
+  # The matrix is static: both legs run on every pull request. Gating the GPU
+  # leg on a repo variable would turn a required check into one that never
+  # reports, which leaves pull requests pending forever rather than red.
+  build-and-test:
+    # Explicit name; else GitHub appends every matrix value (incl. the long
+    # --config=remote + cert-path flags) to the auto-generated job name.
+    name: build-and-test (${{ matrix.backend }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The CPU leg executes on the Buildbarn pool (`--config=remote`, see
+          # //.bazelrc.rbe); the mTLS client material is machine-local, so the
+          # paths point at the runner's own /etc/rbe-certs.
+          - backend: cpu
+            runs_on: [self-hosted, cpu]
+            platforms: cpu
+            flags: >-
+              --config=remote
+              --tls_certificate=/etc/rbe-certs/ca.pem
+              --tls_client_certificate=/etc/rbe-certs/client.pem
+              --tls_client_key=/etc/rbe-certs/client.key
+          # The pool is CPU-only, so the GPU leg executes locally on the runner
+          # and passes no remote flags. `cuda` is strict — no cpu fallback — so
+          # a green leg really did run on the device. Preallocation is off
+          # because bazel runs the test actions concurrently against that one
+          # device, and each process would otherwise claim most of its memory.
+          - backend: gpu
+            runs_on: [self-hosted, gpu]
+            platforms: cuda
+            flags: --test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - uses: actions/checkout@v4
+      # No setup-bazel: it clobbers the box's ~/.bazelrc, and the self-hosted
+      # runners already persist bazel and its caches. `.bazelrc.ci` is passed
+      # explicitly because it is not auto-imported — it drops the `local_only`
+      # tests that CI's published frx wheel cannot run.
+      - name: Run bazel test
+        run: |
+          set -euo pipefail
+          bazel --bazelrc=.bazelrc.ci test ${{ matrix.flags }} \
+            --test_env=FRX_PLATFORMS=${{ matrix.platforms }} -- //...
+
+      # Capture the runner-local test.log a failed test leaves behind — the CI
+      # stream only carries the FAIL summary, not the test's own output.
+      - name: Upload bazel test logs
+        if: ${{ failure() }}
+        uses: fractalyze/.github/.github/actions/upload-bazel-testlogs@main
+        with:
+          name: bazel-test-logs-${{ matrix.backend }}
+
+  # GitHub-hosted, so lint never queues behind the contended self-hosted pool.
+  # `--all-files` rather than the pull request's range: the tree is small enough
+  # that a full pass is cheap, and it also catches a file that reached main
+  # before the hook covering it existed.
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Run pre-commit
+        run: |
+          pip install pre-commit
+          pre-commit run --all-files
