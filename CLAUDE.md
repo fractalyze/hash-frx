@@ -6,6 +6,9 @@ rules every change must respect.
 
 - **Project overview, install, dev quick-start:** [`README.md`](README.md)
 - **Task-indexed docs hub:** [`docs/README.md`](docs/README.md)
+- **Coding conventions — what a primitive is written to, and why the code does
+  not read the way a Python reviewer would prefer:**
+  [`docs/reference/conventions.md`](docs/reference/conventions.md)
 - **Detailed design & open decisions:** tracked on GitHub — epic issue
   [fractalyze/hash-frx#1](https://github.com/fractalyze/hash-frx/issues/1).
 
