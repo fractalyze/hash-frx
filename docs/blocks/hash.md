@@ -105,11 +105,11 @@ An identifier names the construction it implements —
 it is, and a name that describes the picture stops matching the moment a second
 construction has the same picture.
 
-`zorch` carries its own copy of this layer while it consumes this one, and one
-symbol differs across the two: `sha256_merkle_damgard` here is `sha256_chain`
-there. The divergence is deliberate — the name was fixed here rather than in the
-copy that the cutover removes — so a reader comparing the two is seeing this
-repo's correction, not the upstream moving.
+`zorch` carries its own copy of this layer alongside its dependency on this one,
+and one symbol differs across the two: `sha256_merkle_damgard` here is
+`sha256_chain` there. The divergence is deliberate rather than upstream drift —
+the name is corrected in the repo that owns the primitive, not in a copy — so a
+reader comparing the two is seeing this repo's correction.
 
 ## Fusion by construction
 
