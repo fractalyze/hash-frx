@@ -269,7 +269,7 @@ def deserialize_digest(digest: Array) -> Array:
 # `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
 # module (one composite marker per chain) is unchanged.
 @partial(frx.jit, inline=True)
-def sha256_chain(h0: Array, blocks: Array) -> Array:
+def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     """The SHA-256 compression chain from midstate `h0` (uint32 [8], shared by
     the batch) over `blocks` (uint32 [B, nblocks, 16]) -> uint8 [B, 32]
     serialized final state, as the name-routed `zorch.sha256` composite. SHA-256
@@ -309,7 +309,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     """
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = fnp.asarray(_pad(msg_np))
-    return sha256_chain(INITIAL_STATE, blocks)
+    return sha256_merkle_damgard(INITIAL_STATE, blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -395,12 +395,12 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
         words = block_to_words(
             combined[: max_blocks * _BLOCK].reshape(1, max_blocks * _BLOCK)
         )  # [1, max_blocks, 16]
-        h_hi = deserialize_digest(sha256_chain(h, words))[0]
+        h_hi = deserialize_digest(sha256_merkle_damgard(h, words))[0]
         if min_blocks == max_blocks:
             h_new = h_hi
         else:
             h_lo = (
-                deserialize_digest(sha256_chain(h, words[:, :min_blocks]))[0]
+                deserialize_digest(sha256_merkle_damgard(h, words[:, :min_blocks]))[0]
                 if min_blocks > 0
                 else h
             )
@@ -475,8 +475,8 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     # Both finalize shapes ride the marked chain from the shared midstate; the
     # 1-vs-2-block choice is data-dependent, so emit both and select.
     words = block_to_words(region)  # [B, 2, 16]
-    d2 = sha256_chain(state.h, words)
-    d1 = sha256_chain(state.h, words[:, :1])
+    d2 = sha256_merkle_damgard(state.h, words)
+    d1 = sha256_merkle_damgard(state.h, words[:, :1])
     return fnp.where(two_blocks, d2, d1)
 
 

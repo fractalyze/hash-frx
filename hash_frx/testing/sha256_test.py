@@ -49,7 +49,7 @@ class Sha256Test(parameterized.TestCase):
         # the unmarked compression at every padding boundary.
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
         blocks = fnp.asarray(sha256._pad(msg[None, :]))
-        marked = np.asarray(sha256.sha256_chain(sha256.INITIAL_STATE, blocks))
+        marked = np.asarray(sha256.sha256_merkle_damgard(sha256.INITIAL_STATE, blocks))
         state = fnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
         inline = np.asarray(sha256.serialize_digest(sha256.compress(state, blocks)))
         np.testing.assert_array_equal(marked, inline)
@@ -58,7 +58,7 @@ class Sha256Test(parameterized.TestCase):
         # digest lowers to exactly one stablehlo.composite, name-routed to the
         # dedicated zorch.sha256 emitter (parallel to zorch.poseidon2).
         blocks = fnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
-        fn = functools.partial(sha256.sha256_chain, sha256.INITIAL_STATE)
+        fn = functools.partial(sha256.sha256_merkle_damgard, sha256.INITIAL_STATE)
         txt = frx.jit(fn).lower(blocks).as_text()
         self.assertIn(sha256.SHA256_MARKER, txt)
         self.assertEqual(txt.count("stablehlo.composite"), 1)
@@ -72,19 +72,19 @@ class Sha256Test(parameterized.TestCase):
         np.testing.assert_array_equal(np.asarray(back), np.asarray(state))
 
     @parameterized.parameters(1, 2, 3)
-    def test_chain_resumes_from_midstate(self, split: int) -> None:
-        # sha256_chain from a non-IV midstate resumes the compression: hashing a
-        # 4-block message in two chained halves must equal one chain over all 4.
+    def test_merkle_damgard_resumes_from_midstate(self, split: int) -> None:
+        # From a non-IV midstate the compression resumes: hashing a 4-block
+        # message in two chained halves must equal one pass over all 4.
         blocks = fnp.asarray(
             np.random.default_rng(split)
             .integers(0, 2**32, (1, 4, 16), np.int64)
             .astype(np.uint32)
         )
-        whole = sha256.sha256_chain(sha256.INITIAL_STATE, blocks)
+        whole = sha256.sha256_merkle_damgard(sha256.INITIAL_STATE, blocks)
         mid = sha256.deserialize_digest(
-            sha256.sha256_chain(sha256.INITIAL_STATE, blocks[:, :split])
+            sha256.sha256_merkle_damgard(sha256.INITIAL_STATE, blocks[:, :split])
         )[0]
-        resumed = sha256.sha256_chain(mid, blocks[:, split:])
+        resumed = sha256.sha256_merkle_damgard(mid, blocks[:, split:])
         np.testing.assert_array_equal(np.asarray(whole), np.asarray(resumed))
 
     def test_compress_explicit_k_matches_default(self) -> None:
