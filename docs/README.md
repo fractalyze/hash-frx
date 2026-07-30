@@ -14,6 +14,12 @@ constructions built over them; `hash_frx/<family>/` is one implementation family
 package carries a `testing/` subdir with its tests and the reusable helpers those
 tests share.
 
+## Writing code here
+
+| Question                                                                                   | Where                                             |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| The rules a hash primitive is written to — fusion authoring, the seam and pin requirements, byte-exactness, and the assertions that must bite | [`reference/conventions.md`](reference/conventions.md) |
+
 ## Seams — the surfaces a consumer codes against
 
 | Question                                                                                   | Where                                             |
@@ -61,12 +67,9 @@ call, and a whole sponge hash are each one such region — by construction, neve
 by a compiler pattern-match on the hash. Markers come in two flavors.
 
 **Generic** — `zorch.fused_region`. The generic rewriter accepts a straight-line
-element-wise body only: no loop, reduction, gather, dynamic index, or call. So a
-round sequence is an unrolled Python `for` over a small static count, and a linear
-layer is an unrolled sum of column-scaled lanes rather than `fnp.dot` (which
-lowers to a reduction) or dynamic indexing (a gather). Where an `fnp` wrapper
-carries an internal `jit`, the `lax` primitive is used instead — the wrapper
-lowers to a call inside the body, which the single-kernel rewriter rejects.
+element-wise body only: no loop, reduction, gather, dynamic index, or call. That
+constraint is what shapes the code — the authoring rules it forces are in
+[`reference/conventions.md`](reference/conventions.md#a-marked-body-is-authored-to-lower-not-to-read).
 
 **Name-routed** — `zorch.poseidon`, `zorch.sparse_poseidon`, `zorch.poseidon2`,
 `zorch.sha256`, `zorch.sponge_hash`. Each goes to a dedicated emitter that owns
@@ -78,18 +81,18 @@ underneath it.
 
 **Marker names are a wire ABI.** The rewriters match by name, and an unrecognized
 name does not error: the composite inlines and fusion is silently lost. A
-contract change therefore rides `composite.version` rather than a rename. Round
-constants ride as explicit operands for the same reason — otherwise
-`lax.composite` may lift them out of the region and break the emitter's ABI.
+contract change therefore rides `composite.version` rather than a rename. The
+operand layout is equally part of that ABI, which is what keeps a region's
+constants from being written as closed-over values.
 
-**Losing fusion is silent, so two things are load-bearing.**
-`assert_fusion_ready` lowers a body and whitelists the StableHLO ops it may
-contain, which catches a reduction or gather that crept into a marked region. The
-GPU CI leg catches the rest: a marker that stops being recognized still produces
-the right bytes, so byte-exactness alone never reports a fusion regression. Where
-a marker is absent there is a working fallback rather than a failure — a `Sponge`
-over a permutation without dedicated fusion runs its absorb as a `while_loop` over
-`permute` — which is exactly why the device-level assertions have to carry it.
+**Losing fusion is silent**, and nothing about it is caught by comparing bytes: a
+marker that stops being recognized inlines and still computes the right answer,
+and where a marker is absent there is a working fallback rather than a failure —
+a `Sponge` over a permutation without dedicated fusion runs its absorb as a
+`while_loop` over `permute`. So the gate is the lowering itself, asserted in the
+suite and re-checked on the GPU CI leg; the assertions that carry it, and the
+rule that each must be shown to bite, are in
+[`reference/conventions.md`](reference/conventions.md#testing).
 
 Findings, measurements, and open fusion decisions live on the epic
 [fractalyze/hash-frx#1](https://github.com/fractalyze/hash-frx/issues/1).
