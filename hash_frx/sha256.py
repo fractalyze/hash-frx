@@ -484,11 +484,22 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 # ByteHash seam implementations (SHA-256). Both hash to the identical FIPS 180-4
 # bytes and differ only in substrate — `has_dedicated_fusion` is the type-level
 # signal. Param-free, so value identity is by type (no jit re-trace).
+#
+# Two implementations of one function is a cost, so each names the workload it
+# exists for. The split is by batch shape, not by machine: device latency is flat
+# out to B=64 because it is dispatch-bound, and the crossover sits near B=48 on
+# the CPU backend too. A sequential caller pays roughly 22x at B=1 for choosing
+# the device path; a batched one pays roughly 5.5x at B=1024 for choosing the
+# host path.
 # ---------------------------------------------------------------------------
 class Sha256:
     """`ByteHash` for device SHA-256 — `digest` runs the batch on the
     `zorch.sha256` marker (data-parallel, lowers to a GPU kernel), so
-    `has_dedicated_fusion = True`."""
+    `has_dedicated_fusion = True`.
+
+    For batched hashing where the messages already live on the device — Merkle
+    leaves being the motivating case. Wrong choice for a caller that hashes one
+    short message at a time and reads the result on the host."""
 
     digest_size = 32
     has_dedicated_fusion = True
@@ -507,7 +518,14 @@ class HostSha256:
     """`ByteHash` for host SHA-256 — `digest` loops `hashlib` per message on the
     host (eager, no device kernel), so `has_dedicated_fusion = False`. The fast
     path for a strictly-sequential byte challenger: `hashlib` on a small buffer
-    beats a device dispatch per squeeze."""
+    beats a device dispatch per squeeze.
+
+    For a host-shaped byte transcript, which holds a `bytes` buffer and reads
+    each digest back immediately — so a device hash there buys a kernel and pays
+    a device-to-host sync per squeeze. It is also the instance that makes
+    `has_dedicated_fusion = False` reachable, which consumers branch on: zorch's
+    byte transcript grinds a wide nonce window against a fused hash and one nonce
+    at a time against this one."""
 
     digest_size = 32
     has_dedicated_fusion = False
