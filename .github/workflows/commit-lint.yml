@@ -1,0 +1,61 @@
+# Checks the pull request title and every commit subject against the
+# Conventional Commits convention.
+#
+# Separate from ci.yml's pre-commit job rather than folded into it, because
+# `pre-commit run` executes pre-commit-stage hooks only and `fractal-commit-lint`
+# is a **commit-msg**-stage hook — it would never fire there. The local hook is
+# also opt-in: it needs `pre-commit install --hook-type commit-msg`, which plain
+# `pre-commit install` does not do, so nothing enforces this for a contributor
+# who ran only the latter. This job is what makes `.pre-commit-config.yaml`'s
+# "match the version the Commit Lint CI job runs" pin true rather than
+# aspirational, so the two versions move together.
+
+name: Commit Lint
+
+on:
+  # `edited` matters as much as the other two: the PR title is half of what is
+  # checked, so retitling has to re-run the job or a red check would stick after
+  # the fix. `synchronize` covers a force-push that rewrites subjects.
+  #
+  # pull_request_target rather than pull_request, matching the sibling repos: it
+  # runs the workflow from the base branch with base-repo permissions, so a fork
+  # cannot alter the check by editing the workflow in its own branch.
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+
+jobs:
+  lint:
+    # The frx pin-bump PRs are opened by this account with generated subjects
+    # that do not meet the convention: the bump title runs
+    # `build: bump frx/frxlib/frx-cuda12-pjrt/frx-cuda12-plugin to <version>`,
+    # 84 characters against fractal-lint's 80-character `header-length` limit.
+    #
+    # Keyed on the PR author, NOT `github.actor`. `github.actor` is whoever
+    # triggered the event rather than whoever opened the pull request, so a
+    # review bot editing the description re-fires this job under the bot's own
+    # name and lints the generated commit anyway.
+    if: github.event.pull_request.user.login != 'fractalyze-dev'
+    # GitHub-hosted, never self-hosted: pull_request_target grants base-repo
+    # permissions and fires for forks, so fork-triggered jobs must not land on
+    # a self-hosted runner.
+    runs-on: ubuntu-latest
+    name: Commit Lint
+    permissions:
+      contents: read
+      # Both scopes are required; without contents:read the commits API returns
+      # 403 when the action lists a PR's changed files.
+      pull-requests: read
+    steps:
+      # Hybrid runs fractal-commit-lint — the same tool as the local
+      # pre-commit hook — over the PR title and every commit. With no
+      # .fractal-commit-lint.toml in the repo, scope is free-form and only the
+      # Conventional Commits format rules apply.
+      - name: Validate PR title and commit messages
+        uses: fractalyze/github-actions/commit-lint@v1.2.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          scope_mode: hybrid
+          fractal_lint_version: v0.8.0
