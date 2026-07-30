@@ -28,6 +28,38 @@ that adds native field and elliptic-curve types.
   exactly (SHA-256 = FIPS 180-4, BLAKE3 = the BLAKE3 spec, SHA-3/SHAKE = FIPS
   202), verified against the published test vectors.
 
+## Installation
+
+Dev wheels publish to the Fractalyze package index on every green build of
+`main`. They are not on PyPI, so the index has to be named:
+
+```sh
+pip install hash-frx \
+    --extra-index-url https://fractalyze.github.io/pypi/simple/
+```
+
+Versions are timestamped `0.1.0.devYYYYMMDDHHMMSS`, so a consumer pins an exact
+build rather than a range:
+
+```sh
+pip install hash-frx==0.1.0.dev20260730045722 \
+    --extra-index-url https://fractalyze.github.io/pypi/simple/
+```
+
+The wheel carries the runtime tree only — the `testing/` packages, including the
+reference fixtures, are not package API.
+
+A Bazel consumer takes the module directly and needs no wheel:
+
+```python
+bazel_dep(name = "hash_frx", version = "0.0.0")
+git_override(
+    module_name = "hash_frx",
+    commit = "<sha>",
+    remote = "https://github.com/fractalyze/hash-frx.git",
+)
+```
+
 ## Status
 
 Bootstrapping. The symmetric layer is being extracted from `zorch/hash` and
