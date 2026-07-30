@@ -1,11 +1,66 @@
-# Python tooling config. hash-frx builds via Bazel (MODULE.bazel) and is consumed
-# as a bzlmod module rather than a wheel, so there is no packaging section here —
-# `sig-frx` pins it with a `bazel_dep` + `git_override`. Add `[build-system]` and
-# `[project]` if a wheel is ever needed (tracked on the release issue).
+# hash-frx builds via Bazel (MODULE.bazel) and is consumed two ways: `sig-frx`
+# takes it as a bzlmod module (`bazel_dep` + `git_override`), and `zorch` takes
+# it as a wheel from its pip lock. The packaging tables below serve the second —
+# a bazel-level dependency would give a pip-locked consumer two dependency
+# mechanisms for one library.
 #
-# The tables below configure the tools that are not Bazel: pytest, which runs the
+# The rest configures the tools that are not Bazel: pytest, which runs the
 # `*_test.py` modules outside the bazel graph, and mypy, which enforces the
 # full-annotation convention.
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hash-frx"
+dynamic = ["version"]
+description = "hash-frx — FRX-native hash primitives (Poseidon, Poseidon2, SHA-256, sponge and compression constructions), each lowering to a single fused kernel."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "The hash-frx Authors" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+]
+# Only what the shipped tree imports. `absl-py` and `zk-dtypes` are in
+# requirements.in for the Bazel test graph but appear nowhere outside `testing/`,
+# so declaring them would make every consumer install a test dependency. frxlib
+# is not listed because frx already requires it.
+#
+# The floor carries the `.dev0` sentinel rather than being a plain `>=0.10.0`
+# because a consuming workspace pins an exact continuously-bumped dev build and
+# `0.10.0.devN` sorts BELOW `0.10.0` — a plain floor would reject the very pin
+# requirements.in sets.
+#
+# The GPU plugins (frx-cuda12-*) stay undeclared: they are an install-time
+# platform choice, offered through frx's own `cuda12` extra.
+dependencies = [
+    "numpy",
+    "frx>=0.10.0.dev0",
+]
+
+[project.urls]
+Repository = "https://github.com/fractalyze/hash-frx"
+
+[tool.setuptools.dynamic]
+version = { attr = "hash_frx.__version__" }
+
+# Ship the runtime tree only. Every `testing/` package is dropped: they hold the
+# test-only assertions and the reference fixtures, which name a concrete
+# parameterization (`poseidon2/testing/koalabear16.py`) and are deliberately not
+# package API — a consumer needing a named instance owns it.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hash_frx*"]
+exclude = [
+    "hash_frx.testing",
+    "hash_frx.testing.*",
+    "hash_frx.*.testing",
+    "hash_frx.*.testing.*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["hash_frx"]
