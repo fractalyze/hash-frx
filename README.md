@@ -89,6 +89,11 @@ header of at most 80 characters, and a body on everything but `docs`. Scope is
 free-form. The same linter runs in CI over the pull request title and every
 commit in it.
 
+The rest of the dev loop — backend selection, the CUDA version the GPU path
+requires, running against an unreleased Fractalyze XLA, and the compile-cache
+rule — is in
+[`docs/reference/development.md`](docs/reference/development.md).
+
 ## Documentation
 
 - **Task-indexed hub:** [`docs/README.md`](docs/README.md) — indexes the seams,
