@@ -117,6 +117,7 @@ py_test(
     size = "medium",
     srcs = ["sha256_test.py"],
     deps = [
+        "//hash_frx:byte_hash",
         "//hash_frx:sha256",
         requirement("absl_py"),
         requirement("frx"),
