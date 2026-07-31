@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 U32 = fnp.uint32
 
-SHA256_MARKER = "zorch.sha256"
+SHA256_MARKER = "hash_frx.sha256"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it lets a
 # future contract change be staged without renaming the marker (cf. POSEIDON2).
@@ -272,7 +272,7 @@ def deserialize_digest(digest: Array) -> Array:
 def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     """The SHA-256 compression chain from midstate `h0` (uint32 [8], shared by
     the batch) over `blocks` (uint32 [B, nblocks, 16]) -> uint8 [B, 32]
-    serialized final state, as the name-routed `zorch.sha256` composite. SHA-256
+    serialized final state, as the name-routed `hash_frx.sha256` composite. SHA-256
     is Merkle-Damgard (a 64-round compression, not straight-line), so it takes the
     name-routed marker (exempt from the generic single-kernel rule, the way
     `hash_frx.poseidon2` is) and routes to the dedicated Sha256Fusion emitter; with
@@ -304,7 +304,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
     Byte-identical to the FIPS 180-4 standard per message. The device compression
-    is emitted as the name-routed `zorch.sha256` marker (host padding stays out of
+    is emitted as the name-routed `hash_frx.sha256` marker (host padding stays out of
     the region, since it is static and data-independent).
     """
     msg_np = np.asarray(msg, dtype=np.uint8)
@@ -494,7 +494,7 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 # ---------------------------------------------------------------------------
 class Sha256:
     """`ByteHash` for device SHA-256 — `digest` runs the batch on the
-    `zorch.sha256` marker (data-parallel, lowers to a GPU kernel), so
+    `hash_frx.sha256` marker (data-parallel, lowers to a GPU kernel), so
     `has_dedicated_fusion = True`.
 
     For batched hashing where the messages already live on the device — Merkle
