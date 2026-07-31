@@ -4,7 +4,7 @@ The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
 (`fused_region`): XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
 compiler pattern match. The region is named `zorch.poseidon` (distinct from
-`zorch.poseidon2`), the permutation shape riding as `composite.attributes`
+`hash_frx.poseidon2`), the permutation shape riding as `composite.attributes`
 (`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to XLA's
 dedicated, params-driven Poseidon emitter. The body is kept straight-line:
 rounds are unrolled (fixed, small counts) and the dense MDS uses the normal-form

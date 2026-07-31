@@ -21,7 +21,7 @@ unrolled, linear layers via the normal-form helpers, no reduce/dot/gather) so it
 lowers to a single kernel under the generic `zorch.fused_region` marker.
 
 There is also a dedicated `zorch.sparse_poseidon` name-routed marker — mirroring
-`zorch.poseidon2` — whose emitter (`SparsePoseidonFusion`, in the Fractalyze XLA
+`hash_frx.poseidon2` — whose emitter (`SparsePoseidonFusion`, in the Fractalyze XLA
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.

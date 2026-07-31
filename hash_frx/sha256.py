@@ -275,7 +275,7 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     serialized final state, as the name-routed `zorch.sha256` composite. SHA-256
     is Merkle-Damgard (a 64-round compression, not straight-line), so it takes the
     name-routed marker (exempt from the generic single-kernel rule, the way
-    `zorch.poseidon2` is) and routes to the dedicated Sha256Fusion emitter; with
+    `hash_frx.poseidon2` is) and routes to the dedicated Sha256Fusion emitter; with
     no emitter wired the marker inlines its decomposition, so the bytes are
     unchanged.
 
