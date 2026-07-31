@@ -156,7 +156,7 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
 
 class PoseidonMarkerEmissionTest(absltest.TestCase):
     def test_permute_emits_poseidon_named_composite(self) -> None:
-        # The permute marks its region "zorch.poseidon" so XLA routes it to the
+        # The permute marks its region "hash_frx.poseidon" so XLA routes it to the
         # dedicated Poseidon emitter; the permutation shape rides as
         # composite.attributes — all four ints plus the flat MDS are required by
         # the XLA recognizer.
