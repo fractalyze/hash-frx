@@ -24,6 +24,7 @@ from hash_frx.poseidon2.testing.koalabear16 import (
     koalabear16_scaled_perm,
 )
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 
 class Poseidon2Koalabear16Test(absltest.TestCase):
@@ -72,23 +73,8 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         self.assertEqual(operands.count("%"), 5, composite_line)
 
     def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
-        # Emitting the marker is not the same as it being recognized, and the
-        # difference is invisible in the output: an unrecognized name does not
-        # error, it inlines back to the decomposition and computes identical
-        # bytes. Only the COMPILED module distinguishes the two — a recognized
-        # marker has become a kCustom fusion under its routing key.
-        #
-        # The name is a wire ABI shared with the emitter side, so this is what
-        # catches a rename here that the pinned toolchain has not learned (or a
-        # toolchain bump that drops the name this repo emits).
         p = koalabear16_perm()
-        compiled = frx.jit(p.permute).lower(fnp.arange(16, dtype=F)).compile().as_text()
-        custom = [ln for ln in compiled.splitlines() if "kind=kCustom" in ln]
-        self.assertTrue(custom, f"marker not recognized:\n{compiled}")
-        self.assertTrue(
-            any("poseidon2" in ln for ln in custom),
-            f"recognized, but not as poseidon2:\n{custom}",
-        )
+        assert_marker_recognized(self, "poseidon2", p.permute, fnp.arange(16, dtype=F))
 
     def test_non_identity_j_scale_stays_five_operands_canonical(self) -> None:
         # A non-identity J scale must ride as the CANONICAL attribute value and

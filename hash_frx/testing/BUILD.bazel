@@ -102,6 +102,17 @@ py_library(
 )
 
 py_library(
+    name = "marker_recognized",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "marker_recognized.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("frx")],
+)
+
+py_library(
     name = "fusion_ready",
     testonly = True,
     srcs = [
@@ -117,6 +128,7 @@ py_test(
     size = "medium",
     srcs = ["sha256_test.py"],
     deps = [
+        ":marker_recognized",
         "//hash_frx:byte_hash",
         "//hash_frx:sha256",
         requirement("absl_py"),
@@ -132,6 +144,7 @@ py_test(
     size = "medium",
     srcs = ["sponge_test.py"],
     deps = [
+        ":marker_recognized",
         "//hash_frx:permutation",
         "//hash_frx:sponge",
         "//hash_frx/poseidon2",

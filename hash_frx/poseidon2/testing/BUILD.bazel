@@ -26,6 +26,7 @@ py_test(
         ":koalabear16",
         "//hash_frx:_composite",
         "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_recognized",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
