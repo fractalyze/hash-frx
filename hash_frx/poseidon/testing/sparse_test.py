@@ -32,6 +32,7 @@ from hash_frx.poseidon.sparse import (
     POSEIDON_SPARSE_MARKER_VERSION,
     SparsePoseidon,
 )
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -236,7 +237,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
 
     def test_permute_emits_dedicated_composite(self) -> None:
         # When the emitter is available the permute marks its region
-        # "zorch.sparse_poseidon" so XLA routes it to SparsePoseidonFusion. The
+        # "hash_frx.sparse_poseidon" so XLA routes it to SparsePoseidonFusion. The
         # ABI operands are exactly [state, initial_arc, full_rc_pre, transition_rc,
         # partial_rc, full_rc_post] = 6; a closed-over matrix would be lifted to a
         # leading operand (frx.lax.composite prepends consts) and break that ABI.
@@ -495,6 +496,12 @@ class SparsePoseidonEquivalenceTest(absltest.TestCase):
                 [int(x) for x in canon], M, iarc, pre, trans_c, part_c, post
             )
             self.assertEqual(got, want)
+
+    def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
+        perm = SparsePoseidon(_params())
+        assert_marker_recognized(
+            self, "sparse_poseidon", perm.permute, fnp.arange(perm.width, dtype=F)
+        )
 
 
 if __name__ == "__main__":

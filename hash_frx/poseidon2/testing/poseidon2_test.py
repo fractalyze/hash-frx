@@ -24,6 +24,7 @@ from hash_frx.poseidon2.testing.koalabear16 import (
     koalabear16_scaled_perm,
 )
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 
 class Poseidon2Koalabear16Test(absltest.TestCase):
@@ -50,7 +51,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         assert_single_trace(self, _permute_body, calls)
 
     def test_permute_emits_poseidon2_named_composite(self) -> None:
-        # The standard-MDS permute marks its region "zorch.poseidon2" so XLA
+        # The standard-MDS permute marks its region "hash_frx.poseidon2" so XLA
         # routes it to the dedicated Poseidon2Fusion emitter; the permutation
         # shape rides as composite.attributes — all four ints are required by
         # the XLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
@@ -70,6 +71,10 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # break the Poseidon2Fusion operand ABI — the e2e GPU failure this guards.
         operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 5, composite_line)
+
+    def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
+        p = koalabear16_perm()
+        assert_marker_recognized(self, "poseidon2", p.permute, fnp.arange(16, dtype=F))
 
     def test_non_identity_j_scale_stays_five_operands_canonical(self) -> None:
         # A non-identity J scale must ride as the CANONICAL attribute value and
@@ -100,7 +105,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
     def test_free_form_external_matrix_uses_generic_marker(self) -> None:
         # The Poseidon2Fusion emitter assumes an (I + J_blocks) ⊗ M4 external
         # layer (M4 rides as a marker attribute), so a free-form matrix that is
-        # NOT M4-block-structured must NOT take the zorch.poseidon2 route — it
+        # NOT M4-block-structured must NOT take the hash_frx.poseidon2 route — it
         # falls back to the generic zorch.fused_region marker (LoopFusion lowers
         # the real body) to stay correct. (An M4-block-structured matrix — e.g.
         # the HorizenLabs reference — does take the dedicated route.)
@@ -112,7 +117,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
 
     def test_non_plonky3_m4_takes_dedicated_route(self) -> None:
         # A non-default but M4-block-structured matrix (here the HorizenLabs
-        # reference M4) must take the dedicated zorch.poseidon2 route, carrying its
+        # reference M4) must take the dedicated hash_frx.poseidon2 route, carrying its
         # own M4 as the external_m4 attribute — not fall back to the generic
         # marker — so the dedicated emitter serves any M4 without a special case.
         hl_m4 = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]

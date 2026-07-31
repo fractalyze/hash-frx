@@ -3,8 +3,8 @@
 The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
 (`fused_region`): XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
-compiler pattern match. The region is named `zorch.poseidon` (distinct from
-`zorch.poseidon2`), the permutation shape riding as `composite.attributes`
+compiler pattern match. The region is named `hash_frx.poseidon` (distinct from
+`hash_frx.poseidon2`), the permutation shape riding as `composite.attributes`
 (`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to XLA's
 dedicated, params-driven Poseidon emitter. The body is kept straight-line:
 rounds are unrolled (fixed, small counts) and the dense MDS uses the normal-form
@@ -35,7 +35,7 @@ from hash_frx.poseidon.params import PoseidonParams
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
 
-POSEIDON_MARKER = "zorch.poseidon"
+POSEIDON_MARKER = "hash_frx.poseidon"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
@@ -61,7 +61,7 @@ class Poseidon:
         # carries them (flattened row-major) as the `mds` attribute.
         self._mds_rows = params.mds_rows
         # Classic Poseidon always applies its dense MDS via integer literals and
-        # routes to the dedicated `zorch.poseidon` emitter — there is no
+        # routes to the dedicated `hash_frx.poseidon` emitter — there is no
         # free-form fallback (the MDS rides as a marker attribute either way).
         self.has_dedicated_fusion = True
 

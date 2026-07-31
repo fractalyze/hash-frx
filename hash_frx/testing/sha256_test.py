@@ -19,6 +19,7 @@ from absl.testing import absltest, parameterized
 
 from hash_frx import sha256
 from hash_frx.byte_hash import ByteHash
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block
 # cutoff), 63/64 (block edge), 119/120 (multi-block).
@@ -44,7 +45,7 @@ class Sha256Test(parameterized.TestCase):
 
     @parameterized.parameters(*_LENGTHS)
     def test_marked_equals_inline(self, length: int) -> None:
-        # The zorch.sha256 marker only tags the region; with no dedicated emitter
+        # The hash_frx.sha256 marker only tags the region; with no dedicated emitter
         # wired it inlines its decomposition, so the marked digest must byte-equal
         # the unmarked compression at every padding boundary.
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
@@ -56,7 +57,7 @@ class Sha256Test(parameterized.TestCase):
 
     def test_emits_single_composite_marker(self) -> None:
         # digest lowers to exactly one stablehlo.composite, name-routed to the
-        # dedicated zorch.sha256 emitter (parallel to zorch.poseidon2).
+        # dedicated hash_frx.sha256 emitter (parallel to hash_frx.poseidon2).
         blocks = fnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
         fn = functools.partial(sha256.sha256_merkle_damgard, sha256.INITIAL_STATE)
         txt = frx.jit(fn).lower(blocks).as_text()
@@ -154,6 +155,11 @@ class Sha256ByteHashTest(parameterized.TestCase):
                 self.assertEqual(cls(), cls())
                 self.assertEqual(hash(cls()), hash(cls()))
         self.assertNotEqual(sha256.Sha256(), sha256.HostSha256())
+
+    def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
+        blocks = fnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
+        fn = functools.partial(sha256.sha256_merkle_damgard, sha256.INITIAL_STATE)
+        assert_marker_recognized(self, "sha256", fn, blocks)
 
 
 if __name__ == "__main__":

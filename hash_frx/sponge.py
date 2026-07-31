@@ -6,7 +6,7 @@ the first `out` lanes. `sponge_type` (`SpongeType`) picks the construction via a
 
 `rate`/`out` are the free params on `SpongeParams` (capacity = width - rate). A
 `has_dedicated_fusion` permutation lowers the whole absorb to one
-`zorch.sponge_hash` region (assembled here over the permutation's fused-region
+`hash_frx.sponge_hash` region (assembled here over the permutation's fused-region
 ABI); a non-fused one runs the `while_loop` absorb over `permute`. Both read the
 absorb length at runtime, so concrete and symbolic `n` lower the same way.
 """
@@ -36,7 +36,7 @@ class SpongeType(enum.Enum):
 # The whole absorb+squeeze as one region the vendor expands into the fused kernel.
 # Attrs carry a `permutation` discriminator + shape; the kernel reads the absorb
 # length at runtime, so one cubin serves every width and symbolic `n`.
-SPONGE_HASH_MARKER = "zorch.sponge_hash"
+SPONGE_HASH_MARKER = "hash_frx.sponge_hash"
 SPONGE_HASH_MARKER_VERSION = 1
 
 
@@ -116,7 +116,7 @@ def _fused_hash(
     out: int,
     sponge_type: SpongeType,
 ) -> Array:
-    """Absorb+squeeze as ONE `zorch.sponge_hash` region over a dedicated-fusion
+    """Absorb+squeeze as ONE `hash_frx.sponge_hash` region over a dedicated-fusion
     permutation. The decomposition rebuilds a const-free `permute` from the ABI
     operands (a `lax.composite` lifts closed-over consts and breaks the ABI), then
     runs `_absorb`, so the fallback HLO matches the generic path. Caller gates on
@@ -177,7 +177,7 @@ class Sponge:
     """Sponge hash over a fixed-width Permutation.
 
     `hash(input, sponge_type=...)` is the one entry point (one call = one function
-    = one fused `zorch.sponge_hash` kernel). The permutation supplies only its
+    = one fused `hash_frx.sponge_hash` kernel). The permutation supplies only its
     arithmetic — `permute` and its fused-region ABI; the construction lives here.
     """
 
@@ -227,7 +227,7 @@ class Sponge:
         """Absorb `input` (1-D) and squeeze the first `out` lanes: (n,) -> (out,).
 
         `sponge_type` picks the construction (see `SpongeType`). A
-        `has_dedicated_fusion` permutation lowers to one `zorch.sponge_hash`
+        `has_dedicated_fusion` permutation lowers to one `hash_frx.sponge_hash`
         region; a non-fused one runs the `while_loop` absorb. Both read the absorb
         length at runtime, so symbolic `n` lowers like a concrete one.
         """
@@ -247,7 +247,7 @@ class Sponge:
                 f"fills the capacity), got {self.rate} + {self.out} != "
                 f"{self._permutation.width}"
             )
-        # Dedicated-fusion → one `zorch.sponge_hash` region (built here); else the
+        # Dedicated-fusion → one `hash_frx.sponge_hash` region (built here); else the
         # generic `while_loop` absorb over `permute`.
         perm = self._permutation
         if perm.has_dedicated_fusion:

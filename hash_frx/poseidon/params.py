@@ -277,7 +277,7 @@ class SparsePoseidonParams:
         return h
 
     # Canonical-int views of the four matrices — the form the dedicated
-    # `zorch.sparse_poseidon` emitter carries as marker attributes (flattened
+    # `hash_frx.sparse_poseidon` emitter carries as marker attributes (flattened
     # row-major) and the reference body applies via integer literals (no captured
     # field array, which a name-routed `fused_region` would lift to a leading
     # operand). Canonical ints come from a numpy object cast, which Montgomery-

@@ -22,6 +22,7 @@ from hash_frx.poseidon.poseidon import (
     POSEIDON_MARKER_VERSION,
     Poseidon,
 )
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -156,7 +157,7 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
 
 class PoseidonMarkerEmissionTest(absltest.TestCase):
     def test_permute_emits_poseidon_named_composite(self) -> None:
-        # The permute marks its region "zorch.poseidon" so XLA routes it to the
+        # The permute marks its region "hash_frx.poseidon" so XLA routes it to the
         # dedicated Poseidon emitter; the permutation shape rides as
         # composite.attributes — all four ints plus the flat MDS are required by
         # the XLA recognizer.
@@ -183,6 +184,12 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         p = Poseidon(_poseidon_params())
         txt = frx.jit(p.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertIn("mds = dense<[2, 3, 1, 1, 2, 3, 3, 1, 2]> : tensor<9xi64>", txt)
+
+    def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
+        p = Poseidon(_poseidon_params())
+        assert_marker_recognized(
+            self, "poseidon", p.permute, fnp.arange(p.width, dtype=F)
+        )
 
 
 if __name__ == "__main__":
