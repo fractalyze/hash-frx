@@ -236,7 +236,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
 
     def test_permute_emits_dedicated_composite(self) -> None:
         # When the emitter is available the permute marks its region
-        # "zorch.sparse_poseidon" so XLA routes it to SparsePoseidonFusion. The
+        # "hash_frx.sparse_poseidon" so XLA routes it to SparsePoseidonFusion. The
         # ABI operands are exactly [state, initial_arc, full_rc_pre, transition_rc,
         # partial_rc, full_rc_post] = 6; a closed-over matrix would be lifted to a
         # leading operand (frx.lax.composite prepends consts) and break that ABI.

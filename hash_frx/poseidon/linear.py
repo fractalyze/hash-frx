@@ -12,7 +12,7 @@ Two matrix forms, by where the matrix rides:
   matrix is canonical ints, so no field array is captured; required inside a
   name-routed `fused_region`, where a closed-over array lifts to a leading operand
   and breaks the emitter's ABI (the structure rides as an int64 marker attribute
-  instead). The dedicated `zorch.sparse_poseidon` emitter's reference body uses
+  instead). The dedicated `hash_frx.sparse_poseidon` emitter's reference body uses
   these; it supports only fields whose canonical values fit an int64 literal.
 - **Field-array** (`apply_matrix` (shared), `apply_sparse_partial`) — the matrix
   stays a field array, which the generic `zorch.fused_region` marker lifts to an
@@ -102,7 +102,7 @@ def apply_sparse_partial_ints(
     tail: Array,
 ) -> Array:
     """Integer-literal twin of `apply_sparse_partial`, for the dedicated
-    `zorch.sparse_poseidon` emitter's reference body.
+    `hash_frx.sparse_poseidon` emitter's reference body.
 
     `dot_row` (width ints) and `col_vec` (width-1 ints) are canonical Python ints,
     so the lanes scale by integer literals and no field array is captured — a
