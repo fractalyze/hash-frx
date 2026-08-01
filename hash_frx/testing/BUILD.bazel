@@ -71,8 +71,10 @@ py_test(
     srcs = ["non_field_permutation_test.py"],
     deps = [
         "//hash_frx:compression",
+        "//hash_frx:duplex_sponge",
         "//hash_frx:permutation",
         "//hash_frx:sponge",
+        "//hash_frx/poseidon2/testing:koalabear16",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

@@ -12,10 +12,11 @@ those hashes actually use — a lane rotation, a per-lane bit rotation, and an X
 — so a construction that reached for field arithmetic would fail here rather
 than in a hash nobody has written yet.
 
-`DuplexSponge` is deliberately absent: its absorb merges with `+`, which is the
-intended group operation for a field and the wrong one for machine words. That
-constraint is stated on the construction, and the sponge to pair with a
-bit-oriented permutation is a separate one.
+`DuplexSponge` is the exception and is checked here too, from the other side: its
+absorb merges with `+`, which is the intended group operation for a field and the
+wrong one for machine words, so it must *reject* this permutation rather than
+silently wrap. The sponge to pair with a bit-oriented permutation is a separate
+construction.
 """
 
 from __future__ import annotations
@@ -30,7 +31,9 @@ from absl.testing import absltest
 from frx import Array
 
 from hash_frx.compression import Compression, CompressionParams
+from hash_frx.duplex_sponge import DuplexSponge
 from hash_frx.permutation import Permutation
+from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.sponge import Sponge, SpongeParams, SpongeType
 
 _WIDTH = 8
@@ -127,6 +130,17 @@ class NonFieldPermutationTest(absltest.TestCase):
 
         self.assertEqual(got.dtype, fnp.uint32)
         np.testing.assert_array_equal(np.asarray(got), want)
+
+    def test_duplex_sponge_rejects_word_lanes(self) -> None:
+        # The add-absorb is a carrying `+` on machine words, so the wrong result
+        # would be silent bytes rather than an error. Rejected at construction.
+        with self.assertRaises(TypeError):
+            DuplexSponge(_WordPerm(), rate=_RATE)
+
+    def test_duplex_sponge_accepts_a_field(self) -> None:
+        # The rejection above must be about the dtype, not about DuplexSponge
+        # being unusable — a field permutation of the same shape is accepted.
+        self.assertIsInstance(DuplexSponge(koalabear16_perm(), rate=8), DuplexSponge)
 
     def test_sponge_lowers_under_jit(self) -> None:
         # The seam has to survive tracing, not just eager execution.

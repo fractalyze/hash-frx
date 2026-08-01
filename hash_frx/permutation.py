@@ -27,15 +27,18 @@ from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from frx import Array
+from frx.typing import DTypeLike
 
 
 @runtime_checkable
 class Permutation(Protocol):
     width: int  # state length (rate + capacity)
-    # Dtype of each state element: any dtype a consumer can allocate with
-    # `fnp.zeros` and index. A field dtype for the algebraic hashes, a machine
-    # word for the bit-oriented ones.
-    dtype: Any
+    # Dtype of each state element: a field dtype for the algebraic hashes, a
+    # machine word for the bit-oriented ones. `DTypeLike` rather than `Any`
+    # because "whatever `fnp.zeros` accepts" is the actual contract, and it is
+    # narrow enough for mypy to reject a non-dtype at the pin every
+    # implementation carries.
+    dtype: DTypeLike
     # Whether `permute` lowers to a hash-dedicated fusion marker (vs the generic
     # region marker). When true, a vendor can expand a whole-region composite —
     # e.g. a Merkle commit — by reading this hash's marker; consumers gate that
