@@ -49,7 +49,7 @@ class Sha256Test(parameterized.TestCase):
         # wired it inlines its decomposition, so the marked digest must byte-equal
         # the unmarked compression at every padding boundary.
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
-        blocks = fnp.asarray(sha256._pad(msg[None, :]))
+        blocks = sha256._padded_words(fnp.asarray(msg[None, :]))
         marked = np.asarray(sha256.sha256_merkle_damgard(sha256.INITIAL_STATE, blocks))
         state = fnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
         inline = np.asarray(sha256.serialize_digest(sha256.compress(state, blocks)))
@@ -58,7 +58,9 @@ class Sha256Test(parameterized.TestCase):
     def test_emits_single_composite_marker(self) -> None:
         # digest lowers to exactly one stablehlo.composite, name-routed to the
         # dedicated hash_frx.sha256 emitter (parallel to hash_frx.poseidon2).
-        blocks = fnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
+        blocks = sha256._padded_words(
+            fnp.asarray(np.arange(64, dtype=np.uint8))[None, :]
+        )
         fn = functools.partial(sha256.sha256_merkle_damgard, sha256.INITIAL_STATE)
         txt = frx.jit(fn).lower(blocks).as_text()
         self.assertIn(sha256.SHA256_MARKER, txt)
@@ -91,11 +93,66 @@ class Sha256Test(parameterized.TestCase):
     def test_compress_explicit_k_matches_default(self) -> None:
         # Threading the round-constant table as an explicit `k` operand (what the
         # marked region does) matches the module-default `_Kd`.
-        blocks = fnp.asarray(sha256._pad(np.arange(80, dtype=np.uint8)[None, :]))
+        blocks = sha256._padded_words(
+            fnp.asarray(np.arange(80, dtype=np.uint8))[None, :]
+        )
         state = fnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
         default = sha256.compress(state, blocks)
         explicit = sha256.compress(state, blocks, sha256._Kd)
         np.testing.assert_array_equal(np.asarray(default), np.asarray(explicit))
+
+
+class Sha256TracedTest(parameterized.TestCase):
+    """`digest` inside a traced region, at every padding boundary.
+
+    The point of the padding being a function of the length: a consumer can hash
+    inside its own `@jit` without reaching past the seam for the compression, so
+    a scheme built on `ByteHash` does not have to name SHA-256 to be traceable.
+    Byte-equality with the eager path is the whole claim — a traced padding that
+    is subtly different produces a self-consistent wrong hash.
+    """
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_jit_matches_eager(self, length: int) -> None:
+        msg = (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A))[None, :]
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(sha256.digest)(msg)), np.asarray(sha256.digest(msg))
+        )
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_jit_matches_hashlib(self, length: int) -> None:
+        # Against the reference rather than against ourselves: the eager path
+        # agreeing with a traced one that shares its bug would prove nothing.
+        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0xA5)
+        got = np.asarray(frx.jit(sha256.digest)(msg[None, :]))[0]
+        self.assertEqual(bytes(got), hashlib.sha256(bytes(msg)).digest())
+
+    def test_vmap_matches_the_batch_axis(self) -> None:
+        # `digest` already takes the batch, so mapping a one-row call over a stack
+        # must reproduce it — which is what a consumer gets for free when its own
+        # vmap encloses the hash.
+        batch = np.random.default_rng(3).integers(0, 256, (5, 70), dtype=np.uint8)
+        mapped = frx.vmap(lambda row: sha256.digest(row[None, :])[0])(batch)
+        np.testing.assert_array_equal(
+            np.asarray(mapped), np.asarray(sha256.digest(batch))
+        )
+
+    def test_the_seam_carries_it(self) -> None:
+        # Through `ByteHash.digest` rather than the module function: the consumer
+        # holds the seam, and that is the call that has to survive the tracer.
+        hasher: ByteHash = sha256.Sha256()
+        msg = np.random.default_rng(4).integers(0, 256, (3, 100), dtype=np.uint8)
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(hasher.digest)(msg)), np.asarray(hasher.digest(msg))
+        )
+
+    def test_traced_digest_still_emits_one_marker(self) -> None:
+        # The marker is what makes a digest one device unit; a traced caller must
+        # not lose it by taking a different path into the compression.
+        msg = np.zeros((1, 64), dtype=np.uint8)
+        txt = frx.jit(sha256.digest).lower(msg).as_text()
+        self.assertIn(sha256.SHA256_MARKER, txt)
+        self.assertEqual(txt.count("stablehlo.composite"), 1)
 
 
 class Sha256ByteHashTest(parameterized.TestCase):
@@ -157,7 +214,9 @@ class Sha256ByteHashTest(parameterized.TestCase):
         self.assertNotEqual(sha256.Sha256(), sha256.HostSha256())
 
     def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
-        blocks = fnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
+        blocks = sha256._padded_words(
+            fnp.asarray(np.arange(64, dtype=np.uint8))[None, :]
+        )
         fn = functools.partial(sha256.sha256_merkle_damgard, sha256.INITIAL_STATE)
         assert_marker_recognized(self, "sha256", fn, blocks)
 

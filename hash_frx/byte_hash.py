@@ -55,5 +55,18 @@ class ByteHash(Protocol):
         `has_dedicated_fusion`. `L` is static, so any padding is data-independent.
         Batch with the `B` axis: a dedicated-fusion hash lowers the whole batch
         through one shared decomposition (Merkle leaves, a PoW nonce window).
+
+        **Whether it may be called inside a traced region is the return type.**
+        An implementation returning a device `Array` accepts a traced `msg`, so a
+        consumer can hash inside its own `@jit` or `vmap` — which is what lets a
+        scheme reach the hash through this seam rather than naming a concrete one
+        to get a traceable path. An implementation returning `np.ndarray` is a
+        host call and never can: it has to read the bytes.
+
+        `has_dedicated_fusion` separates exactly those two today, but it is a
+        proxy rather than the same question — it says the digest lowers to one
+        dedicated kernel, and a device hash written without a marker would be
+        traceable with the flag `False`. If one appears, that is when the seam
+        grows a field for it, with a case behind it.
         """
         ...

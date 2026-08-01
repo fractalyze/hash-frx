@@ -11,14 +11,16 @@ GPU's width. A byte hash, unlike the algebraic `Permutation`s in this package
 
 Contract: `digest(msg)` takes uint8 `[B, L]` (a batch of `B` messages, each `L`
 bytes) and returns uint8 `[B, 32]` digests, big-endian (standard SHA-256 output
-order). Length `L` is static, so padding is data-independent and done once on
-host. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in XLA).
+order). Length `L` is static, so the padding is data-independent: it is a host
+constant built from the length and concatenated on, which is what lets `msg`
+itself be traced. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in
+XLA).
 """
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from functools import partial
+from functools import lru_cache, partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -134,28 +136,24 @@ def _rotr(x: Array, n: int) -> Array:
     return (x >> U32(n)) | (x << U32(32 - n))
 
 
-def _pad(msg: np.ndarray) -> np.ndarray:
-    """SHA-256 pad a uint8 [B, L] batch -> uint32 [B, nblocks, 16] big-endian words.
+@lru_cache(maxsize=None)
+def _padding_tail(length: int) -> np.ndarray:
+    """What FIPS 180-4 §5.1.1 appends to a `length`-byte message: uint8 [P].
 
-    Length is static, so padding is data-independent and done once on host.
+    `0x80 ‖ 0x00* ‖ toByte(8·length, 8)`, and every term is a function of the
+    length alone. So the tail is a host constant built *from the length* rather
+    than written *into the message* — which is what lets `digest` take a traced
+    message: the padding never has to read one.
+
+    Shared by the whole batch, since one call hashes messages of one length.
     """
-    b, length = msg.shape
-    bitlen = length * 8
     nblocks = (length + 8) // 64 + 1  # room for the 0x80 byte + 8-byte length
-    padded = np.zeros((b, nblocks * 64), dtype=np.uint8)
-    padded[:, :length] = msg
-    padded[:, length] = 0x80
-    padded[:, nblocks * 64 - 8 :] = np.frombuffer(
-        np.uint64(bitlen).byteswap().tobytes(), dtype=np.uint8
+    tail = np.zeros(nblocks * 64 - length, dtype=np.uint8)
+    tail[0] = 0x80
+    tail[-8:] = np.frombuffer(
+        np.uint64(length * 8).byteswap().tobytes(), dtype=np.uint8
     )
-    words = padded.reshape(b, nblocks, 16, 4).astype(np.uint32)
-    be = (
-        (words[..., 0] << 24)
-        | (words[..., 1] << 16)
-        | (words[..., 2] << 8)
-        | words[..., 3]
-    )
-    return be  # [B, nblocks, 16]
+    return tail
 
 
 def _compress(state: Array, w16: Array, k: Array) -> Array:
@@ -201,9 +199,9 @@ INITIAL_STATE = fnp.asarray(_H0)  # uint32 [8]
 def block_to_words(blocks: Array) -> Array:
     """uint8 [B, nblocks*64] -> uint32 [B, nblocks, 16] big-endian message words.
 
-    The on-device sibling of `_pad`'s host word-packing, for callers that build
-    their own already-padded blocks (an incremental / streaming hash), rather than
-    padding a whole message once on host.
+    What every path here packs its blocks with, whether they came from padding a
+    whole message (`_padded_words`) or from a caller building its own blocks
+    incrementally (a streaming hash).
     """
     b = blocks.shape[0]
     nblocks = blocks.shape[1] // 64
@@ -213,6 +211,21 @@ def block_to_words(blocks: Array) -> Array:
         | (w[..., 1] << U32(16))
         | (w[..., 2] << U32(8))
         | w[..., 3]
+    )
+
+
+def _padded_words(msg: Array) -> Array:
+    """A uint8 [B, L] batch padded and packed: uint32 [B, nblocks, 16].
+
+    A concatenation and a reshape, which is the whole point: the message is only
+    ever an operand here, never something written into a host buffer, so this
+    holds a tracer as readily as a concrete array.
+    """
+    tail = fnp.asarray(_padding_tail(msg.shape[-1]))
+    return block_to_words(
+        fnp.concatenate(
+            [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
+        )
     )
 
 
@@ -304,12 +317,19 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
     Byte-identical to the FIPS 180-4 standard per message. The device compression
-    is emitted as the name-routed `hash_frx.sha256` marker (host padding stays out of
-    the region, since it is static and data-independent).
+    is emitted as the name-routed `hash_frx.sha256` marker; the padding constant
+    stays out of the region, since it is a function of the static length.
+
+    **Traced or concrete.** `msg` may be a tracer, so a consumer can hash inside
+    its own `@jit` or `vmap` without reaching past the seam for
+    `sha256_merkle_damgard` — which would make it name SHA-256. The padding is
+    what used to prevent that: it wrote `0x80` and the bit length *into* a host
+    buffer holding the message, so the message had to be concrete. Built from the
+    length instead, it never reads the message at all.
     """
-    msg_np = np.asarray(msg, dtype=np.uint8)
-    blocks = fnp.asarray(_pad(msg_np))
-    return sha256_merkle_damgard(INITIAL_STATE, blocks)
+    return sha256_merkle_damgard(
+        INITIAL_STATE, _padded_words(fnp.asarray(msg, dtype=fnp.uint8))
+    )
 
 
 # ---------------------------------------------------------------------------
