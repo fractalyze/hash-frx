@@ -8,6 +8,16 @@ This is the agnostic primitive a classic Fiat-Shamir prover (e.g. an
 ark-sponge-faithful accumulation prover) drives; the scheme-specific challenge
 packing, domain separation, and field conversions live in the consumer.
 
+Unlike its siblings, this one constrains the permutation's dtype, and enforces it
+in `__init__` rather than only stating it: the absorb merge is `+`, so `+` must be
+the intended group operation. That holds for every field dtype — prime,
+extension, and binary, where `+` is XOR — and fails for machine words, where `+`
+carries between bits. A Keccak-style sponge merges by XOR, so running one here
+would wrap rather than raise and compute wrong bytes silently; a rejected dtype
+is the loud failure that replaces it. A bit-oriented sponge therefore belongs in
+its own construction, not behind an absorb-mode flag here, for the same reason
+`DuplexTranscript` is separate (below).
+
 Kept separate from `DuplexTranscript` (the overwrite-mode Fiat-Shamir sponge),
 not unified under an absorb-mode flag: the two implement different sponge
 conventions and diverge on three independent axes — the absorb merge (add here
@@ -34,12 +44,24 @@ through `jit`, where the threading pattern can be validated rather than guessed.
 from __future__ import annotations
 
 import frx.numpy as fnp
+import numpy as np
 from frx import Array
+from frx.typing import DTypeLike
 
 from hash_frx.permutation import Permutation
 
 _ABSORBING = "absorbing"
 _SQUEEZING = "squeezing"
+
+
+def _merges_by_addition(dtype: DTypeLike) -> bool:
+    """Whether `+` on `dtype` is the group operation this sponge absorbs with.
+
+    A machine word is the one case where it is not: `+` carries between bits, so
+    a sponge that should merge by XOR would wrap instead. Every field dtype
+    qualifies — including a binary field, whose `+` *is* XOR.
+    """
+    return not np.issubdtype(np.dtype(dtype), np.integer)
 
 
 class DuplexSponge:
@@ -51,6 +73,13 @@ class DuplexSponge:
         if rate >= permutation.width:
             raise ValueError(
                 f"rate ({rate}) must be < permutation width ({permutation.width})"
+            )
+        # Caught here rather than left to produce wrong bytes in `absorb`.
+        if not _merges_by_addition(permutation.dtype):
+            raise TypeError(
+                f"dtype {permutation.dtype} merges by carrying addition, but this "
+                "sponge absorbs with +; a bit-oriented permutation needs an "
+                "XOR-absorb sponge, not this one"
             )
         self._permutation = permutation
         self.rate = rate

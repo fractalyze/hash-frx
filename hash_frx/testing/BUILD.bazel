@@ -63,6 +63,24 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# Drives the constructions over a machine-word permutation, so it depends on
+# them rather than on the seam alone like `permutation_test` above.
+py_test(
+    name = "non_field_permutation_test",
+    size = "small",
+    srcs = ["non_field_permutation_test.py"],
+    deps = [
+        "//hash_frx:compression",
+        "//hash_frx:duplex_sponge",
+        "//hash_frx:permutation",
+        "//hash_frx:sponge",
+        "//hash_frx/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 # No device work: pure numpy plus the `frx.typing` alias, so the CUDA plugin
 # wheels would be ~430 MB of runfiles for nothing.
 py_test(
