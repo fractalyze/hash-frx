@@ -26,11 +26,7 @@ from hash_frx.poseidon2.testing.koalabear16 import (
     koalabear16_perm,
 )
 from hash_frx.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams, SpongeType
-from hash_frx.testing.marker_recognized import (
-    assert_marker_declined,
-    assert_marker_recognized,
-    on_gpu,
-)
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 # Plonky3 golden vectors (p3_commit=4318eba..., default_koalabear_poseidon2_16):
 # PaddingFreeSponge<_, 16, 8, 8> over arange(n). arange(12) exercises the
@@ -253,25 +249,10 @@ class MerkleDamgardTest(absltest.TestCase):
             txt,
         )
 
-    def test_marker_routing_matches_the_backend(self) -> None:
-        # The sponge marker is the one hash marker without a CPU emitter: the CPU
-        # pipeline builds ZorchFusedRegionRewriter with sponge-hash fusion off, so
-        # it strips the marker and the absorb inlines to its while_loop form. Pin
-        # both halves — the GPU routing this repo exists to get, and the CPU
-        # decline that would otherwise look like a lost marker.
-        #
-        # Note what each half can prove. Only the GPU branch validates the marker
-        # NAME: on CPU the marker is stripped whatever it is called, so the CPU
-        # branch would pass against a name no emitter knows. It still earns its
-        # place — it catches the marker escaping a backend that cannot serve it —
-        # but for this marker alone, a rename is gated on the GPU leg. Its four
-        # siblings are name-checked on either backend.
+    def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         x = fnp.arange(16, dtype=F)
-        if on_gpu():
-            assert_marker_recognized(self, "sponge_hash", s.hash, x)
-        else:
-            assert_marker_declined(self, "sponge_hash", s.hash, x)
+        assert_marker_recognized(self, "sponge_hash", s.hash, x)
 
 
 if __name__ == "__main__":
