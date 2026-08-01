@@ -8,6 +8,14 @@ This is the agnostic primitive a classic Fiat-Shamir prover (e.g. an
 ark-sponge-faithful accumulation prover) drives; the scheme-specific challenge
 packing, domain separation, and field conversions live in the consumer.
 
+Unlike its siblings, this one constrains the permutation's dtype: the absorb
+merge is `+`, so the dtype must be one where `+` is the intended group operation.
+That holds for a field and fails for machine words, where `+` carries between
+bits — a Keccak-style sponge merges by XOR, and running it here would wrap rather
+than raise, computing wrong bytes silently. A bit-oriented sponge therefore
+belongs in its own construction, not behind an absorb-mode flag here, for the
+same reason `DuplexTranscript` is separate (below).
+
 Kept separate from `DuplexTranscript` (the overwrite-mode Fiat-Shamir sponge),
 not unified under an absorb-mode flag: the two implement different sponge
 conventions and diverge on three independent axes — the absorb merge (add here

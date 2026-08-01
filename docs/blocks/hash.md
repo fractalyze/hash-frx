@@ -10,11 +10,23 @@ A hash is reached through one of two Protocols, and which one depends on what it
 consumes rather than on how it is built.
 
 **`Permutation`** ([`permutation.py`](../../hash_frx/permutation.py)) is a
-fixed-width permutation over a single field dtype — `width`, `dtype`, `permute`.
+fixed-width permutation over a single dtype — `width`, `dtype`, `permute`.
 The sponge, the duplex sponge, and the compression function all read
 `width`/`dtype` to size and allocate state and then call `permute`; none of them
 names a concrete hash. Poseidon2 is one implementation, classic Poseidon a
 second, and any other fixed-width permutation drops in unchanged.
+
+That dtype is deliberately not required to be a field, which is what lets the
+bit-oriented hashes share the seam rather than fork it. `Sponge` and
+`Compression` do no arithmetic on state — they allocate it, index it, and
+overwrite lanes — so a machine-word permutation satisfies the Protocol as
+written. `DuplexSponge` is the exception and owns its own constraint: its absorb
+merges with `+`, which is the intended group operation for a field and the wrong
+one for machine words, where a Keccak-style sponge merges by XOR. That is a
+property of the construction, so it is stated there rather than narrowed into the
+seam. A bit-oriented duplex is its own construction for the same reason
+`DuplexTranscript` is separate from `DuplexSponge`: the conventions diverge on
+several independent axes, and one config object holding two of them is not reuse.
 
 **`ByteHash`** ([`byte_hash.py`](../../hash_frx/byte_hash.py)) is the byte
 sibling: `digest(uint8[B, L]) -> uint8[B, digest_size]`, byte-identical to the
