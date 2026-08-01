@@ -45,25 +45,3 @@ def assert_marker_recognized(
         any(f"%{routing_key} =" in ln for ln in lines),
         f"recognized, but not as {routing_key}: {lines}",
     )
-
-
-def assert_marker_declined(
-    test: Any, routing_key: str, fn: Callable[..., Any], *args: Any
-) -> None:
-    """Assert `fn` compiles WITHOUT a custom fusion named `routing_key`.
-
-    The counterpart for a marker a backend deliberately does not serve: the
-    rewriter strips it and the region inlines to its slower but correct
-    decomposition. Pinning the decline keeps a backend's coverage honest — the
-    marker's absence here is a property of the backend, not an accident.
-    """
-    lines = _custom_fusion_lines(fn, *args)
-    test.assertFalse(
-        any(f"%{routing_key} =" in ln for ln in lines),
-        f"{routing_key} was routed on a backend that does not serve it: {lines}",
-    )
-
-
-def on_gpu() -> bool:
-    """Whether the default backend is the GPU one."""
-    return frx.devices()[0].platform == "gpu"
