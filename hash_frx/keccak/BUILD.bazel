@@ -5,12 +5,15 @@ py_library(
     name = "keccak",
     srcs = [
         "__init__.py",
+        "fips202.py",
         "lane.py",
         "params.py",
         "permutation.py",
+        "sponge.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx:permutation",
         requirement("frx"),

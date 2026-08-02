@@ -26,6 +26,21 @@ py_test(
 )
 
 py_test(
+    name = "fips202_test",
+    # The 24-round body traces once and every block reuses it, so this stays in
+    # the same bracket as permutation_test rather than scaling with block count.
+    size = "medium",
+    srcs = ["fips202_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx/keccak",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "permutation_test",
     # Compile-heavy: 24 unrolled rounds over the lane grid.
     size = "medium",
