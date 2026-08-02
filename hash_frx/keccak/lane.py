@@ -15,35 +15,25 @@ halves interact, and it is written as three static cases so no shift is ever by
 `(x << n) | (x >> (32 - n))` hits exactly that at `n = 0`.
 
 Splitting a constant happens on the host, where Python integers are exact
-(`_split`), never by materialising a 64-bit value and narrowing it.
+(`split`), never by materialising a 64-bit value and narrowing it.
 """
 
 from __future__ import annotations
 
 import frx.numpy as fnp
 import numpy as np
-from frx import Array
+from frx import Array, lax
 
 # A lane: (low 32 bits, high 32 bits). Both halves carry the same shape, so the
 # whole 5x5 lane grid rides as one `Lane` of `(5, 5)` arrays.
 Lane = tuple[Array, Array]
 
 
-def _split(value: int) -> tuple[int, int]:
+def split(value: int) -> tuple[int, int]:
     """A 64-bit host integer as `(lo, hi)` 32-bit halves — exact, never narrowed."""
     if not 0 <= value < (1 << 64):
         raise ValueError(f"{value:#x} does not fit in 64 bits")
     return value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF
-
-
-def xor(a: Lane, b: Lane) -> Lane:
-    """`a ^ b`, per half."""
-    return a[0] ^ b[0], a[1] ^ b[1]
-
-
-def and_not(a: Lane, b: Lane) -> Lane:
-    """`(~a) & b`, per half — chi's only non-linear step."""
-    return (~a[0]) & b[0], (~a[1]) & b[1]
 
 
 def rotl(a: Lane, n: int) -> Lane:
@@ -82,14 +72,24 @@ def rotl_each(a: Lane, offsets: np.ndarray) -> Lane:
 
     `swap` folds the `n >= 32` case into a half exchange, leaving an in-half
     shift of `m = n % 32`. `m == 0` would shift by 32, so it is computed with a
-    dummy shift of 1 and then selected away — the constants make both the
-    dummy and the select fold at compile time.
+    dummy shift of 1 and then selected away.
+
+    Those selects survive into the graph — four per round. XLA folds a `select`
+    only on a scalar constant predicate or when both arms agree, never on an
+    element-varying constant mask like this one, so the masks being compile-time
+    does not make them free. They are kept because the alternatives are worse:
+    removing the `swap` pair costs more shift/or work than it saves, and the
+    `keep` pair can only go by making a shift-by-32 unreachable another way.
+
+    `lax.select` rather than `fnp.where`: the wrapper carries an internal `jit`
+    and lowers to a call inside the body, which the single-kernel rewriter
+    rejects (`docs/reference/conventions.md`).
     """
     lo, hi = a
     n = offsets.astype(np.uint32) % np.uint32(64)
-    swap = n >= np.uint32(32)
-    base_lo = fnp.where(swap, hi, lo)
-    base_hi = fnp.where(swap, lo, hi)
+    swap = fnp.asarray(n >= np.uint32(32))
+    base_lo = lax.select(swap, hi, lo)
+    base_hi = lax.select(swap, lo, hi)
 
     m = n % np.uint32(32)
     zero = m == np.uint32(0)
@@ -100,4 +100,4 @@ def rotl_each(a: Lane, offsets: np.ndarray) -> Lane:
     rot_lo = (base_lo << s) | (base_hi >> c)
     rot_hi = (base_hi << s) | (base_lo >> c)
     keep = fnp.asarray(zero)
-    return fnp.where(keep, base_lo, rot_lo), fnp.where(keep, base_hi, rot_hi)
+    return lax.select(keep, base_lo, rot_lo), lax.select(keep, base_hi, rot_hi)

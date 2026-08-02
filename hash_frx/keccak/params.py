@@ -14,7 +14,7 @@ contiguous prefix `state[: 2r]` — a halves-first layout would scatter it.
 
 from __future__ import annotations
 
-from hash_frx.keccak.lane import _split
+from hash_frx.keccak.lane import split
 
 LANES = 25
 ROUNDS = 24
@@ -35,7 +35,7 @@ _RC64 = (
     0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
 )
 # fmt: on
-ROUND_CONSTANTS: tuple[tuple[int, int], ...] = tuple(_split(rc) for rc in _RC64)
+ROUND_CONSTANTS: tuple[tuple[int, int], ...] = tuple(split(rc) for rc in _RC64)
 
 # rho's rotation offsets (FIPS 202 section 3.2.2), flat by x + 5*y.
 # fmt: off
@@ -48,26 +48,5 @@ ROTATION_OFFSETS: tuple[int, ...] = (
 )
 # fmt: on
 
-# pi's lane movement (FIPS 202 section 3.2.3): the lane at (x, y) lands at
-# (y, 2x + 3y). Resolved to flat destination indices once, here, so the
-# permutation body is a static rename of Python names rather than an indexing
-# op — a runtime lane permutation would be a gather and split the kernel.
-#
-# PI_DESTINATION[x + 5*y] = y + 5*((2*x + 3*y) % 5)
-PI_DESTINATION: tuple[int, ...] = tuple(
-    y + 5 * ((2 * x + 3 * y) % 5) for y in range(5) for x in range(5)
-)
-
-# The same movement read the other way round: PI_SOURCE[dst] is the lane that
-# lands at `dst`. The body builds its output by destination, so it needs the
-# inverse; deriving it here keeps the forward definition above as the one that
-# transcribes the spec.
-_PI_SOURCE = [0] * LANES
-for _src, _dst in enumerate(PI_DESTINATION):
-    _PI_SOURCE[_dst] = _src
-PI_SOURCE: tuple[int, ...] = tuple(_PI_SOURCE)
-
 assert len(ROUND_CONSTANTS) == ROUNDS
 assert len(ROTATION_OFFSETS) == LANES
-assert sorted(PI_DESTINATION) == list(range(LANES)), "pi must be a permutation"
-assert all(PI_SOURCE[d] == s for s, d in enumerate(PI_DESTINATION))

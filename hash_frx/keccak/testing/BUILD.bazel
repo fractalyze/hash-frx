@@ -32,8 +32,11 @@ py_test(
     srcs = ["permutation_test.py"],
     deps = [
         ":reference",
+        "//hash_frx:fusion",
         "//hash_frx:permutation",
         "//hash_frx/keccak",
+        "//hash_frx/testing:fusion_ready",
+        "//hash_frx/testing:jit_cache",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

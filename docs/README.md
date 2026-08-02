@@ -26,7 +26,7 @@ tests share.
 
 | Question                                                                                   | Where                                             |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| Hashing with a fixed-width algebraic permutation over a field dtype, without naming one     | [`permutation.py`](../hash_frx/permutation.py)     |
+| Hashing with a fixed-width permutation, algebraic or bit-oriented, without naming one       | [`permutation.py`](../hash_frx/permutation.py)     |
 | Hashing raw bytes byte-identically to a published standard, without naming one              | [`byte_hash.py`](../hash_frx/byte_hash.py)         |
 
 ## Constructions over a `Permutation`
@@ -44,6 +44,7 @@ tests share.
 | Poseidon2 — permutation, parameter surface, and its two linear layers                       | [`poseidon2/`](../hash_frx/poseidon2)                |
 | Classic Poseidon — the naive Hades schedule and the optimized-sparse refactor of it          | [`poseidon/`](../hash_frx/poseidon)                  |
 | SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256.py`](../hash_frx/sha256.py)                 |
+| Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
 
 ## Fusion machinery
 

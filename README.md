@@ -13,8 +13,10 @@ that adds native field and elliptic-curve types.
 ## Design philosophy
 
 - **Two seams, no concrete hash in the consumer.** `Permutation` is a fixed-width
-  permutation over a field dtype (Poseidon, Poseidon2); `ByteHash` maps a batch of
-  equal-length byte messages to digests (SHA-256, BLAKE3, Keccak/SHA-3). A
+  permutation over a single dtype — a field one for the algebraic hashes
+  (Poseidon, Poseidon2), a machine word for the bit-oriented ones
+  (Keccak-f[1600]); `ByteHash` maps a batch of
+  equal-length byte messages to digests (SHA-256, BLAKE3, SHA-3). A
   consumer reads `width`/`dtype` or `digest_size` and calls `permute`/`digest` —
   it never names the hash it runs on.
 - **Fusion by construction.** A permutation call, a digest call, and each
