@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""The FIPS 202 wrappers — SHA3-256, SHAKE128, SHAKE256 as `ByteHash`es.
+"""The sponge wrappers — SHA3-256, SHAKE128, SHAKE256, Keccak-256 as `ByteHash`es.
 
 Each is one `KeccakSponge` row: a rate, a domain-separation byte, and an output
 length. FIPS 202 section 6 fixes the first two per function; the third is fixed
@@ -10,6 +10,15 @@ for SHA-3 and a caller's choice for the SHAKEs.
 | `Sha3_256` | 136 B | `0x06` | 512 bits | 32 B |
 | `Shake128` | 168 B | `0x1F` | 256 bits | caller's |
 | `Shake256` | 136 B | `0x1F` | 512 bits | caller's |
+| `Keccak256` | 136 B | `0x01` | 512 bits | 32 B |
+
+**`Keccak256` is not a FIPS 202 function**, despite sharing this module and every
+line of the sponge with `Sha3_256`. It is the original Keccak submission, whose
+padding NIST changed on standardisation, so the two differ in exactly one byte —
+`0x01` against `0x06` — and in nothing else. It lives here because that is the
+truth about it: separating the file would suggest a second construction, when
+what exists is one sponge and a table with four rows. `keccak256_test` is what
+keeps the byte from being the copied bug it usually is.
 
 **An XOF's output length is a constructor parameter, not a weakened
 `digest_size`.** `Shake256(output_size=64)` is a different hash from
@@ -53,6 +62,13 @@ SHA3_256_DIGEST_SIZE = 32
 SHAKE128_RATE = 168
 SHAKE256_RATE = 136
 SHAKE_SUFFIX = 0x1F
+
+# The original Keccak submission, which Ethereum froze before FIPS 202 changed
+# the padding: same rate, same capacity, same permutation as SHA3-256, and the
+# domain byte is the bare `10*1` opening bit with no domain bits under it.
+KECCAK256_RATE = 136
+KECCAK256_SUFFIX = 0x01
+KECCAK256_DIGEST_SIZE = 32
 
 
 class _KeccakHash:
@@ -112,6 +128,23 @@ class Shake256(_KeccakHash):
 
     _rate = SHAKE256_RATE
     _suffix = SHAKE_SUFFIX
+
+
+class Keccak256(_KeccakHash):
+    """`ByteHash` for device Keccak-256 — Ethereum's hash, not SHA3-256.
+
+    A separate type rather than `Sha3_256(legacy_padding=True)`: a flag reads as
+    a robustness knob, and this is a choice between two standards that a caller
+    has to make deliberately. The Ethereum address derivation and every EVM
+    `KECCAK256` need this one; a FIPS 202 consumer needs the other; nothing wants
+    to pick at runtime.
+    """
+
+    _rate = KECCAK256_RATE
+    _suffix = KECCAK256_SUFFIX
+
+    def __init__(self) -> None:
+        super().__init__(KECCAK256_DIGEST_SIZE)
 
 
 class _HostKeccak:
