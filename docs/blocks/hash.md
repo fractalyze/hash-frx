@@ -87,6 +87,18 @@ marker, the other loops `hashlib` on the host. `has_dedicated_fusion` is what a
 consumer branches on, exactly as on the permutation side — the substrate is a
 value the hash carries, never a class name a caller has to test.
 
+**That holds for SHA-256 and does not yet hold in general.** The flag says a
+digest lowers to a hash-*dedicated* marker, which for SHA-256 coincides with
+"runs on the device". Keccak's `ByteHash`es
+([`keccak/fips202.py`](../../hash_frx/keccak/fips202.py)) are the case where the
+two come apart: they run on the device and accept a tracer, but carry only the
+generic region marker until a Keccak emitter exists, so all six — device and host
+— report `False`. A consumer branching on the flag alone will size a nonce window
+for the host path against a device hash. The seam anticipated this and named the
+remedy — a second field for "the digest returns an `Array`" — which is a decision
+owed to the next consumer that has to make the choice, not to the hash that
+exposed it.
+
 Both stay, and the reason is not only speed. A byte transcript is host-shaped by
 construction — a `bytes` buffer with host framing — so a device hash forces a
 device-to-host sync on every squeeze; and a proof-of-work grind sizes its nonce

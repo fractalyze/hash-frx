@@ -63,10 +63,16 @@ class ByteHash(Protocol):
         to get a traceable path. An implementation returning `np.ndarray` is a
         host call and never can: it has to read the bytes.
 
-        `has_dedicated_fusion` separates exactly those two today, but it is a
-        proxy rather than the same question — it says the digest lowers to one
-        dedicated kernel, and a device hash written without a marker would be
-        traceable with the flag `False`. If one appears, that is when the seam
-        grows a field for it, with a case behind it.
+        `has_dedicated_fusion` separated exactly those two until Keccak, but it
+        is a proxy rather than the same question — it says the digest lowers to
+        one dedicated kernel, and a device hash written without a marker is
+        traceable with the flag `False`.
+
+        **Keccak's `ByteHash`es are that case** (`keccak/fips202.py`): they run
+        on the device and take a tracer, yet report `False` because no Keccak
+        emitter exists yet. So the flag no longer answers "may I hash inside my
+        own `@jit`" — only the return type does. The seam grows a field for that
+        when a consumer has to make the choice and cannot; a hash that merely
+        exposes the gap is not yet that consumer.
         """
         ...
