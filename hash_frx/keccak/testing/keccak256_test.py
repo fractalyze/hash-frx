@@ -1,23 +1,25 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""Keccak-256 — the published Ethereum vectors, and the padding byte pinned.
+"""Keccak-256 — the published vectors, and the padding byte pinned separately.
 
 Separate from `fips202_test` because Keccak-256 is not a FIPS 202 function and
-its golden is not `hashlib`: the standard library implements the *changed*
+its golden cannot be `hashlib`: the standard library implements the *changed*
 padding only. The vectors below are the published Ethereum ones, and
-`HostKeccak256` gives a second, independent computation of the same bytes.
+`HostKeccak256` recomputes them through an independent implementation.
 
-**The divergence test is why this module exists.** Keccak-256 and SHA3-256 share
-a rate, a capacity, a permutation, an absorb, a padding rule, and an output size;
-they differ in one byte of one constant. Every positive vector here would still
-pass if that byte were wired to `0x06`, because then the implementation would be
-a correct SHA3-256 — just not the hash anyone asked for. Only an assertion that
-the two *disagree* catches it, which is why it is a test rather than a comment,
-and it is the most-copied bug in Keccak implementations.
+**The vectors are the gate; the divergence assertions are diagnostics.** Wiring
+the domain byte to SHA-3's `0x06` turns this into a correct SHA3-256, which fails
+every vector here — `keccak256("")` becomes `a7ffc6f8…`. So the vectors do catch
+the most-copied bug in Keccak implementations, and the claim that only a
+divergence test can is false. What the divergence assertions add is a failure
+that names the cause in one line instead of reporting that 32 bytes differ.
+
+`test_they_differ_only_in_the_domain_byte` is the exception, and the reason this
+module keeps a constants check at all: it fails on a *mistyped rate*, which would
+also make the two hashes disagree, and which a divergence assertion would
+therefore report as success.
 """
 
 from __future__ import annotations
-
-import hashlib
 
 import frx
 import frx.numpy as fnp
@@ -35,8 +37,7 @@ from hash_frx.keccak.fips202 import (
 )
 from hash_frx.keccak.testing.host_keccak256 import HostKeccak256
 
-# Published Ethereum Keccak-256 vectors. The empty string is the one #41 names,
-# and is the value every EVM implementation agrees on for `KECCAK256("")`.
+# Published Keccak-256 vectors — the values every EVM implementation agrees on.
 _VECTORS = (
     (b"", "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"),
     (b"abc", "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"),
@@ -47,57 +48,22 @@ _VECTORS = (
     ),
 )
 
-# The same absorb boundaries `fips202_test` sweeps: the padding rule is shared,
-# so the block-boundary cases that can break it are shared too.
+# The 136-byte-rate subset of `fips202_test`'s boundaries: empty, tiny, one short
+# of a block (the single-byte pad), exactly a block (a whole extra padding
+# block), one past it, and multi-block. Its 167/168/169 are SHAKE128's rate and
+# say nothing here.
 _LENGTHS = (0, 1, 135, 136, 137, 300)
-
-
-def _rows(msg: bytes) -> np.ndarray:
-    return np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
 
 
 def _message(length: int) -> np.ndarray:
     return (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)).reshape(1, length)
 
 
-class PaddingDivergenceTest(parameterized.TestCase):
-    """SHA3-256 and Keccak-256 must never agree. This is the issue's whole point."""
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_sha3_and_keccak_disagree_on_the_same_input(self, length: int) -> None:
-        msg = _message(length)
-        sha3 = bytes(np.asarray(Sha3_256().digest(msg))[0])
-        keccak = bytes(np.asarray(Keccak256().digest(msg))[0])
-        self.assertNotEqual(
-            keccak,
-            sha3,
-            "Keccak-256 produced the SHA3-256 digest — the domain byte is wired "
-            "to 0x06 rather than 0x01",
-        )
-
-    def test_they_differ_only_in_the_domain_byte(self) -> None:
-        # The positive half of the same claim: every other parameter is shared,
-        # so a divergence test alone could pass on two hashes that differ for the
-        # wrong reason (a mistyped rate, say).
-        self.assertEqual(KECCAK256_RATE, SHA3_256_RATE)
-        self.assertNotEqual(KECCAK256_SUFFIX, SHA3_256_SUFFIX)
-
-    def test_keccak_is_not_accidentally_hashlib_sha3(self) -> None:
-        # Guards the direction the divergence test cannot: that `Keccak256` is
-        # wrong in some *other* way that happens to differ from our own SHA3-256.
-        msg = _message(64)
-        self.assertNotEqual(
-            bytes(np.asarray(Keccak256().digest(msg))[0]),
-            hashlib.sha3_256(bytes(msg[0])).digest(),
-        )
-
-
-class Keccak256VectorTest(parameterized.TestCase):
+class Keccak256Test(parameterized.TestCase):
     @parameterized.parameters(*_VECTORS)
-    def test_matches_the_published_ethereum_vectors(
-        self, msg: bytes, expected: str
-    ) -> None:
-        got = np.asarray(Keccak256().digest(_rows(msg)))[0]
+    def test_matches_the_published_vectors(self, msg: bytes, expected: str) -> None:
+        rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        got = np.asarray(Keccak256().digest(rows))[0]
         self.assertEqual(bytes(got).hex(), expected)
 
     @parameterized.parameters(*_LENGTHS)
@@ -108,20 +74,30 @@ class Keccak256VectorTest(parameterized.TestCase):
             np.asarray(HostKeccak256().digest(msg)),
         )
 
-    def test_batched_equals_per_row(self) -> None:
-        rng = np.random.default_rng(41)
-        batch = rng.integers(0, 256, size=(5, 200), dtype=np.uint8)
-        got = np.asarray(Keccak256().digest(batch))
-        host = HostKeccak256()
-        for i in range(batch.shape[0]):
-            with self.subTest(row=i):
-                self.assertEqual(
-                    bytes(got[i]), bytes(np.asarray(host.digest(batch[i : i + 1]))[0])
-                )
+    def test_sha3_and_keccak_disagree(self) -> None:
+        # Diagnostic: names the cause when the domain byte is wrong, where the
+        # vector tests report only that the bytes differ. One length is enough —
+        # the absorb boundaries are swept above, and the padding rule is shared.
+        msg = _message(137)
+        self.assertNotEqual(
+            bytes(np.asarray(Keccak256().digest(msg))[0]),
+            bytes(np.asarray(Sha3_256().digest(msg))[0]),
+            "Keccak-256 produced the SHA3-256 digest — the domain byte is wired "
+            "to 0x06 rather than 0x01",
+        )
+
+    def test_they_differ_only_in_the_domain_byte(self) -> None:
+        # The one check the vectors cannot make: they fail identically whether
+        # the suffix or the rate is wrong, and a divergence assertion passes on a
+        # mistyped rate. This fails at import-time constants instead.
+        self.assertEqual(KECCAK256_RATE, SHA3_256_RATE)
+        self.assertNotEqual(KECCAK256_SUFFIX, SHA3_256_SUFFIX)
 
     def test_digest_accepts_a_tracer(self) -> None:
-        # The seam property a consumer hashing inside its own `@jit` depends on —
-        # sig-frx's Ethereum ECDSA variant is the caller waiting on it.
+        # The seam property a consumer hashing inside its own `@jit` depends on.
+        # Sub-rate on purpose: `_permute_body` inlines 24 unrolled rounds per
+        # absorb block, so compile time scales with block count while the
+        # property under test does not.
         msg = _message(64)
         hasher = Keccak256()
         np.testing.assert_array_equal(

@@ -28,9 +28,9 @@ stays the concrete integer the seam promises. It has no default: an extendable
 output has no natural size, and picking one for the caller is how a scheme ends
 up silently truncating.
 
-**`has_dedicated_fusion` is `False` here on device and host alike**, because
+**`has_dedicated_fusion` is `False` on every hash here, device and host alike**, because
 Keccak carries only the generic region marker until an emitter exists (#21). So
-for these six the flag does not separate substrate the way it does for SHA-256,
+the flag does not separate substrate here the way it does for SHA-256,
 and the return type is what does: a device hash returns an `Array` and accepts a
 tracer, a host one returns `np.ndarray` and never can. That is a seam question
 rather than a fact about these hashes, and it is stated where the rule lives —
@@ -63,9 +63,10 @@ SHAKE128_RATE = 168
 SHAKE256_RATE = 136
 SHAKE_SUFFIX = 0x1F
 
-# The original Keccak submission, which Ethereum froze before FIPS 202 changed
-# the padding: same rate, same capacity, same permutation as SHA3-256, and the
-# domain byte is the bare `10*1` opening bit with no domain bits under it.
+# Keccak reference (the original SHA-3 submission), `pad10*1` with no domain
+# bits under it — so the byte is the padding's opening `1` alone, where FIPS 202
+# section 6.1 puts two domain bits beneath it. Frozen by Ethereum before that
+# change, which is why the variant outlived the submission.
 KECCAK256_RATE = 136
 KECCAK256_SUFFIX = 0x01
 KECCAK256_DIGEST_SIZE = 32
@@ -131,7 +132,7 @@ class Shake256(_KeccakHash):
 
 
 class Keccak256(_KeccakHash):
-    """`ByteHash` for device Keccak-256 — Ethereum's hash, not SHA3-256.
+    """`ByteHash` for device Keccak-256 — the original submission, not SHA3-256.
 
     A separate type rather than `Sha3_256(legacy_padding=True)`: a flag reads as
     a robustness knob, and this is a choice between two standards that a caller
@@ -210,6 +211,7 @@ if TYPE_CHECKING:
     _bh_sha3: type[ByteHash] = Sha3_256
     _bh_shake128: type[ByteHash] = Shake128
     _bh_shake256: type[ByteHash] = Shake256
+    _bh_keccak256: type[ByteHash] = Keccak256
     _bh_host_sha3: type[ByteHash] = HostSha3_256
     _bh_host_shake128: type[ByteHash] = HostShake128
     _bh_host_shake256: type[ByteHash] = HostShake256

@@ -80,6 +80,8 @@ py_library(
 
 py_test(
     name = "keccak256_test",
+    # Compile-heavy for the same reason as its siblings: a device digest inlines
+    # 24 unrolled rounds per absorb block.
     size = "medium",
     srcs = ["keccak256_test.py"],
     deps = [

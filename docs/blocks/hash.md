@@ -92,8 +92,8 @@ digest lowers to a hash-*dedicated* marker, which for SHA-256 coincides with
 "runs on the device". Keccak's `ByteHash`es
 ([`keccak/fips202.py`](../../hash_frx/keccak/fips202.py)) are the case where the
 two come apart: they run on the device and accept a tracer, but carry only the
-generic region marker until a Keccak emitter exists, so all six — device and host
-— report `False`. A consumer branching on the flag alone will size a nonce window
+generic region marker until a Keccak emitter exists, so every one of them —
+device and host alike — reports `False`. A consumer branching on the flag alone will size a nonce window
 for the host path against a device hash. The seam anticipated this and named the
 remedy — a second field for "the digest returns an `Array`" — which is a decision
 owed to the next consumer that has to make the choice, not to the hash that
