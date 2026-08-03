@@ -29,7 +29,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.byte_hash import ByteHash
-from hash_frx.keccak.fips202 import (
+from hash_frx.keccak.byte_hashes import (
     SHA3_256_RATE,
     SHAKE128_RATE,
     SHAKE256_RATE,

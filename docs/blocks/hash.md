@@ -90,7 +90,7 @@ value the hash carries, never a class name a caller has to test.
 **That holds for SHA-256 and does not yet hold in general.** The flag says a
 digest lowers to a hash-*dedicated* marker, which for SHA-256 coincides with
 "runs on the device". Keccak's `ByteHash`es
-([`keccak/fips202.py`](../../hash_frx/keccak/fips202.py)) are the case where the
+([`keccak/byte_hashes.py`](../../hash_frx/keccak/byte_hashes.py)) are the case where the
 two come apart: they run on the device and accept a tracer, but carry only the
 generic region marker until a Keccak emitter exists, so every one of them —
 device and host alike — reports `False`. A consumer branching on the flag alone will size a nonce window

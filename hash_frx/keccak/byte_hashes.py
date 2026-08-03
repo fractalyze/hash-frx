@@ -1,9 +1,9 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""The sponge wrappers — SHA3-256, SHAKE128, SHAKE256, Keccak-256 as `ByteHash`es.
+"""The Keccak byte hashes — SHA3-256, SHAKE128, SHAKE256, Keccak-256.
 
 Each is one `KeccakSponge` row: a rate, a domain-separation byte, and an output
-length. FIPS 202 section 6 fixes the first two per function; the third is fixed
-for SHA-3 and a caller's choice for the SHAKEs.
+length. FIPS 202 section 6 fixes the first two for the three it standardises;
+the third is fixed for SHA-3 and a caller's choice for the SHAKEs.
 
 | | rate | suffix | capacity | output |
 |---|---|---|---|---|
@@ -12,13 +12,12 @@ for SHA-3 and a caller's choice for the SHAKEs.
 | `Shake256` | 136 B | `0x1F` | 512 bits | caller's |
 | `Keccak256` | 136 B | `0x01` | 512 bits | 32 B |
 
-**`Keccak256` is not a FIPS 202 function**, despite sharing this module and every
-line of the sponge with `Sha3_256`. It is the original Keccak submission, whose
-padding NIST changed on standardisation, so the two differ in exactly one byte —
-`0x01` against `0x06` — and in nothing else. It lives here because that is the
-truth about it: separating the file would suggest a second construction, when
-what exists is one sponge and a table with four rows. `keccak256_test` is what
-keeps the byte from being the copied bug it usually is.
+**Three of the four are FIPS 202; `Keccak256` is not.** It is the original
+Keccak submission, whose padding NIST changed on standardisation, so it and
+`Sha3_256` differ in exactly one byte — `0x01` against `0x06` — and in nothing
+else. That is why the module is named for what its contents *are* rather than
+for one standard: a table of rows over a shared sponge, which TurboSHAKE and
+KangarooTwelve would extend the same way.
 
 **An XOF's output length is a constructor parameter, not a weakened
 `digest_size`.** `Shake256(output_size=64)` is a different hash from

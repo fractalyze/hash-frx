@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Keccak-256 — the published vectors, and the padding byte pinned separately.
 
-Separate from `fips202_test` because Keccak-256 is not a FIPS 202 function and
+Separate from `byte_hashes_test` because Keccak-256 is not a FIPS 202 function and
 its golden cannot be `hashlib`: the standard library implements the *changed*
 padding only. The vectors below are the published Ethereum ones, and
 `HostKeccak256` recomputes them through an independent implementation.
@@ -27,7 +27,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.byte_hash import ByteHash
-from hash_frx.keccak.fips202 import (
+from hash_frx.keccak.byte_hashes import (
     KECCAK256_RATE,
     KECCAK256_SUFFIX,
     SHA3_256_RATE,
@@ -48,7 +48,7 @@ _VECTORS = (
     ),
 )
 
-# The 136-byte-rate subset of `fips202_test`'s boundaries: empty, tiny, one short
+# The 136-byte-rate subset of `byte_hashes_test`'s boundaries: empty, tiny, one short
 # of a block (the single-byte pad), exactly a block (a whole extra padding
 # block), one past it, and multi-block. Its 167/168/169 are SHAKE128's rate and
 # say nothing here.

@@ -5,7 +5,7 @@ py_library(
     name = "keccak",
     srcs = [
         "__init__.py",
-        "fips202.py",
+        "byte_hashes.py",
         "lane.py",
         "params.py",
         "permutation.py",
