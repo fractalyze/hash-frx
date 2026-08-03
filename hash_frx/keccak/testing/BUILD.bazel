@@ -93,3 +93,17 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "streaming_test",
+    # Compile-heavy: each absorb and squeeze inlines the marked permutation once
+    # per block of its static upper bound.
+    size = "medium",
+    srcs = ["streaming_test.py"],
+    deps = [
+        "//hash_frx/keccak",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
