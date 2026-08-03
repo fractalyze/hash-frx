@@ -10,6 +10,7 @@ py_library(
         "params.py",
         "permutation.py",
         "sponge.py",
+        "streaming.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
