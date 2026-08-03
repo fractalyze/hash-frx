@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""The FIPS 202 wrappers — SHA3-256, SHAKE128, SHAKE256 as `ByteHash`es.
+"""The sponge wrappers — SHA3-256, SHAKE128, SHAKE256, Keccak-256 as `ByteHash`es.
 
 Each is one `KeccakSponge` row: a rate, a domain-separation byte, and an output
 length. FIPS 202 section 6 fixes the first two per function; the third is fixed
@@ -10,6 +10,15 @@ for SHA-3 and a caller's choice for the SHAKEs.
 | `Sha3_256` | 136 B | `0x06` | 512 bits | 32 B |
 | `Shake128` | 168 B | `0x1F` | 256 bits | caller's |
 | `Shake256` | 136 B | `0x1F` | 512 bits | caller's |
+| `Keccak256` | 136 B | `0x01` | 512 bits | 32 B |
+
+**`Keccak256` is not a FIPS 202 function**, despite sharing this module and every
+line of the sponge with `Sha3_256`. It is the original Keccak submission, whose
+padding NIST changed on standardisation, so the two differ in exactly one byte —
+`0x01` against `0x06` — and in nothing else. It lives here because that is the
+truth about it: separating the file would suggest a second construction, when
+what exists is one sponge and a table with four rows. `keccak256_test` is what
+keeps the byte from being the copied bug it usually is.
 
 **An XOF's output length is a constructor parameter, not a weakened
 `digest_size`.** `Shake256(output_size=64)` is a different hash from
@@ -19,9 +28,9 @@ stays the concrete integer the seam promises. It has no default: an extendable
 output has no natural size, and picking one for the caller is how a scheme ends
 up silently truncating.
 
-**`has_dedicated_fusion` is `False` here on device and host alike**, because
+**`has_dedicated_fusion` is `False` on every hash here, device and host alike**, because
 Keccak carries only the generic region marker until an emitter exists (#21). So
-for these six the flag does not separate substrate the way it does for SHA-256,
+the flag does not separate substrate here the way it does for SHA-256,
 and the return type is what does: a device hash returns an `Array` and accepts a
 tracer, a host one returns `np.ndarray` and never can. That is a seam question
 rather than a fact about these hashes, and it is stated where the rule lives —
@@ -53,6 +62,14 @@ SHA3_256_DIGEST_SIZE = 32
 SHAKE128_RATE = 168
 SHAKE256_RATE = 136
 SHAKE_SUFFIX = 0x1F
+
+# Keccak reference (the original SHA-3 submission), `pad10*1` with no domain
+# bits under it — so the byte is the padding's opening `1` alone, where FIPS 202
+# section 6.1 puts two domain bits beneath it. Frozen by Ethereum before that
+# change, which is why the variant outlived the submission.
+KECCAK256_RATE = 136
+KECCAK256_SUFFIX = 0x01
+KECCAK256_DIGEST_SIZE = 32
 
 
 class _KeccakHash:
@@ -112,6 +129,23 @@ class Shake256(_KeccakHash):
 
     _rate = SHAKE256_RATE
     _suffix = SHAKE_SUFFIX
+
+
+class Keccak256(_KeccakHash):
+    """`ByteHash` for device Keccak-256 — the original submission, not SHA3-256.
+
+    A separate type rather than `Sha3_256(legacy_padding=True)`: a flag reads as
+    a robustness knob, and this is a choice between two standards that a caller
+    has to make deliberately. The Ethereum address derivation and every EVM
+    `KECCAK256` need this one; a FIPS 202 consumer needs the other; nothing wants
+    to pick at runtime.
+    """
+
+    _rate = KECCAK256_RATE
+    _suffix = KECCAK256_SUFFIX
+
+    def __init__(self) -> None:
+        super().__init__(KECCAK256_DIGEST_SIZE)
 
 
 class _HostKeccak:
@@ -177,6 +211,7 @@ if TYPE_CHECKING:
     _bh_sha3: type[ByteHash] = Sha3_256
     _bh_shake128: type[ByteHash] = Shake128
     _bh_shake256: type[ByteHash] = Shake256
+    _bh_keccak256: type[ByteHash] = Keccak256
     _bh_host_sha3: type[ByteHash] = HostSha3_256
     _bh_host_shake128: type[ByteHash] = HostShake128
     _bh_host_shake256: type[ByteHash] = HostShake256
