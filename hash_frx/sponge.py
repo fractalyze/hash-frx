@@ -4,6 +4,13 @@
 the first `out` lanes. `sponge_type` (`SpongeType`) picks the construction via a
 `_MODES` row, so a new one is a member + a row, never a method.
 
+That extension point covers sponges shaped like this one: 1-D field elements,
+an overwrite absorb, and a squeeze that truncates the final state. A sponge that
+differs in its *input domain* is not a row — a byte-oriented one takes a `[B, L]`
+batch and needs a packing layer no other row would use, which is why Keccak has
+its own ([`keccak/sponge.py`](keccak/sponge.py)) and why `duplex_sponge.py`
+refuses an absorb-mode flag for the same reason.
+
 `rate`/`out` are the free params on `SpongeParams` (capacity = width - rate). A
 `has_dedicated_fusion` permutation lowers the whole absorb to one
 `hash_frx.sponge_hash` region (assembled here over the permutation's fused-region

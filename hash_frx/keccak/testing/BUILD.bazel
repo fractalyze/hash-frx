@@ -27,8 +27,10 @@ py_test(
 
 py_test(
     name = "fips202_test",
-    # The 24-round body traces once and every block reuses it, so this stays in
-    # the same bracket as permutation_test rather than scaling with block count.
+    # `_permute_body` traces once and every block and batch size reuses it, so
+    # the eager sweeps are cheap however many shapes they cover. Compile is what
+    # costs, and it scales with absorb-block count because `inline=True` splices
+    # the 24 rounds in per block — which is why the traced cases stay sub-rate.
     size = "medium",
     srcs = ["fips202_test.py"],
     deps = [

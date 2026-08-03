@@ -3,14 +3,23 @@
 
 FIPS 202 section 4 over `KeccakF1600`. One sponge parameterized by
 `(rate, suffix, output_size)`; SHA3-256, SHAKE128 and SHAKE256 are three rows of
-that table rather than three constructions (`fips202.py`).
+that table rather than three constructions (`fips202.py`), and Keccak-256 is a
+fourth row rather than a code change.
+
+**Keccak-f[1600]-local, deliberately.** The permutation is bound here rather than
+taken as a `Permutation`, because nothing else in the package needs a
+byte-oriented sponge and the seam would buy generality with no second consumer.
+Keccak-p[1600, 12] — TurboSHAKE, KangarooTwelve — would only need the round count
+to vary, so widening this to take a permutation is the change to make when one of
+them arrives, not before.
 
 **Not `hash_frx.sponge.Sponge`.** That one absorbs by *overwriting* the rate
-lanes, pads not at all, and squeezes by truncating the final state. Keccak XORs
-into the rate, pads `suffix ‖ 10*1`, and squeezes a block at a time with a
-permutation between them — three of the four defining behaviours differ, so
-sharing would mean a mode flag on every one of them. The `Permutation` seam is
-what the two genuinely share, and #13 already widened that to carry this one.
+lanes, pads not at all, and squeezes by truncating the final state, and it takes
+1-D field elements where this takes a `[B, L]` byte batch. The absorb/pad/squeeze
+differences read like mode flags; the input domain does not, and it is the
+decisive one — a merged form would carry a byte-packing layer used by one row and
+a batch axis the other row lacks. `duplex_sponge.py` already made this call in
+writing for the same reason.
 
 Every loop bound here is static. `ByteHash` fixes the message length `L`, and the
 output length is a parameter, so the block count and the squeeze count are known
@@ -42,6 +51,9 @@ U32 = fnp.uint32
 # Elements of the uint32-halves state per byte of rate: 4 bytes per element.
 _BYTES_PER_ELEMENT = 4
 
+# A readability hoist, not a cache: the trace-once property belongs entirely to
+# `permutation._permute_body`'s jit zone, which is keyed on the state aval and
+# does not care where this wrapper lives.
 _PERMUTE_BATCH = frx.vmap(KeccakF1600().permute)
 
 
@@ -68,12 +80,15 @@ def _padding_tail(length: int, rate: int, suffix: int) -> np.ndarray:
     return tail
 
 
-def _pack(block: Array) -> Array:
+def _pack_bytes(block: Array) -> Array:
     """uint8 [B, r] -> uint32 [B, r // 4] little-endian state elements.
 
     FIPS 202 section 3.1.2 maps a byte string onto lanes little-endian, and the
     halves layout keeps that a straight read: element `j` is bytes `4j .. 4j+3`,
     which is lane `j // 2`'s low half for even `j` and its high half for odd `j`.
+
+    Named for bytes because `permutation.py` has its own `_pack`/`_unpack` pair
+    in this package meaning something else — the flat state to the lane grid.
     """
     b = block.shape[0]
     w = block.reshape(b, -1, _BYTES_PER_ELEMENT).astype(U32)
@@ -85,8 +100,8 @@ def _pack(block: Array) -> Array:
     )
 
 
-def _unpack(elements: Array) -> Array:
-    """uint32 [B, n] -> uint8 [B, 4n] little-endian bytes — `_pack` inverted."""
+def _unpack_bytes(elements: Array) -> Array:
+    """uint32 [B, n] -> uint8 [B, 4n] little-endian bytes — `_pack_bytes` inverted."""
     b = elements.shape[0]
     out = fnp.stack(
         [
@@ -145,10 +160,6 @@ class KeccakSponge:
         if self.output_size < 1:
             raise ValueError(f"output_size ({self.output_size}) must be >= 1")
 
-    @property
-    def _rate_elements(self) -> int:
-        return self.rate // _BYTES_PER_ELEMENT
-
     def hash(self, msg: ArrayLike) -> Array:
         """Absorb a batch of equal-length messages and squeeze: uint8 `[B, L]` ->
         uint8 `[B, output_size]`.
@@ -167,19 +178,32 @@ class KeccakSponge:
             axis=-1,
         )
 
-        n = self._rate_elements
+        n = self.rate // _BYTES_PER_ELEMENT
         state = fnp.zeros((batch, KeccakF1600.width), dtype=U32)
         for start in range(0, padded.shape[-1], self.rate):
-            block = _pack(padded[:, start : start + self.rate])
+            block = _pack_bytes(padded[:, start : start + self.rate])
             state = _PERMUTE_BATCH(_xor_into_rate(state, block))
 
         # FIPS 202 section 4: emit the rate prefix, permute, repeat. The final
         # permutation of the absorb has already run, so the first block is
-        # available before any further one.
+        # available before any further one. Collected as elements and unpacked
+        # once rather than per block.
         squeezes = -(-self.output_size // self.rate)
-        out = []
+        blocks = []
         for i in range(squeezes):
-            out.append(_unpack(state[:, :n]))
+            blocks.append(state[:, :n])
             if i + 1 < squeezes:
                 state = _PERMUTE_BATCH(state)
-        return fnp.concatenate(out, axis=-1)[:, : self.output_size]
+        return _unpack_bytes(fnp.concatenate(blocks, axis=-1))[:, : self.output_size]
+
+
+# Deliberately NOT wrapped in a module-level jit zone the way
+# `sha256.sha256_merkle_damgard` is. Measured both ways: a zone makes a repeated
+# eager call 20-31x faster warm, but its static key is the whole
+# `(rate, suffix, output_size, B, L)` shape, so it compiles per shape at ~0.5 s a
+# time — around 300 same-shape eager calls before it pays for itself, against
+# SHA-256's zone which is keyed on the block aval alone. The consumer that
+# motivates this hash traces its own path, where `inline=True` would make the
+# zone exactly neutral, and the batched device caller it is written for measured
+# 1.3x at B=1024. So the trade lands the wrong way here and the sponge stays a
+# plain body; `_permute_body` remains the one zone, shared by every block.

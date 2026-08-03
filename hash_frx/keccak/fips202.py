@@ -19,16 +19,13 @@ stays the concrete integer the seam promises. It has no default: an extendable
 output has no natural size, and picking one for the caller is how a scheme ends
 up silently truncating.
 
-**`has_dedicated_fusion` is `False` on the device implementations too, and that
-is a seam limitation rather than a property of these hashes.** The flag says a
-digest lowers to a hash-*dedicated* marker; Keccak's permutation carries only the
-generic region marker until an emitter exists (#21). `byte_hash.py` names this
-case in advance — "a device hash written without a marker would be traceable with
-the flag `False`" — and these are the first instances of it, so the flag no longer
-separates the device implementations from the host ones the way it does for
-SHA-256. What distinguishes them is the documented one: the return type. A device
-hash returns an `Array` and accepts a tracer; a host one returns `np.ndarray` and
-never can.
+**`has_dedicated_fusion` is `False` here on device and host alike**, because
+Keccak carries only the generic region marker until an emitter exists (#21). So
+for these six the flag does not separate substrate the way it does for SHA-256,
+and the return type is what does: a device hash returns an `Array` and accepts a
+tracer, a host one returns `np.ndarray` and never can. That is a seam question
+rather than a fact about these hashes, and it is stated where the rule lives —
+[`byte_hash.py`](../byte_hash.py) and `docs/blocks/hash.md`.
 """
 
 from __future__ import annotations
@@ -58,49 +55,24 @@ SHAKE256_RATE = 136
 SHAKE_SUFFIX = 0x1F
 
 
-class Sha3_256:
-    """`ByteHash` for device SHA3-256 — `digest` runs the whole batch through the
-    Keccak sponge and returns a device `Array`, so it accepts a traced message.
+class _KeccakHash:
+    """The shared body of the device FIPS 202 hashes — one `KeccakSponge` row.
 
-    Parameterless, so value identity is by type.
-    """
-
-    digest_size = SHA3_256_DIGEST_SIZE
-    has_dedicated_fusion = False
-
-    def __init__(self) -> None:
-        self._sponge = KeccakSponge(
-            rate=SHA3_256_RATE,
-            suffix=SHA3_256_SUFFIX,
-            output_size=SHA3_256_DIGEST_SIZE,
-        )
-
-    def digest(self, msg: ArrayLike) -> Array:
-        return self._sponge.hash(msg)
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Sha3_256)
-
-    def __hash__(self) -> int:
-        return hash(Sha3_256)
-
-
-class _Shake:
-    """The shared body of the two SHAKEs — everything but the rate.
-
-    Not itself a `ByteHash`: the seam is implemented by the two concrete
-    subclasses, which differ only in the constant they pass up. Splitting them by
-    rate rather than by a `security` argument keeps `Shake128` and `Shake256`
-    separate types, which is what a consumer holding one in pytree aux compares.
+    A subclass supplies the row: `_rate` and `_suffix` from FIPS 202 section 6,
+    plus a fixed output where the standard fixes one. Splitting by constants into
+    separate *types* rather than taking them as arguments is deliberate — a
+    consumer holding one of these in pytree aux compares by type, so `Shake128`
+    and `Shake256` must not be one class with a knob.
     """
 
     _rate: int
+    _suffix: int
     has_dedicated_fusion = False
 
     def __init__(self, output_size: int) -> None:
         self.digest_size = output_size
         self._sponge = KeccakSponge(
-            rate=self._rate, suffix=SHAKE_SUFFIX, output_size=output_size
+            rate=self._rate, suffix=self._suffix, output_size=output_size
         )
 
     def digest(self, msg: ArrayLike) -> Array:
@@ -115,19 +87,31 @@ class _Shake:
         return hash((type(self), self.digest_size))
 
 
-class Shake128(_Shake):
+class Sha3_256(_KeccakHash):
+    """`ByteHash` for device SHA3-256 — the standard fixes its output at 32 B."""
+
+    _rate = SHA3_256_RATE
+    _suffix = SHA3_256_SUFFIX
+
+    def __init__(self) -> None:
+        super().__init__(SHA3_256_DIGEST_SIZE)
+
+
+class Shake128(_KeccakHash):
     """`ByteHash` for device SHAKE128 at a fixed output length."""
 
     _rate = SHAKE128_RATE
+    _suffix = SHAKE_SUFFIX
 
 
-class Shake256(_Shake):
+class Shake256(_KeccakHash):
     """`ByteHash` for device SHAKE256 at a fixed output length.
 
     The one SLH-DSA's SHAKE parameter sets and ML-DSA's sampling reach for.
     """
 
     _rate = SHAKE256_RATE
+    _suffix = SHAKE_SUFFIX
 
 
 class _HostKeccak:

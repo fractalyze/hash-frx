@@ -36,7 +36,6 @@ tests share.
 | One-shot sponge hash — padding-free or Merkle–Damgård, selected per call                    | [`sponge.py`](../hash_frx/sponge.py)                 |
 | Interleaved absorb/squeeze with add-mode absorb, for a classic Fiat-Shamir prover            | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
 | n-to-1 truncated-permutation compression, for a hash tree                                   | [`compression.py`](../hash_frx/compression.py)       |
-| XOR absorb with multi-rate padding and an iterated squeeze — Keccak-local, and why it is not `sponge.py` | [`keccak/sponge.py`](../hash_frx/keccak/sponge.py)   |
 
 ## Implementations
 
@@ -46,7 +45,7 @@ tests share.
 | Classic Poseidon — the naive Hades schedule and the optimized-sparse refactor of it          | [`poseidon/`](../hash_frx/poseidon)                  |
 | SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256.py`](../hash_frx/sha256.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
-| SHA3-256, SHAKE128, SHAKE256 — the FIPS 202 byte hashes over the Keccak sponge               | [`keccak/fips202.py`](../hash_frx/keccak/fips202.py) |
+| SHA3-256, SHAKE128, SHAKE256 — the FIPS 202 byte hashes, and the Keccak-f[1600]-local sponge under them (why it is not `sponge.py`) | [`keccak/fips202.py`](../hash_frx/keccak/fips202.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
 
 ## Fusion machinery
 
