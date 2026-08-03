@@ -3,7 +3,7 @@
 
 FIPS 202 section 4 over `KeccakF1600`. One sponge parameterized by
 `(rate, suffix, output_size)`; SHA3-256, SHAKE128 and SHAKE256 are three rows of
-that table rather than three constructions (`fips202.py`), and Keccak-256 is a
+that table rather than three constructions (`byte_hashes.py`), and Keccak-256 is a
 fourth row rather than a code change.
 
 **Keccak-f[1600]-local, deliberately.** The permutation is bound here rather than

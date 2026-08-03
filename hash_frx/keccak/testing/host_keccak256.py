@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hash_frx.keccak.fips202 import (
+from hash_frx.keccak.byte_hashes import (
     KECCAK256_DIGEST_SIZE,
     KECCAK256_RATE,
     KECCAK256_SUFFIX,

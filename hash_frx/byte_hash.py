@@ -68,7 +68,7 @@ class ByteHash(Protocol):
         one dedicated kernel, and a device hash written without a marker is
         traceable with the flag `False`.
 
-        **Keccak's `ByteHash`es are that case** (`keccak/fips202.py`): they run
+        **Keccak's `ByteHash`es are that case** (`keccak/byte_hashes.py`): they run
         on the device and take a tracer, yet report `False` because no Keccak
         emitter exists yet. So the flag no longer answers "may I hash inside my
         own `@jit`" — only the return type does. The seam grows a field for that
