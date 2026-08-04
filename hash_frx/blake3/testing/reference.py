@@ -6,9 +6,11 @@ neither the batched lane layout nor the single-kernel authoring rules that shape
 `compress.py`. An oracle that shared those would fail the same way the thing it
 checks does.
 
-`hash_single_chunk` is here only so the oracle can be anchored — `reference_test`
-matches it against the published vectors, and `vectors.py` sets out why those
-reach a compression function at all.
+The chunk chain is here so that the oracle can be anchored — `reference_test`
+matches `hash_single_chunk` against the published vectors, and `vectors.py` sets
+out why those reach a compression function at all. `chunk_output`, which that
+hash is a thin wrapper over, then serves as an oracle for a chunk whose counter
+or flags no published vector reaches.
 
 Tree mode is deliberately absent: it belongs to the multi-chunk work, and this
 file only needs to reach far enough to anchor. So the flags below are hash
@@ -110,6 +112,28 @@ def blocks_of(data: bytes) -> list[bytes]:
     return [data[i : i + BLOCK_LEN] for i in range(0, len(data), BLOCK_LEN)] or [b""]
 
 
+def chunk_output(data: bytes, counter: int = 0, final_flags: int = 0) -> list[int]:
+    """One chunk's last compression, all 16 output words.
+
+    `final_flags` rides on that last compression and no other — ROOT for a chunk
+    that is the root of its tree, nothing for one a tree stands on. Everything
+    below it is fixed by the chunk: CHUNK_START on the first block, CHUNK_END on
+    the last, `counter` on every one, and each block's own byte count.
+    """
+    if len(data) > CHUNK_LEN:
+        raise ValueError(f"{len(data)} bytes exceeds one {CHUNK_LEN}-byte chunk")
+    blocks = blocks_of(data)
+
+    cv = list(IV)
+    for i, block in enumerate(blocks[:-1]):
+        flags = CHUNK_START if i == 0 else 0
+        cv = compress(cv, words_of(block), counter, len(block), flags)[:8]
+
+    last = blocks[-1]
+    flags = final_flags | CHUNK_END | (CHUNK_START if len(blocks) == 1 else 0)
+    return compress(cv, words_of(last), counter, len(last), flags)
+
+
 def hash_single_chunk(data: bytes) -> bytes:
     """BLAKE3 of an input that fits in one chunk (<= 1024 bytes): 32 bytes.
 
@@ -117,16 +141,5 @@ def hash_single_chunk(data: bytes) -> bytes:
     value — which is why this reaches the published vectors without any of the
     parent-node machinery.
     """
-    if len(data) > CHUNK_LEN:
-        raise ValueError(f"{len(data)} bytes exceeds one {CHUNK_LEN}-byte chunk")
-    blocks = blocks_of(data)
-
-    cv = list(IV)
-    for i, block in enumerate(blocks):
-        flags = 0
-        if i == 0:
-            flags |= CHUNK_START
-        if i == len(blocks) - 1:
-            flags |= CHUNK_END | ROOT
-        cv = compress(cv, words_of(block), 0, len(block), flags)[:8]
-    return b"".join(w.to_bytes(4, "little") for w in cv)
+    words = chunk_output(data, 0, ROOT)[:8]
+    return b"".join(w.to_bytes(4, "little") for w in words)
