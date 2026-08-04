@@ -18,7 +18,7 @@ ChaCha diagonalisation — so there is one mixing routine rather than two.
 
 **The counter arrives as two `uint32` halves**, not one 64-bit word, for the
 reason `keccak/lane.py` sets out at length: `uint64` is not safely available
-here. It reaches the state as two words anyway (spec section 2.6 puts the low
+here. It reaches the state as two words anyway (spec section 2.2 puts the low
 half at index 12 and the high at 13), so the split costs nothing and the caller
 never materialises a 64-bit value.
 """
@@ -30,7 +30,7 @@ from frx import Array
 
 U32 = fnp.uint32
 
-# Spec section 2.6 — the SHA-2 IV.
+# Spec section 2.2, Table 1 — the SHA-2 IV.
 # The IV is transcribed from the spec and its shape carries meaning — the two
 # rows are the halves the feed-forward treats separately — so it is fenced from
 # the formatter, which would flatten it one word per line.
@@ -41,7 +41,8 @@ IV = (
 )
 # fmt: on
 
-# Domain-separation flags (spec section 2.1). A caller ORs these into `flags`.
+# Domain-separation flags (spec section 2.2, Table 3). A caller ORs these into
+# `flags`.
 CHUNK_START = 1 << 0
 CHUNK_END = 1 << 1
 PARENT = 1 << 2
@@ -50,7 +51,7 @@ KEYED_HASH = 1 << 4
 DERIVE_KEY_CONTEXT = 1 << 5
 DERIVE_KEY_MATERIAL = 1 << 6
 
-# The message word schedule applied between rounds (spec section 2.2).
+# The message word schedule applied between rounds (spec section 2.2, Table 2).
 MSG_PERMUTATION = (2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8)
 ROUNDS = 7
 
@@ -61,7 +62,7 @@ _SCHEDULE: list[tuple[int, ...]] = [tuple(range(16))]
 for _r in range(ROUNDS - 1):
     _SCHEDULE.append(tuple(_SCHEDULE[-1][i] for i in MSG_PERMUTATION))
 
-# G's rotation amounts, in order (spec section 2.3).
+# G's rotation amounts, in order (spec section 2.2).
 _ROTATIONS = (16, 12, 8, 7)
 
 
@@ -177,7 +178,7 @@ def compress(
     for rnd in range(ROUNDS):  # static and small
         rows = _round(rows, block, rnd)
 
-    # Feed-forward (spec section 2.4): the low half takes the high, and the high
+    # Feed-forward (spec section 2.2): the low half takes the high, and the high
     # half takes the input chaining value.
     r0, r1, r2, r3 = rows
     return fnp.concatenate(

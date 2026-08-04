@@ -22,7 +22,7 @@ _MASK = 0xFFFFFFFF
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
 
-# BLAKE3 spec section 2.6 — the SHA-2 IV, unchanged.
+# BLAKE3 spec section 2.2, Table 1 — the SHA-2 IV, unchanged.
 # The IV is transcribed from the spec and its shape carries meaning — the two
 # rows are the halves the feed-forward treats separately — so it is fenced from
 # the formatter, which would flatten it one word per line.
@@ -33,7 +33,7 @@ IV = (
 )
 # fmt: on
 
-# Domain-separation flags (spec section 2.1).
+# Domain-separation flags (spec section 2.2, Table 3).
 CHUNK_START = 1 << 0
 CHUNK_END = 1 << 1
 PARENT = 1 << 2
@@ -42,7 +42,7 @@ KEYED_HASH = 1 << 4
 DERIVE_KEY_CONTEXT = 1 << 5
 DERIVE_KEY_MATERIAL = 1 << 6
 
-# The message word schedule applied between rounds (spec section 2.2).
+# The message word schedule applied between rounds (spec section 2.2, Table 2).
 MSG_PERMUTATION = (2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8)
 
 
