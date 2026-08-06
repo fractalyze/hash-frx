@@ -14,24 +14,18 @@ from __future__ import annotations
 
 from absl.testing import absltest, parameterized
 
-from hash_frx.blake3.testing.reference import hash_single_chunk
-from hash_frx.blake3.testing.vectors import SINGLE_CHUNK, official_input
+from hash_frx.blake3.testing.reference import hash_tree
+from hash_frx.blake3.testing.vectors import ALL_LENGTHS, official_input
 
 
 class ReferenceAnchorTest(parameterized.TestCase):
-    @parameterized.parameters(*SINGLE_CHUNK)
+    @parameterized.parameters(*ALL_LENGTHS)
     def test_official_vectors(self, length: int, expected: str) -> None:
-        # The single-block lengths pin the compression function itself, with
-        # nothing built on it in between; the multi-block ones add the
-        # CHUNK_START / CHUNK_END placement and the chaining-value hand-off.
-        # `vectors.py` is where the two are told apart.
-        self.assertEqual(hash_single_chunk(official_input(length)).hex(), expected)
-
-    def test_a_second_chunk_is_out_of_scope(self) -> None:
-        # Tree mode belongs to the multi-chunk work; the oracle refuses rather
-        # than silently hashing only part of the input.
-        with self.assertRaises(ValueError):
-            hash_single_chunk(official_input(1025))
+        # Every published length: the single-block ones pin the compression
+        # function itself, the multi-block ones add the flag placement and
+        # the chaining-value hand-off, and the multi-chunk ones add the
+        # parent-node tree. `vectors.py` is where the sets are told apart.
+        self.assertEqual(hash_tree(official_input(length)).hex(), expected)
 
 
 if __name__ == "__main__":

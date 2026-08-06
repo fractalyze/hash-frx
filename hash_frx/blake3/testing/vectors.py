@@ -14,6 +14,12 @@ that chunk's blocks with no tree above it, and at most 64 bytes is a single
 compression call. So `SINGLE_BLOCK` pins the compression function directly and
 `MULTI_BLOCK` adds the chaining, both without any tree machinery in between.
 
+They are grouped by the layer each range first reaches — a single
+compression, a chunk chain, a parent-node tree — so a group names what its
+lengths would catch. A test that wants one layer selects its group;
+`ALL_LENGTHS` is the whole published table, which is what a whole-hash test
+wants.
+
 Provenance: `test_vectors/test_vectors.json` in BLAKE3-team/BLAKE3.
 """
 
@@ -46,9 +52,34 @@ MULTI_BLOCK = (
 )
 
 
-# Every published length at or below one chunk, which is the whole range a hash
-# reaches with no tree above it.
-SINGLE_CHUNK = SINGLE_BLOCK + MULTI_BLOCK
+# More than one chunk, so a parent-node tree stands above them. The chunk counts
+# are what these are chosen for rather than the byte counts: 3, 5, 6, 7, 9, 31
+# and 100 are not powers of two, and a tree built by halving instead of by the
+# standard's largest-power-of-two split agrees with one on every power of two and
+# on nothing else.
+MULTI_CHUNK = (
+    (1025, "d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444"),
+    (2048, "e776b6028c7cd22a4d0ba182a8bf62205d2ef576467e838ed6f2529b85fba24a"),
+    (2049, "5f4d72f40d7a5f82b15ca2b2e44b1de3c2ef86c426c95c1af0b6879522563030"),
+    (3072, "b98cb0ff3623be03326b373de6b9095218513e64f1ee2edd2525c7ad1e5cffd2"),
+    (3073, "7124b49501012f81cc7f11ca069ec9226cecb8a2c850cfe644e327d22d3e1cd3"),
+    (4096, "015094013f57a5277b59d8475c0501042c0b642e531b0a1c8f58d2163229e969"),
+    (4097, "9b4052b38f1c5fc8b1f9ff7ac7b27cd242487b3d890d15c96a1c25b8aa0fb995"),
+    (5120, "9cadc15fed8b5d854562b26a9536d9707cadeda9b143978f319ab34230535833"),
+    (5121, "628bd2cb2004694adaab7bbd778a25df25c47b9d4155a55f8fbd79f2fe154cff"),
+    (6144, "3e2e5b74e048f3add6d21faab3f83aa44d3b2278afb83b80b3c35164ebeca205"),
+    (6145, "f1323a8631446cc50536a9f705ee5cb619424d46887f3c376c695b70e0f0507f"),
+    (7168, "61da957ec2499a95d6b8023e2b0e604ec7f6b50e80a9678b89d2628e99ada77a"),
+    (7169, "a003fc7a51754a9b3c7fae0367ab3d782dccf28855a03d435f8cfe74605e7817"),
+    (8192, "aae792484c8efe4f19e2ca7d371d8c467ffb10748d8a5a1ae579948f718a2a63"),
+    (8193, "bab6c09cb8ce8cf459261398d2e7aef35700bf488116ceb94a36d0f5f1b7bc3b"),
+    (16384, "f875d6646de28985646f34ee13be9a576fd515f76b5b0a26bb324735041ddde4"),
+    (31744, "62b6960e1a44bcc1eb1a611a8d6235b6b4b78f32e7abc4fb4c6cdcce94895c47"),
+    (102400, "bc3e3d41a1146b069abffad3c0d44860cf664390afce4d9661f7902e7943e085"),
+)
+
+# Every length the standard publishes.
+ALL_LENGTHS = SINGLE_BLOCK + MULTI_BLOCK + MULTI_CHUNK
 
 
 def official_input(length: int) -> bytes:

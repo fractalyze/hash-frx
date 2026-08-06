@@ -29,6 +29,7 @@ from hash_frx.blake3.compress import (
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.vectors import SINGLE_BLOCK, official_input
 from hash_frx.testing.fusion_ready import assert_fusion_ready
+from hash_frx.word import split
 
 _U32 = np.uint32
 
@@ -39,7 +40,7 @@ def _u32(value: object) -> frx.Array:
 
 def _counter(value: int) -> np.ndarray:
     """A 64-bit counter as the (low, high) uint32 pair the seam takes."""
-    return np.array([[value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF]], dtype=_U32)
+    return np.array([split(value)], dtype=_U32)
 
 
 def _compress_one(
