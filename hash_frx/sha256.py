@@ -31,6 +31,7 @@ from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.fusion import fused_region
+from hash_frx.word import rotr
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -132,10 +133,6 @@ _H0 = np.array(
 _Kd = fnp.asarray(_K)
 
 
-def _rotr(x: Array, n: int) -> Array:
-    return (x >> U32(n)) | (x << U32(32 - n))
-
-
 @lru_cache(maxsize=None)
 def _padding_tail(length: int) -> np.ndarray:
     """What FIPS 180-4 §5.1.1 appends to a `length`-byte message: uint8 [P].
@@ -172,15 +169,15 @@ def _compress(state: Array, w16: Array, k: Array) -> Array:
         a, b, c, d, e, f, g, h, w = carry
         word = w[:, 0]
         kt = k[t]
-        S1 = _rotr(e, 6) ^ _rotr(e, 11) ^ _rotr(e, 25)
+        S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
         ch = (e & f) ^ (~e & g)
         t1 = h + S1 + ch + kt + word
-        S0 = _rotr(a, 2) ^ _rotr(a, 13) ^ _rotr(a, 22)
+        S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
         maj = (a & b) ^ (a & c) ^ (b & c)
         t2 = S0 + maj
         # schedule next word w[t+16] = sigma1(w14) + w9 + sigma0(w1) + w0
-        s0 = _rotr(w[:, 1], 7) ^ _rotr(w[:, 1], 18) ^ (w[:, 1] >> U32(3))
-        s1 = _rotr(w[:, 14], 17) ^ _rotr(w[:, 14], 19) ^ (w[:, 14] >> U32(10))
+        s0 = rotr(w[:, 1], 7) ^ rotr(w[:, 1], 18) ^ (w[:, 1] >> U32(3))
+        s1 = rotr(w[:, 14], 17) ^ rotr(w[:, 14], 19) ^ (w[:, 14] >> U32(10))
         nxt = w[:, 0] + s0 + w[:, 9] + s1
         w = fnp.concatenate([w[:, 1:], nxt[:, None]], axis=1)
         return (t1 + t2, a, b, c, d + t1, e, f, g, w)

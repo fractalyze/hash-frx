@@ -55,6 +55,15 @@ py_library(
     deps = [requirement("frx")],
 )
 
+# `linear.py`'s counterpart for the bit-oriented families: the uint32 rotate,
+# the static roll, and the little-endian byte/word packers.
+py_library(
+    name = "word",
+    srcs = ["word.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
+)
+
 # Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash plus the `Sha256` /
 # `HostSha256` ByteHash implementations. A standalone hash, not a Permutation; no
 # zk_dtypes / x64 dependency.
@@ -65,6 +74,7 @@ py_library(
     deps = [
         ":byte_hash",
         ":fusion",
+        ":word",
         requirement("frx"),
         requirement("numpy"),
     ],

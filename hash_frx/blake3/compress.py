@@ -28,6 +28,8 @@ from __future__ import annotations
 import frx.numpy as fnp
 from frx import Array
 
+from hash_frx.word import roll, rotr
+
 U32 = fnp.uint32
 
 # Spec section 2.2, Table 1 — the SHA-2 IV.
@@ -66,36 +68,20 @@ for _r in range(ROUNDS - 1):
 _ROTATIONS = (16, 12, 8, 7)
 
 
-def _rotr(x: Array, n: int) -> Array:
-    """Rotate each `uint32` lane right by `n` (0 < n < 32, so no shift by 32)."""
-    return (x >> U32(n)) | (x << U32(32 - n))
-
-
 def _g(
     a: Array, b: Array, c: Array, d: Array, mx: Array, my: Array
 ) -> tuple[Array, Array, Array, Array]:
     """The G mixing function over four `[B, 4]` rows — four mixes at once."""
     n0, n1, n2, n3 = _ROTATIONS
     a = a + b + mx
-    d = _rotr(d ^ a, n0)
+    d = rotr(d ^ a, n0)
     c = c + d
-    b = _rotr(b ^ c, n1)
+    b = rotr(b ^ c, n1)
     a = a + b + my
-    d = _rotr(d ^ a, n2)
+    d = rotr(d ^ a, n2)
     c = c + d
-    b = _rotr(b ^ c, n3)
+    b = rotr(b ^ c, n3)
     return a, b, c, d
-
-
-def _roll(x: Array, shift: int) -> Array:
-    """`fnp.roll` along the column axis as the static slices it is — the wrapper
-    carries an internal jit and would put a call in the body.
-
-    `shift` is the diagonalisation's 1/2/3 and never a multiple of the row width,
-    so the cut point is always interior.
-    """
-    cut = (-shift) % x.shape[1]
-    return fnp.concatenate([x[:, cut:], x[:, :cut]], axis=1)
 
 
 def _words(block: Array, indices: tuple[int, ...]) -> Array:
@@ -121,7 +107,7 @@ def _round(
 
     # Diagonalise: mix (r0[k], r1[k+1], r2[k+2], r3[k+3]) by rolling each row into
     # a common column, running the column mix, and rolling back.
-    r1, r2, r3 = _roll(r1, -1), _roll(r2, -2), _roll(r3, -3)
+    r1, r2, r3 = roll(r1, -1, axis=1), roll(r2, -2, axis=1), roll(r3, -3, axis=1)
     r0, r1, r2, r3 = _g(
         r0,
         r1,
@@ -130,7 +116,7 @@ def _round(
         _words(block, schedule[8:16:2]),
         _words(block, schedule[9:16:2]),
     )
-    return r0, _roll(r1, 1), _roll(r2, 2), _roll(r3, 3)
+    return r0, roll(r1, 1, axis=1), roll(r2, 2, axis=1), roll(r3, 3, axis=1)
 
 
 def compress(

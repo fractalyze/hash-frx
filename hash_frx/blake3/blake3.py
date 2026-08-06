@@ -36,6 +36,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, IV, ROOT, compress
+from hash_frx.word import pack_le, unpack_le
 
 U32 = fnp.uint32
 
@@ -144,42 +145,13 @@ def _block_words(msg: Array) -> Array:
     a host constant built from the static length rather than something written
     into the message, which keeps `msg` an operand and lets it be a tracer —
     `sha256._padding_tail` holds the same property for the same reason.
-
-    The pack itself is `keccak/sponge.py`'s, one axis wider: both standards read
-    bytes into words little-endian.
     """
     batch, length = msg.shape
     nblocks = _nblocks(length)
     pad = nblocks * BLOCK_LEN - length
     if pad:
         msg = fnp.concatenate([msg, fnp.zeros((batch, pad), dtype=fnp.uint8)], axis=-1)
-    w = msg.reshape(batch, nblocks, 16, 4).astype(U32)
-    return (
-        w[..., 0]
-        | (w[..., 1] << U32(8))
-        | (w[..., 2] << U32(16))
-        | (w[..., 3] << U32(24))
-    )
-
-
-def _le_bytes(words: Array) -> Array:
-    """uint32 `[B, n]` -> uint8 `[B, 4n]`, little-endian — BLAKE3's output order.
-
-    Byte order is the axis the packers split on, not the hash family: this is the
-    same little-endian unpack `keccak/sponge.py` does, while
-    `sha256.serialize_digest` is big-endian and cannot be the same function.
-    """
-    batch = words.shape[0]
-    out = fnp.stack(
-        [
-            words & U32(0xFF),
-            (words >> U32(8)) & U32(0xFF),
-            (words >> U32(16)) & U32(0xFF),
-            (words >> U32(24)) & U32(0xFF),
-        ],
-        axis=-1,
-    ).astype(fnp.uint8)
-    return out.reshape(batch, -1)
+    return pack_le(msg.reshape(batch, nblocks, BLOCK_LEN))
 
 
 def digest(msg: ArrayLike) -> Array:
@@ -206,4 +178,4 @@ def digest(msg: ArrayLike) -> Array:
     output = chunk_output(
         _block_words(message), length, fnp.zeros((batch, 2), dtype=U32)
     )
-    return _le_bytes(root_words(output)[:, :8])
+    return unpack_le(root_words(output)[:, :8])

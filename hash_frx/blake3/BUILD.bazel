@@ -9,5 +9,8 @@ py_library(
         "compress.py",
     ],
     visibility = ["//visibility:public"],
-    deps = [requirement("frx")],
+    deps = [
+        "//hash_frx:word",
+        requirement("frx"),
+    ],
 )
