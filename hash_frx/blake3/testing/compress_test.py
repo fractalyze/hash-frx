@@ -3,10 +3,9 @@
 
 Held to two goldens rather than one. `reference.py` is a plain-Python
 transcription sharing neither the batched lane layout nor the authoring rules, so
-it cannot fail the same way; and the BLAKE3 team's published vectors reach the
-compression function directly for inputs of at most 64 bytes, where a whole hash
-is one call. The second is what makes the first trustworthy — `reference_test`
-anchors it.
+it cannot fail the same way; and `SINGLE_BLOCK` reaches this function directly,
+since a hash of at most 64 bytes is one compression call (`vectors.py`). The
+second is what makes the first trustworthy — `reference_test` anchors it.
 
 The lowering assertions are not decoration. A dynamic index or a reduction here
 still computes the right words and only splits the kernel, so values alone cannot
@@ -219,6 +218,25 @@ class ValidationTest(absltest.TestCase):
             ),
         ):
             with self.subTest(case=name), self.assertRaises(ValueError):
+                compress(*args)
+
+    def test_rejects_operands_that_are_not_uint32(self) -> None:
+        # A narrower or signed operand promotes rather than errors, so without
+        # this the result is a correctly shaped uint32 of wrong words: a signed
+        # `>>` is arithmetic, and a narrow lane never wraps at 32 bits.
+        good = (
+            _u32(np.zeros((1, 8))),
+            _u32(np.zeros((1, 16))),
+            _u32(np.zeros((1, 2))),
+            _u32(np.zeros(1)),
+            _u32(np.zeros(1)),
+        )
+        for i, name in enumerate(
+            ("chaining_value", "block", "counter", "block_len", "flags")
+        ):
+            args = list(good)
+            args[i] = fnp.asarray(np.asarray(args[i]).astype(np.int32))
+            with self.subTest(operand=name), self.assertRaises(TypeError):
                 compress(*args)
 
 

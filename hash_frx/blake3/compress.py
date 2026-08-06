@@ -75,25 +75,26 @@ def _g(
     a: Array, b: Array, c: Array, d: Array, mx: Array, my: Array
 ) -> tuple[Array, Array, Array, Array]:
     """The G mixing function over four `[B, 4]` rows — four mixes at once."""
-    r0, r1, r2, r3 = _ROTATIONS
+    n0, n1, n2, n3 = _ROTATIONS
     a = a + b + mx
-    d = _rotr(d ^ a, r0)
+    d = _rotr(d ^ a, n0)
     c = c + d
-    b = _rotr(b ^ c, r1)
+    b = _rotr(b ^ c, n1)
     a = a + b + my
-    d = _rotr(d ^ a, r2)
+    d = _rotr(d ^ a, n2)
     c = c + d
-    b = _rotr(b ^ c, r3)
+    b = _rotr(b ^ c, n3)
     return a, b, c, d
 
 
 def _roll(x: Array, shift: int) -> Array:
     """`fnp.roll` along the column axis as the static slices it is — the wrapper
-    carries an internal jit and would put a call in the body."""
-    n = x.shape[1]
-    cut = (-shift) % n
-    if cut == 0:
-        return x
+    carries an internal jit and would put a call in the body.
+
+    `shift` is the diagonalisation's 1/2/3 and never a multiple of the row width,
+    so the cut point is always interior.
+    """
+    cut = (-shift) % x.shape[1]
     return fnp.concatenate([x[:, cut:], x[:, :cut]], axis=1)
 
 
@@ -150,21 +151,21 @@ def compress(
     The first eight output words are the new chaining value; a root node reads
     all sixteen as extendable output.
     """
-    for name, arr, rank in (
-        ("chaining_value", chaining_value, 2),
-        ("block", block, 2),
-        ("counter", counter, 2),
-        ("block_len", block_len, 1),
-        ("flags", flags, 1),
+    for name, arr, tail in (
+        ("chaining_value", chaining_value, (8,)),
+        ("block", block, (16,)),
+        ("counter", counter, (2,)),  # (low, high)
+        ("block_len", block_len, ()),
+        ("flags", flags, ()),
     ):
-        if arr.ndim != rank:
-            raise ValueError(f"{name} must be {rank}-D, got ndim={arr.ndim}")
-    if chaining_value.shape[1] != 8:
-        raise ValueError(f"chaining_value must be [B, 8], got {chaining_value.shape}")
-    if block.shape[1] != 16:
-        raise ValueError(f"block must be [B, 16], got {block.shape}")
-    if counter.shape[1] != 2:
-        raise ValueError(f"counter must be [B, 2] (low, high), got {counter.shape}")
+        if arr.ndim == 0 or arr.shape[1:] != tail:
+            raise ValueError(f"{name} must be [B, *{tail}], got {arr.shape}")
+        # A narrower or signed operand does not error, it promotes: the result is
+        # a correctly shaped uint32 of wrong words, since a signed `>>` is
+        # arithmetic and a narrow lane never wraps at 32 bits. Raise rather than
+        # coerce, so the caller's dtype bug surfaces here and not one layer out.
+        if arr.dtype != U32:
+            raise TypeError(f"{name} must be uint32, got {arr.dtype}")
 
     batch = chaining_value.shape[0]
     iv = fnp.broadcast_to(fnp.asarray(IV[:4], dtype=U32), (batch, 4))

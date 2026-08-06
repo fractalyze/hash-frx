@@ -1,12 +1,18 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """The BLAKE3 team's published test vectors, split by what they exercise.
 
-BLAKE3 has no standard-library implementation to act as the third party
-`hashlib` is for SHA-3, so these are the anchor for everything in this package.
-They pin whole hashes rather than compression intermediates — but an input of at
-most one 1024-byte chunk hashes as the compression function chained over that
-chunk's blocks with no tree above it, so they reach it directly. At most 64
-bytes reaches it in a single call.
+**Why these are the anchor, stated once for the package.** BLAKE3 has no
+standard-library implementation to act as the third party `hashlib` is for
+SHA-3, so a second reading of the spec is all this repo could otherwise check
+itself against — and two implementations written here would agree with each
+other just as readily while both being wrong.
+
+The vectors pin whole hashes rather than compression intermediates, which looks
+at first like they cannot reach anything below a whole hash. They can: an input
+of at most one 1024-byte chunk hashes as the compression function chained over
+that chunk's blocks with no tree above it, and at most 64 bytes is a single
+compression call. So `SINGLE_BLOCK` pins the compression function directly and
+`MULTI_BLOCK` adds the chaining, both without any tree machinery in between.
 
 Provenance: `test_vectors/test_vectors.json` in BLAKE3-team/BLAKE3.
 """
@@ -38,6 +44,11 @@ MULTI_BLOCK = (
     (1023, "10108970eeda3eb932baac1428c7a2163b0e924c9a9e25b35bba72b28f70bd11"),
     (1024, "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"),
 )
+
+
+# Every published length at or below one chunk, which is the whole range a hash
+# reaches with no tree above it.
+SINGLE_CHUNK = SINGLE_BLOCK + MULTI_BLOCK
 
 
 def official_input(length: int) -> bytes:

@@ -6,14 +6,13 @@ neither the batched lane layout nor the single-kernel authoring rules that shape
 `compress.py`. An oracle that shared those would fail the same way the thing it
 checks does.
 
-`hash_single_chunk` is here only so the oracle can be anchored: the standard
-publishes whole-hash vectors, not compression intermediates, and for inputs up to
-one 1024-byte chunk a BLAKE3 hash is exactly this compression function chained
-over the chunk's blocks with no tree above it. `reference_test` matches it against
-the official vectors, which is what makes agreement here agreement with the
-standard rather than with a second reading of it. Tree mode is deliberately
-absent — it belongs to the multi-chunk work, and this file only needs to reach
-far enough to anchor.
+`hash_single_chunk` is here only so the oracle can be anchored — `reference_test`
+matches it against the published vectors, and `vectors.py` sets out why those
+reach a compression function at all.
+
+Tree mode is deliberately absent: it belongs to the multi-chunk work, and this
+file only needs to reach far enough to anchor. So the flags below are hash
+mode's; the rest of Table 3 belongs with the modes that use it.
 """
 
 from __future__ import annotations
@@ -22,10 +21,8 @@ _MASK = 0xFFFFFFFF
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
 
-# BLAKE3 spec section 2.2, Table 1 — the SHA-2 IV, unchanged.
-# The IV is transcribed from the spec and its shape carries meaning — the two
-# rows are the halves the feed-forward treats separately — so it is fenced from
-# the formatter, which would flatten it one word per line.
+# BLAKE3 spec section 2.2, Table 1 — the SHA-2 IV, unchanged. Fenced from the
+# formatter, which would flatten the transcribed table one word per line.
 # fmt: off
 IV = (
     0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
@@ -33,14 +30,10 @@ IV = (
 )
 # fmt: on
 
-# Domain-separation flags (spec section 2.2, Table 3).
+# Hash mode's domain-separation flags (spec section 2.2, Table 3).
 CHUNK_START = 1 << 0
 CHUNK_END = 1 << 1
-PARENT = 1 << 2
 ROOT = 1 << 3
-KEYED_HASH = 1 << 4
-DERIVE_KEY_CONTEXT = 1 << 5
-DERIVE_KEY_MATERIAL = 1 << 6
 
 # The message word schedule applied between rounds (spec section 2.2, Table 2).
 MSG_PERMUTATION = (2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8)
@@ -112,6 +105,11 @@ def words_of(block: bytes) -> list[int]:
     return [int.from_bytes(padded[4 * i : 4 * i + 4], "little") for i in range(16)]
 
 
+def blocks_of(data: bytes) -> list[bytes]:
+    """A chunk's bytes cut into blocks — an empty chunk still has one block."""
+    return [data[i : i + BLOCK_LEN] for i in range(0, len(data), BLOCK_LEN)] or [b""]
+
+
 def hash_single_chunk(data: bytes) -> bytes:
     """BLAKE3 of an input that fits in one chunk (<= 1024 bytes): 32 bytes.
 
@@ -121,7 +119,7 @@ def hash_single_chunk(data: bytes) -> bytes:
     """
     if len(data) > CHUNK_LEN:
         raise ValueError(f"{len(data)} bytes exceeds one {CHUNK_LEN}-byte chunk")
-    blocks = [data[i : i + BLOCK_LEN] for i in range(0, len(data), BLOCK_LEN)] or [b""]
+    blocks = blocks_of(data)
 
     cv = list(IV)
     for i, block in enumerate(blocks):
