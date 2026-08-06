@@ -102,6 +102,82 @@ class Output:
     flags: Array  # uint32 [B]
 
 
+def _chain(cv: Array, words: Array, counter: Array, first: int) -> Array:
+    """Compress `words` into `cv`, one block at a time: uint32 `[B, 8]`.
+
+    words : uint32 `[B, k, 16]` — blocks `first .. first + k - 1` of a chunk,
+            none of them the chunk's last, so each is a full 64 bytes
+    first : where `words[:, 0]` sits in its chunk, which is the only thing that
+            decides whether `CHUNK_START` rides on it
+
+    The blocks before a chunk's last are the only part two chunks of *different*
+    lengths have in common — all full 64 bytes, same flags, differing only in
+    the counter — which is what lets a short chunk share a call with full ones.
+    """
+    batch = cv.shape[0]
+    full_block = fnp.full((batch,), BLOCK_LEN, dtype=U32)
+    for i in range(words.shape[1]):  # static and at most 15
+        flags = CHUNK_START if first + i == 0 else 0
+        cv = compress(
+            cv,
+            words[:, i],
+            counter,
+            full_block,
+            fnp.full((batch,), flags, dtype=U32),
+        )[:, :8]
+    return cv
+
+
+def _chunk_from(
+    cv: Array, words: Array, counter: Array, chunk_len: int, first: int
+) -> Output:
+    """Run a chunk's blocks from `first` on, leaving its last compression unrun.
+
+    words     : uint32 `[B, nblocks, 16]` — the chunk's blocks entire, of which
+                only `first ..` run here
+    chunk_len : the chunk's byte count, which the trailing block's own length is
+                read off
+    first     : where this picks the chunk up — 0 for a chunk run whole, and past
+                a shared chain for one whose leading blocks already ran alongside
+                chunks of a different length
+
+    `CHUNK_START` rides on block 0 and `CHUNK_END` on the last, which is the
+    whole of a chunk's flag schedule; a single-block chunk carries both.
+    """
+    last = words.shape[1] - 1
+    return Output(
+        input_chaining_value=_chain(cv, words[:, first:last], counter, first),
+        block=words[:, last],
+        counter=counter,
+        # The trailing block's own byte count; zero only for an empty chunk,
+        # which is the one case in which a block is empty at all.
+        block_len=fnp.full((cv.shape[0],), chunk_len - BLOCK_LEN * last, dtype=U32),
+        flags=fnp.full(
+            (cv.shape[0],),
+            CHUNK_END | (CHUNK_START if last == 0 else 0),
+            dtype=U32,
+        ),
+    )
+
+
+def _stacked(*outputs: Output) -> Output:
+    """Several nodes' pending compressions as the rows of one call.
+
+    They are the same operation on different operands, so finishing them apart
+    would emit the compression body once per group for no reason — and the rows
+    of a batch is exactly what `compress` already takes.
+    """
+    return Output(
+        input_chaining_value=fnp.concatenate(
+            [o.input_chaining_value for o in outputs], axis=0
+        ),
+        block=fnp.concatenate([o.block for o in outputs], axis=0),
+        counter=fnp.concatenate([o.counter for o in outputs], axis=0),
+        block_len=fnp.concatenate([o.block_len for o in outputs], axis=0),
+        flags=fnp.concatenate([o.flags for o in outputs], axis=0),
+    )
+
+
 def chunk_output(words: Array, chunk_len: int, counter: Array) -> Output:
     """Chain one chunk's blocks up to, but not including, its last compression.
 
@@ -127,32 +203,7 @@ def chunk_output(words: Array, chunk_len: int, counter: Array) -> Output:
             "trailing block is padded, so its length cannot be read back"
         )
 
-    cv = _key_words(batch)
-    full_block = fnp.full((batch,), BLOCK_LEN, dtype=U32)
-    for i in range(nblocks - 1):  # static and at most 15
-        flags = CHUNK_START if i == 0 else 0
-        cv = compress(
-            cv,
-            words[:, i],
-            counter,
-            full_block,
-            fnp.full((batch,), flags, dtype=U32),
-        )[:, :8]
-
-    last = nblocks - 1
-    return Output(
-        input_chaining_value=cv,
-        block=words[:, last],
-        counter=counter,
-        # The trailing block's own byte count; zero only for an empty chunk,
-        # which is the one case in which a block is empty at all.
-        block_len=fnp.full((batch,), chunk_len - BLOCK_LEN * last, dtype=U32),
-        flags=fnp.full(
-            (batch,),
-            CHUNK_END | (CHUNK_START if last == 0 else 0),
-            dtype=U32,
-        ),
-    )
+    return _chunk_from(_key_words(batch), words, counter, chunk_len, 0)
 
 
 def chaining_value(output: Output) -> Array:
@@ -256,43 +307,60 @@ def _chunk_chaining_values(message: Array, nchunks: int) -> Array:
     `nchunks` is at least two — `tree_output` handles a one-chunk message itself,
     because that chunk's last compression has to stay pending.
 
-    Chunks of one length are one batched chain over `B * k` rows, which is the
-    parallelism BLAKE3 exists for. Only the last chunk can be short, and a
-    chunk's byte count fixes its *block count*, which is a shape — so a short
-    last chunk is a second call at a shorter shape. A message ending on a chunk
-    boundary has no short chunk and is one call.
+    Only the last chunk can be short. A chunk's byte count fixes its *block
+    count*, which is a shape, so a short chunk cannot be a row of a call that
+    runs sixteen blocks — but that binds only from its own last block onward.
+    Every block before that is a full 64 bytes in both, carries the same flags,
+    and differs only in the counter, which is already a per-row operand. So the
+    short chunk rides the batched chain as far as it goes, leaves it at its own
+    last block, and rejoins the full chunks for the finishing compression, which
+    is the same operation on both and so one call over all the rows.
 
-    That split is not the only one possible, and it is not free: the short
-    chunk's blocks repeat call sites the batched chain already has, so an
-    unaligned message emits about twice the program of an aligned one — 33
-    compressions at 2047 bytes against 17 at 2048. `block_len` and `flags` are
-    already per-row operands, so the short chunk's leading blocks could ride in
-    the batched chain and only its tail be handled apart. That is a larger change
-    than the shape story above suggests, and it is not made here.
+    The result is **sixteen compressions whatever the message length** — the
+    same as if every chunk were full. Handled apart instead, a short chunk of
+    `m` blocks costs `16 + m`, so a message one byte short of a chunk boundary
+    would emit nearly twice the program of one exactly on it.
     """
     batch = message.shape[0]
     tail_len = message.shape[1] - CHUNK_LEN * (nchunks - 1)
-    aligned = tail_len == CHUNK_LEN
-    full = nchunks if aligned else nchunks - 1
+    full = nchunks - 1
 
-    # The batched chunks arrive as `[B * k, 8]` with the chunk index varying
-    # fastest, which is what `_counters` tiles to match, so the reshape lands
-    # each message's chunks in order on its own row.
-    head = message[:, : CHUNK_LEN * full].reshape(batch * full, CHUNK_LEN)
+    head_words = _block_words(
+        message[:, : CHUNK_LEN * full].reshape(batch * full, CHUNK_LEN)
+    )
+    tail_words = _block_words(message[:, CHUNK_LEN * full :])
+    head_counter = _counters(batch, 0, full)
+    tail_counter = _counters(batch, full, 1)
+
+    # The blocks both kinds of chunk run, in one call over every row.
+    leaves = tail_words.shape[1] - 1
+    shared = _chain(
+        _key_words(batch * nchunks),
+        fnp.concatenate([head_words[:, :leaves], tail_words[:, :leaves]], axis=0),
+        fnp.concatenate([head_counter, tail_counter], axis=0),
+        0,
+    )
+
     values = chaining_value(
-        chunk_output(_block_words(head), CHUNK_LEN, _counters(batch, 0, full))
-    ).reshape(batch, full, 8)
-    if aligned:
-        return values
-
-    tail = chaining_value(
-        chunk_output(
-            _block_words(message[:, CHUNK_LEN * full :]),
-            tail_len,
-            _counters(batch, full, 1),
+        _stacked(
+            _chunk_from(
+                shared[: batch * full], head_words, head_counter, CHUNK_LEN, leaves
+            ),
+            _chunk_from(
+                shared[batch * full :], tail_words, tail_counter, tail_len, leaves
+            ),
         )
-    ).reshape(batch, 1, 8)
-    return fnp.concatenate([values, tail], axis=1)
+    )
+    # The full chunks arrive as `[B * k, 8]` with the chunk index varying
+    # fastest, which is what `_counters` tiles to match, so the reshape lands
+    # each message's chunks in order on its own row, the short one last.
+    return fnp.concatenate(
+        [
+            values[: batch * full].reshape(batch, full, 8),
+            values[batch * full :].reshape(batch, 1, 8),
+        ],
+        axis=1,
+    )
 
 
 def tree_output(msg: ArrayLike) -> Output:
