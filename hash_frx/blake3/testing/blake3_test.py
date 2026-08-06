@@ -1,10 +1,10 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Single-chunk BLAKE3 — values, batching, and lowering.
 
-The published vectors are the anchor rather than a second implementation: for an
-input of at most one 1024-byte chunk a whole BLAKE3 hash is this chunk chain with
-no tree above it, so every published length in that range pins `digest` end to
-end — the empty input and the exact chunk boundary included.
+The published vectors are the anchor rather than a second implementation, and
+this module is the one place they pin a whole `digest` end to end: every length
+in `SINGLE_CHUNK` is an input a chunk chain hashes with no tree above it, the
+empty input and the exact chunk boundary included. `vectors.py` sets out why.
 
 What no vector reaches is the chunk counter, which is 0 in all of them, so a
 chunk that dropped it would pass the entire suite. That one is held to
@@ -44,10 +44,10 @@ def _rows(*messages: bytes) -> frx.Array:
 def _words(data: bytes) -> frx.Array:
     """One chunk as the uint32 `[1, nblocks, 16]` words `chunk_output` takes.
 
-    Packed by the reference, so a test of the chunk chain does not depend on the
-    module's own packing being right.
+    Cut and packed by the reference, so a test of the chunk chain does not depend
+    on the module's own blocking or packing being right.
     """
-    blocks = [data[i : i + BLOCK_LEN] for i in range(0, len(data), BLOCK_LEN)] or [b""]
+    blocks = ref.blocks_of(data)
     return fnp.asarray(np.array([[ref.words_of(b) for b in blocks]], dtype=_U32))
 
 
@@ -80,8 +80,10 @@ class BatchingTest(absltest.TestCase):
 
     def test_jit_matches_eager(self) -> None:
         # The padding is a constant built from the static length rather than
-        # written into the message, so a traced message hashes identically.
-        rows = _rows(official_input(129), official_input(129))
+        # written into the message, so a traced message hashes identically. Two
+        # blocks is the smallest input that pads and still chains, and the body
+        # is compiled here, so the length is kept to what the property needs.
+        rows = _rows(official_input(65), official_input(65))
         np.testing.assert_array_equal(
             np.asarray(frx.jit(digest)(rows)), np.asarray(digest(rows))
         )
@@ -129,13 +131,13 @@ class ValidationTest(absltest.TestCase):
         # The trailing block is padded, so a chunk's byte count cannot be read
         # back off its words — a disagreement is silent unless it is checked.
         words = _words(official_input(200))  # four blocks
-        for name, args in (
-            ("too few bytes for the blocks", (words, BLOCK_LEN)),
-            ("too many", (words, CHUNK_LEN)),
-            ("not a chunk length at all", (words, CHUNK_LEN + 1)),
+        for name, chunk_len in (
+            ("too few bytes for the blocks", BLOCK_LEN),
+            ("too many", CHUNK_LEN),
+            ("not a chunk length at all", CHUNK_LEN + 1),
         ):
             with self.subTest(case=name), self.assertRaises(ValueError):
-                chunk_output(args[0], args[1], _counter(0))
+                chunk_output(words, chunk_len, _counter(0))
 
     def test_rejects_wrong_word_shapes(self) -> None:
         for name, shape in (
@@ -144,6 +146,12 @@ class ValidationTest(absltest.TestCase):
         ):
             with self.subTest(case=name), self.assertRaises(ValueError):
                 chunk_output(fnp.zeros(shape, dtype=fnp.uint32), 200, _counter(0))
+
+    def test_rejects_words_that_are_not_uint32(self) -> None:
+        # Wrong-dtype words promote rather than error, so the chain would run to
+        # a well-formed digest of the wrong message.
+        with self.assertRaises(TypeError):
+            chunk_output(fnp.zeros((1, 4, 16), dtype=fnp.int32), 200, _counter(0))
 
 
 if __name__ == "__main__":

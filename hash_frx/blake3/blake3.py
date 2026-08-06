@@ -43,6 +43,11 @@ BLOCK_LEN = 64
 CHUNK_LEN = 1024
 
 
+def _nblocks(length: int) -> int:
+    """Blocks in a chunk of `length` bytes — an empty chunk still has one."""
+    return max(1, -(-length // BLOCK_LEN))
+
+
 @dataclass(frozen=True)
 class Output:
     """A node's final compression, assembled but not run — the five operands.
@@ -72,10 +77,12 @@ def chunk_output(words: Array, chunk_len: int, counter: Array) -> Output:
     """
     if words.ndim != 3 or words.shape[2] != 16:
         raise ValueError(f"words must be [B, nblocks, 16], got {words.shape}")
+    if words.dtype != U32:
+        raise TypeError(f"words must be uint32, got {words.dtype}")
     if not 0 <= chunk_len <= CHUNK_LEN:
         raise ValueError(f"chunk_len must be 0..{CHUNK_LEN}, got {chunk_len}")
     batch, nblocks, _ = words.shape
-    expected = max(1, -(-chunk_len // BLOCK_LEN))
+    expected = _nblocks(chunk_len)
     if nblocks != expected:
         raise ValueError(
             f"{chunk_len} bytes is {expected} block(s), got {nblocks} — the "
@@ -137,9 +144,12 @@ def _block_words(msg: Array) -> Array:
     a host constant built from the static length rather than something written
     into the message, which keeps `msg` an operand and lets it be a tracer —
     `sha256._padding_tail` holds the same property for the same reason.
+
+    The pack itself is `keccak/sponge.py`'s, one axis wider: both standards read
+    bytes into words little-endian.
     """
     batch, length = msg.shape
-    nblocks = max(1, -(-length // BLOCK_LEN))
+    nblocks = _nblocks(length)
     pad = nblocks * BLOCK_LEN - length
     if pad:
         msg = fnp.concatenate([msg, fnp.zeros((batch, pad), dtype=fnp.uint8)], axis=-1)
@@ -155,8 +165,9 @@ def _block_words(msg: Array) -> Array:
 def _le_bytes(words: Array) -> Array:
     """uint32 `[B, n]` -> uint8 `[B, 4n]`, little-endian — BLAKE3's output order.
 
-    Little-endian throughout, unlike `sha256.serialize_digest`; the two hashes
-    disagree on byte order, so neither packer is shared.
+    Byte order is the axis the packers split on, not the hash family: this is the
+    same little-endian unpack `keccak/sponge.py` does, while
+    `sha256.serialize_digest` is big-endian and cannot be the same function.
     """
     batch = words.shape[0]
     out = fnp.stack(
