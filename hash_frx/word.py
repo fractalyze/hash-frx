@@ -32,6 +32,19 @@ U32 = fnp.uint32
 BYTES_PER_WORD = 4
 
 
+def split(value: int) -> tuple[int, int]:
+    """A 64-bit host integer as `(lo, hi)` 32-bit halves — exact, never narrowed.
+
+    Where a 64-bit quantity that a lane-based hash needs — Keccak's round
+    constants, BLAKE3's chunk counter — is taken apart. On the host, because
+    `value` is a Python int there and no 64-bit value ever has to reach a device
+    that may not have the width for it.
+    """
+    if not 0 <= value < (1 << 64):
+        raise ValueError(f"{value:#x} does not fit in 64 bits")
+    return value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF
+
+
 def rotr(x: Array, n: int) -> Array:
     """Rotate each `uint32` lane right by `n`.
 

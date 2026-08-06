@@ -45,7 +45,7 @@ tests share.
 | Classic Poseidon — the naive Hades schedule and the optimized-sparse refactor of it          | [`poseidon/`](../hash_frx/poseidon)                  |
 | SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256.py`](../hash_frx/sha256.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
-| BLAKE3 — the compression function every mode is built on, the chunk chain over it, and the parent-node tree that hashes any length | [`blake3/`](../hash_frx/blake3)                      |
+| BLAKE3 — a byte hash at any length, and the compression function its tree, keyed and extendable-output modes all share | [`blake3/`](../hash_frx/blake3)                      |
 | SHA3-256, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
 
 ## Fusion machinery

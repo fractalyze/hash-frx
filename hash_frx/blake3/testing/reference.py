@@ -106,9 +106,13 @@ def words_of(block: bytes) -> list[int]:
     return [int.from_bytes(padded[4 * i : 4 * i + 4], "little") for i in range(16)]
 
 
-def blocks_of(data: bytes) -> list[bytes]:
-    """A chunk's bytes cut into blocks — an empty chunk still has one block."""
-    return [data[i : i + BLOCK_LEN] for i in range(0, len(data), BLOCK_LEN)] or [b""]
+def blocks_of(data: bytes, size: int = BLOCK_LEN) -> list[bytes]:
+    """`data` cut into `size`-byte pieces — empty input still yields one piece.
+
+    The empty case is the whole subtlety: an empty message is one empty chunk
+    holding one empty block, not zero of either.
+    """
+    return [data[i : i + size] for i in range(0, len(data), size)] or [b""]
 
 
 def chunk_output(data: bytes, counter: int = 0, final_flags: int = 0) -> list[int]:
@@ -162,10 +166,9 @@ def hash_tree(data: bytes) -> bytes:
     """BLAKE3 of an input of any length: 32 bytes.
 
     `ROOT` rides on the topmost node and no other, which for a one-chunk input
-    is the chunk itself — that case reaches the published vectors with none of
-    the parent-node machinery, and is why the oracle could anchor before the
-    tree existed.
+    is the chunk itself — so that case reaches the published vectors with none
+    of the parent-node machinery.
     """
-    chunks = [data[i : i + CHUNK_LEN] for i in range(0, len(data), CHUNK_LEN)] or [b""]
+    chunks = blocks_of(data, CHUNK_LEN)
     words = _subtree_output(chunks, 0, len(chunks), ROOT)[:8]
     return b"".join(w.to_bytes(4, "little") for w in words)

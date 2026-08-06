@@ -15,7 +15,7 @@ halves interact, and it is written as three static cases so no shift is ever by
 `(x << n) | (x >> (32 - n))` hits exactly that at `n = 0`.
 
 Splitting a constant happens on the host, where Python integers are exact
-(`split`), never by materialising a 64-bit value and narrowing it.
+(`word.split`), never by materialising a 64-bit value and narrowing it.
 """
 
 from __future__ import annotations
@@ -27,13 +27,6 @@ from frx import Array, lax
 # A lane: (low 32 bits, high 32 bits). Both halves carry the same shape, so the
 # whole 5x5 lane grid rides as one `Lane` of `(5, 5)` arrays.
 Lane = tuple[Array, Array]
-
-
-def split(value: int) -> tuple[int, int]:
-    """A 64-bit host integer as `(lo, hi)` 32-bit halves — exact, never narrowed."""
-    if not 0 <= value < (1 << 64):
-        raise ValueError(f"{value:#x} does not fit in 64 bits")
-    return value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF
 
 
 def rotl(a: Lane, n: int) -> Lane:

@@ -7,6 +7,10 @@ independent expressions of the same operations — `fnp.roll` for the roll,
 `int.from_bytes` for the packers — rather than to a second copy of the shift
 chains, which would be the thing under test written twice.
 
+`split` is the host-side half of the same story: a 64-bit quantity a lane
+hash needs — Keccak's round constants, BLAKE3's chunk counter — taken apart
+where Python integers are still exact.
+
 `roll`'s `axis` is the parameter that earns its own cases. BLAKE3 rolls a row of
 a `[B, 4]` grid and Keccak rolls both axes of a `(5, 5)` one, so a default that
 silently applied to the wrong axis would still produce well-shaped output — and
@@ -21,7 +25,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.testing.fusion_ready import assert_fusion_ready
-from hash_frx.word import BYTES_PER_WORD, pack_le, roll, rotr, unpack_le
+from hash_frx.word import BYTES_PER_WORD, pack_le, roll, rotr, split, unpack_le
 
 
 class RotrTest(parameterized.TestCase):
@@ -37,6 +41,29 @@ class RotrTest(parameterized.TestCase):
         out = rotr(fnp.asarray(np.array([0x80000001], dtype=np.uint32)), 1)
         self.assertEqual(out.dtype, fnp.uint32)
         self.assertEqual(int(np.asarray(out)[0]), 0xC0000000)
+
+
+class SplitTest(parameterized.TestCase):
+    @parameterized.parameters(
+        0, 1, 0xFFFFFFFF, 1 << 32, (1 << 64) - 1, 0x0123456789ABCDEF
+    )
+    def test_halves_reassemble(self, value: int) -> None:
+        lo, hi = split(value)
+        self.assertEqual(lo | (hi << 32), value)
+        self.assertLess(lo, 1 << 32)
+        self.assertLess(hi, 1 << 32)
+
+    def test_the_boundary_is_not_off_by_one(self) -> None:
+        # 2^32 - 1 is entirely low; 2^32 is entirely high. A `>=` for a `>` in
+        # either shift lands one of them in the wrong half.
+        self.assertEqual(split((1 << 32) - 1), (0xFFFFFFFF, 0))
+        self.assertEqual(split(1 << 32), (0, 1))
+
+    @parameterized.parameters(-1, 1 << 64)
+    def test_rejects_what_does_not_fit(self, value: int) -> None:
+        # Silently masking would put a wrong counter on every chunk of a tree.
+        with self.assertRaises(ValueError):
+            split(value)
 
 
 class RollTest(parameterized.TestCase):

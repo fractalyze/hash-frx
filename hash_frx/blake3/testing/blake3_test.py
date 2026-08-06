@@ -37,6 +37,7 @@ from hash_frx.blake3.compress import ROOT
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.vectors import ALL_LENGTHS, official_input
 from hash_frx.testing.fusion_ready import assert_fusion_ready
+from hash_frx.word import split
 
 _U32 = np.uint32
 
@@ -58,9 +59,7 @@ def _words(data: bytes) -> frx.Array:
 
 def _counter(value: int) -> frx.Array:
     """A chunk index as the (low, high) uint32 pair the seam takes."""
-    return fnp.asarray(
-        np.array([[value & 0xFFFFFFFF, (value >> 32) & 0xFFFFFFFF]], dtype=_U32)
-    )
+    return fnp.asarray(np.array([split(value)], dtype=_U32))
 
 
 class DigestAgainstPublishedVectorsTest(parameterized.TestCase):
@@ -70,13 +69,18 @@ class DigestAgainstPublishedVectorsTest(parameterized.TestCase):
         self.assertEqual(bytes(got[0]).hex(), expected)
 
 
-class BatchingTest(absltest.TestCase):
-    def test_batched_equals_per_message(self) -> None:
+class BatchingTest(parameterized.TestCase):
+    @parameterized.named_parameters(("one chunk", 200), ("a tree", CHUNK_LEN * 3 + 7))
+    def test_batched_equals_per_message(self, size: int) -> None:
         # One call over B messages is B independent hashes: the rows must not
         # interact, which anything reducing across the batch axis would break.
+        # Under a tree there is a second way to break it — the reshapes between
+        # the [B, nodes, 8] view and the flat batch the compression takes would
+        # land one message's chunks on another's row and still return
+        # well-formed digests.
         rng = np.random.default_rng(3)
         messages = [
-            bytes(rng.integers(0, 256, size=200, dtype=np.uint8)) for _ in range(4)
+            bytes(rng.integers(0, 256, size=size, dtype=np.uint8)) for _ in range(3)
         ]
         got = np.asarray(digest(_rows(*messages)))
         for i, message in enumerate(messages):
@@ -106,16 +110,30 @@ class ChunkCounterTest(absltest.TestCase):
         self.assertNotEqual(list(at_zero[0]), list(at_seven[0]))
         self.assertEqual([int(w) for w in at_seven[0]], ref.chunk_output(data, 7, ROOT))
 
+    def test_the_counter_increments_across_the_tree(self) -> None:
+        # Every chunk carries its own index, so two messages differing only by a
+        # swap of two whole chunks must not hash alike — which they would if the
+        # counter were constant across the batched chunk call.
+        rng = np.random.default_rng(32)
+        a = bytes(rng.integers(0, 256, size=CHUNK_LEN, dtype=np.uint8))
+        b = bytes(rng.integers(0, 256, size=CHUNK_LEN, dtype=np.uint8))
+        got = np.asarray(digest(_rows(a + b, b + a)))
+        self.assertNotEqual(bytes(got[0]), bytes(got[1]))
+        self.assertEqual(bytes(got[0]), ref.hash_tree(a + b))
+
 
 class TreeShapeTest(parameterized.TestCase):
-    @parameterized.parameters(2, 3, 4, 5, 6, 7, 8, 9, 12, 15, 16, 17)
+    @parameterized.parameters(12, 15, 17)
     def test_the_tree_matches_the_specs_recursion(self, nchunks: int) -> None:
-        # The published lengths cover chunk counts 2-9, 16, 31 and 100, which
-        # leaves gaps this closes — and it holds the frx tree to an oracle that
-        # builds the shape the *other* way, by the spec's largest-power-of-two
-        # split rather than by pairing levels. Agreement between two spellings
-        # of the shape is the thing worth checking; agreement between two
-        # copies of one spelling is not.
+        # Only the counts the published table does not reach. It covers 2-9, 16,
+        # 31 and 100, and `official_input(CHUNK_LEN * (n - 1) + 1)` for n in 2-9
+        # *is* a published length byte for byte, so those would re-run
+        # `DigestAgainstPublishedVectorsTest` against a weaker oracle.
+        #
+        # What these add is the shape gap, checked against an oracle that builds
+        # the tree the *other* way — by the spec's largest-power-of-two split
+        # rather than by pairing levels. Agreement between two spellings of the
+        # shape is worth something; between two copies of one spelling, nothing.
         data = official_input(CHUNK_LEN * (nchunks - 1) + 1)
         got = np.asarray(digest(_rows(data)))
         self.assertEqual(bytes(got[0]), ref.hash_tree(data))
@@ -125,7 +143,7 @@ class TreeShapeTest(parameterized.TestCase):
         # the midpoint. Three chunks is the smallest input where the two differ:
         # the standard groups (0,1) then 2, a halving would group 0 then (1,2).
         data = official_input(CHUNK_LEN * 2 + 1)
-        chunks = [data[i : i + CHUNK_LEN] for i in range(0, len(data), CHUNK_LEN)]
+        chunks = ref.blocks_of(data, CHUNK_LEN)
         cvs = [ref.chunk_output(c, i)[:8] for i, c in enumerate(chunks)]
 
         def parent(left: list[int], right: list[int], flags: int) -> list[int]:
@@ -163,6 +181,26 @@ class ParentNodeTest(absltest.TestCase):
         )[:8]
         self.assertEqual([int(w) for w in got[0]], want)
 
+    def test_rejects_children_it_cannot_pair(self) -> None:
+        # The one entry a caller hands raw arrays to. Without the guard a wrong
+        # child shape is reported against `block` — an operand the caller never
+        # passed — and a wrong dtype promotes into well-formed wrong words.
+        good = fnp.zeros((2, 8), dtype=fnp.uint32)
+        for name, left, right, err in (
+            ("width", fnp.zeros((2, 4), dtype=fnp.uint32), good, ValueError),
+            ("rank", fnp.zeros(8, dtype=fnp.uint32), good, ValueError),
+            (
+                "batch disagreement",
+                fnp.zeros((3, 8), dtype=fnp.uint32),
+                good,
+                ValueError,
+            ),
+            ("dtype", fnp.zeros((2, 8), dtype=fnp.int32), good, TypeError),
+            ("dtype on the right", good, fnp.zeros((2, 8), dtype=fnp.int32), TypeError),
+        ):
+            with self.subTest(case=name), self.assertRaises(err):
+                parent_output(left, right)
+
     def test_the_children_are_ordered(self) -> None:
         # Swapping them still produces a well-formed chaining value, so nothing
         # about the shape catches an inverted pair.
@@ -179,32 +217,10 @@ class ParentNodeTest(absltest.TestCase):
         # ways is the same compression bar one flag bit.
         data = official_input(200)
         output = chunk_output(_words(data), len(data), _counter(0))
-        self.assertNotEqual(
-            list(np.asarray(chaining_value(output))[0]),
-            list(np.asarray(root_words(output))[0, :8]),
-        )
-        self.assertEqual(
-            [int(w) for w in np.asarray(chaining_value(output))[0]],
-            ref.chunk_output(data, 0, 0)[:8],
-        )
+        cv = [int(w) for w in np.asarray(chaining_value(output))[0]]
+        self.assertNotEqual(cv, [int(w) for w in np.asarray(root_words(output))[0, :8]])
+        self.assertEqual(cv, ref.chunk_output(data, 0, 0)[:8])
 
-
-class TreeBatchingTest(absltest.TestCase):
-    def test_rows_do_not_interact_across_a_tree(self) -> None:
-        # The tree reshapes between a [B, nodes, 8] view and the flat batch the
-        # compression takes, twice per level. A transposed reshape would mix one
-        # message's chunks into another's and still return well-formed digests.
-        rng = np.random.default_rng(31)
-        messages = [
-            bytes(rng.integers(0, 256, size=CHUNK_LEN * 3 + 7, dtype=np.uint8))
-            for _ in range(3)
-        ]
-        got = np.asarray(digest(_rows(*messages)))
-        for i, message in enumerate(messages):
-            with self.subTest(row=i):
-                self.assertEqual(bytes(got[i]), ref.hash_tree(message))
-
-    def test_the_chunk_counter_increments_across_the_tree(self) -> None:
         # Every chunk carries its own index, so two messages differing only by a
         # swap of two whole chunks must not hash alike — which they would if the
         # counter were constant.
@@ -223,20 +239,11 @@ class PendingOutputTest(absltest.TestCase):
         # a chunk when the message is one chunk, a parent when it is more.
         one = tree_output(_rows(official_input(CHUNK_LEN)))
         many = tree_output(_rows(official_input(CHUNK_LEN + 1)))
+        # Exact equality, so it also says neither carries ROOT — that belongs
+        # to the finishing call alone, which is what lets the same node be
+        # squeezed for extendable output instead.
         self.assertEqual(int(np.asarray(one.flags)[0]), ref.CHUNK_END)
         self.assertEqual(int(np.asarray(many.flags)[0]), ref.PARENT)
-
-        # Neither carries ROOT: that belongs to the finishing call alone, which
-        # is what lets the same node also be squeezed for extendable output.
-        for name, output in (("one chunk", one), ("many", many)):
-            with self.subTest(case=name):
-                self.assertEqual(int(np.asarray(output.flags)[0]) & ref.ROOT, 0)
-
-    def test_finishing_the_root_reproduces_the_digest(self) -> None:
-        data = official_input(CHUNK_LEN * 3 + 5)
-        words = root_words(tree_output(_rows(data)))
-        got = b"".join(int(w).to_bytes(4, "little") for w in np.asarray(words)[0, :8])
-        self.assertEqual(got, ref.hash_tree(data))
 
 
 class LoweringTest(absltest.TestCase):

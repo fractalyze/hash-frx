@@ -14,9 +14,11 @@ that chunk's blocks with no tree above it, and at most 64 bytes is a single
 compression call. So `SINGLE_BLOCK` pins the compression function directly and
 `MULTI_BLOCK` adds the chaining, both without any tree machinery in between.
 
-The split into four sets is by what each layer of the construction first
-reaches, so a set names the thing it would catch. `MULTI_CHUNK` is where the
-parent-node tree enters, and `ALL_LENGTHS` is the whole published table.
+They are grouped by the layer each range first reaches — a single
+compression, a chunk chain, a parent-node tree — so a group names what its
+lengths would catch. A test that wants one layer selects its group;
+`ALL_LENGTHS` is the whole published table, which is what a whole-hash test
+wants.
 
 Provenance: `test_vectors/test_vectors.json` in BLAKE3-team/BLAKE3.
 """
@@ -50,10 +52,6 @@ MULTI_BLOCK = (
 )
 
 
-# Every published length at or below one chunk, which is the whole range a hash
-# reaches with no tree above it.
-SINGLE_CHUNK = SINGLE_BLOCK + MULTI_BLOCK
-
 # More than one chunk, so a parent-node tree stands above them. The chunk counts
 # are what these are chosen for rather than the byte counts: 3, 5, 6, 7, 9, 31
 # and 100 are not powers of two, and a tree built by halving instead of by the
@@ -81,7 +79,7 @@ MULTI_CHUNK = (
 )
 
 # Every length the standard publishes.
-ALL_LENGTHS = SINGLE_CHUNK + MULTI_CHUNK
+ALL_LENGTHS = SINGLE_BLOCK + MULTI_BLOCK + MULTI_CHUNK
 
 
 def official_input(length: int) -> bytes:

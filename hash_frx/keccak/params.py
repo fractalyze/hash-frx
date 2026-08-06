@@ -14,7 +14,7 @@ contiguous prefix `state[: 2r]` — a halves-first layout would scatter it.
 
 from __future__ import annotations
 
-from hash_frx.keccak.lane import split
+from hash_frx.word import split
 
 LANES = 25
 ROUNDS = 24
