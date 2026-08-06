@@ -57,6 +57,19 @@ def _words(data: bytes) -> frx.Array:
     return fnp.asarray(np.array([[ref.words_of(b) for b in blocks]], dtype=_U32))
 
 
+def _compressions(length: int) -> int:
+    """How many `compress` calls a `length`-byte digest emits.
+
+    Read off the lowered module rather than by patching, so it counts what the
+    program actually carries: every call site is a copy of the compression body,
+    and a body is exactly 60 xors.
+    """
+    text = frx.jit(digest).lower(_rows(official_input(length))).as_text()
+    xors = text.count("stablehlo.xor")
+    assert xors % 60 == 0, f"{xors} xors is not a whole number of compressions"
+    return xors // 60
+
+
 def _counter(value: int) -> frx.Array:
     """A chunk index as the (low, high) uint32 pair the seam takes."""
     return fnp.asarray(np.array([split(value)], dtype=_U32))
@@ -162,6 +175,20 @@ class TreeShapeTest(parameterized.TestCase):
         )
 
 
+class TailChunkTest(parameterized.TestCase):
+    # Where the last chunk leaves the shared chain, which is its block count.
+    # The published tails are only ever 1 byte or a whole chunk, so every value
+    # between them is unreached by the vector suite — and it is exactly what
+    # decides how far the short chunk rides along. One length per distinct block
+    # count, plus both sides of each boundary `_units` rounds at.
+    @parameterized.parameters(1, 64, 65, 129, 512, 960, 961, 1023)
+    def test_a_short_last_chunk_hashes_the_same_as_the_oracle(self, tail: int) -> None:
+        rng = np.random.default_rng(tail)
+        data = bytes(rng.integers(0, 256, size=CHUNK_LEN * 2 + tail, dtype=np.uint8))
+        got = np.asarray(digest(_rows(data)))
+        self.assertEqual(bytes(got[0]), ref.hash_tree(data))
+
+
 class ParentNodeTest(absltest.TestCase):
     def test_a_parent_is_the_spec_parent(self) -> None:
         # No published vector isolates one parent, so its four fixed operands —
@@ -247,6 +274,22 @@ class PendingOutputTest(absltest.TestCase):
 
 
 class LoweringTest(absltest.TestCase):
+    def test_a_short_last_chunk_costs_no_compressions(self) -> None:
+        # A short last chunk shares the batched chain to its own last block and
+        # rejoins the full chunks to finish, so it emits nothing extra at all.
+        # Handled apart it is `16 + m` call sites for a chunk of `m` blocks —
+        # at a full-length tail nearly twice the program, for a message one byte
+        # *shorter*. No digest catches that, and unaligned is the ordinary case.
+        #
+        # Counted rather than bounded: a ratio wide enough not to be brittle is
+        # also wide enough to admit several extra compressions. One `compress`
+        # emits exactly 60 xors — 7 rounds of 8 in `G`, plus 4 feeding forward.
+        aligned = _compressions(CHUNK_LEN * 2)
+        self.assertEqual(aligned, 17)
+        for tail in (1, 64, 512, 1023):
+            with self.subTest(tail=tail):
+                self.assertEqual(_compressions(CHUNK_LEN + tail), aligned)
+
     def test_the_tree_body_is_fusion_ready(self) -> None:
         # The level reduction slices with a stride and reshapes between the
         # node view and the flat batch. Both are static, so both must stay
