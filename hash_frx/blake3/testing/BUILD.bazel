@@ -50,3 +50,18 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "blake3_test",
+    size = "medium",
+    srcs = ["blake3_test.py"],
+    deps = [
+        ":reference",
+        ":vectors",
+        "//hash_frx/blake3",
+        "//hash_frx/testing:fusion_ready",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
