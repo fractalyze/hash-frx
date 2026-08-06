@@ -45,11 +45,9 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.keccak.permutation import KeccakF1600
+from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
 
 U32 = fnp.uint32
-
-# Elements of the uint32-halves state per byte of rate: 4 bytes per element.
-_BYTES_PER_ELEMENT = 4
 
 # A readability hoist, not a cache: the trace-once property belongs entirely to
 # `permutation._permute_body`'s jit zone, which is keyed on the state aval and
@@ -78,41 +76,6 @@ def _padding_tail(length: int, rate: int, suffix: int) -> np.ndarray:
     tail[0] = suffix
     tail[-1] |= 0x80
     return tail
-
-
-def _pack_bytes(block: Array) -> Array:
-    """uint8 [B, r] -> uint32 [B, r // 4] little-endian state elements.
-
-    FIPS 202 section 3.1.2 maps a byte string onto lanes little-endian, and the
-    halves layout keeps that a straight read: element `j` is bytes `4j .. 4j+3`,
-    which is lane `j // 2`'s low half for even `j` and its high half for odd `j`.
-
-    Named for bytes because `permutation.py` has its own `_pack`/`_unpack` pair
-    in this package meaning something else — the flat state to the lane grid.
-    """
-    b = block.shape[0]
-    w = block.reshape(b, -1, _BYTES_PER_ELEMENT).astype(U32)
-    return (
-        w[..., 0]
-        | (w[..., 1] << U32(8))
-        | (w[..., 2] << U32(16))
-        | (w[..., 3] << U32(24))
-    )
-
-
-def _unpack_bytes(elements: Array) -> Array:
-    """uint32 [B, n] -> uint8 [B, 4n] little-endian bytes — `_pack_bytes` inverted."""
-    b = elements.shape[0]
-    out = fnp.stack(
-        [
-            elements & U32(0xFF),
-            (elements >> U32(8)) & U32(0xFF),
-            (elements >> U32(16)) & U32(0xFF),
-            (elements >> U32(24)) & U32(0xFF),
-        ],
-        axis=-1,
-    ).astype(fnp.uint8)
-    return out.reshape(b, -1)
 
 
 def _xor_into_rate(state: Array, block: Array) -> Array:
@@ -145,15 +108,15 @@ class KeccakSponge:
     output_size: int
 
     def __post_init__(self) -> None:
-        if self.rate <= 0 or self.rate % _BYTES_PER_ELEMENT:
+        if self.rate <= 0 or self.rate % BYTES_PER_WORD:
             raise ValueError(
                 f"rate ({self.rate}) must be a positive multiple of "
-                f"{_BYTES_PER_ELEMENT} bytes"
+                f"{BYTES_PER_WORD} bytes"
             )
-        if self.rate >= KeccakF1600.width * _BYTES_PER_ELEMENT:
+        if self.rate >= KeccakF1600.width * BYTES_PER_WORD:
             raise ValueError(
                 f"rate ({self.rate} bytes) leaves no capacity in a "
-                f"{KeccakF1600.width * _BYTES_PER_ELEMENT}-byte state"
+                f"{KeccakF1600.width * BYTES_PER_WORD}-byte state"
             )
         if not 0 <= self.suffix <= 0xFF:
             raise ValueError(f"suffix ({self.suffix:#x}) must be one byte")
@@ -178,10 +141,10 @@ class KeccakSponge:
             axis=-1,
         )
 
-        n = self.rate // _BYTES_PER_ELEMENT
+        n = self.rate // BYTES_PER_WORD
         state = fnp.zeros((batch, KeccakF1600.width), dtype=U32)
         for start in range(0, padded.shape[-1], self.rate):
-            block = _pack_bytes(padded[:, start : start + self.rate])
+            block = pack_le(padded[:, start : start + self.rate])
             state = _PERMUTE_BATCH(_xor_into_rate(state, block))
 
         # FIPS 202 section 4: emit the rate prefix, permute, repeat. The final
@@ -194,7 +157,7 @@ class KeccakSponge:
             blocks.append(state[:, :n])
             if i + 1 < squeezes:
                 state = _PERMUTE_BATCH(state)
-        return _unpack_bytes(fnp.concatenate(blocks, axis=-1))[:, : self.output_size]
+        return unpack_le(fnp.concatenate(blocks, axis=-1))[:, : self.output_size]
 
 
 # Deliberately NOT wrapped in a module-level jit zone the way

@@ -47,29 +47,13 @@ from hash_frx.keccak.params import (
     ROUNDS,
     WIDTH,
 )
+from hash_frx.word import roll
 
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
 
 # rho's offsets as a (5, 5) [y][x] constant, matching the grid.
 _ROT = np.asarray(ROTATION_OFFSETS, dtype=np.uint32).reshape(5, 5)
-
-
-def _roll(x: Array, shift: int, axis: int = 0) -> Array:
-    """`fnp.roll` written as the two static slices it is.
-
-    The wrapper carries an internal `jit`, so it lowers to a call inside the
-    body and the single-kernel rewriter rejects it
-    (`docs/reference/conventions.md`). The shift is a compile-time constant, so
-    the cut point is known and this is a slice pair plus a concatenate.
-    """
-    n = x.shape[axis]
-    cut = (-shift) % n
-    if cut == 0:
-        return x
-    if axis == 0:
-        return fnp.concatenate([x[cut:], x[:cut]], axis=0)
-    return fnp.concatenate([x[:, cut:], x[:, :cut]], axis=1)
 
 
 def _unpack(state: Array) -> Lane:
@@ -100,8 +84,8 @@ def _theta(a: Lane) -> Lane:
         c_lo, c_hi = c_lo ^ lo[y], c_hi ^ hi[y]
 
     rot_lo, rot_hi = lanes.rotl((c_lo, c_hi), 1)
-    d_lo = _roll(c_lo, 1) ^ _roll(rot_lo, -1)
-    d_hi = _roll(c_hi, 1) ^ _roll(rot_hi, -1)
+    d_lo = roll(c_lo, 1) ^ roll(rot_lo, -1)
+    d_hi = roll(c_hi, 1) ^ roll(rot_hi, -1)
     return lo ^ d_lo, hi ^ d_hi
 
 
@@ -120,7 +104,7 @@ def _pi(g: Array) -> Array:
     fusion computations against 285 for this form, and 6.6x the runtime. A
     reorder being gather-free is not the same as it being cheap.
     """
-    sheared = fnp.concatenate([_roll(g[x : x + 1], -x, axis=1) for x in range(5)])
+    sheared = fnp.concatenate([roll(g[x : x + 1], -x, axis=1) for x in range(5)])
     columns = sheared.T
     return fnp.concatenate([columns[(3 * y) % 5 : (3 * y) % 5 + 1] for y in range(5)])
 
@@ -142,8 +126,8 @@ def _chi(a: Lane) -> Lane:
     element-wise.
     """
     lo, hi = a
-    lo1, hi1 = _roll(lo, -1, axis=1), _roll(hi, -1, axis=1)
-    lo2, hi2 = _roll(lo, -2, axis=1), _roll(hi, -2, axis=1)
+    lo1, hi1 = roll(lo, -1, axis=1), roll(hi, -1, axis=1)
+    lo2, hi2 = roll(lo, -2, axis=1), roll(hi, -2, axis=1)
     return lo ^ ((~lo1) & lo2), hi ^ ((~hi1) & hi2)
 
 
