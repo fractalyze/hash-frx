@@ -6,15 +6,13 @@ neither the batched lane layout nor the single-kernel authoring rules that shape
 `compress.py`. An oracle that shared those would fail the same way the thing it
 checks does.
 
-The chunk chain is here so that the oracle can be anchored — `reference_test`
-matches `hash_single_chunk` against the published vectors, and `vectors.py` sets
-out why those reach a compression function at all. `chunk_output`, which that
-hash is a thin wrapper over, then serves as an oracle for a chunk whose counter
-or flags no published vector reaches.
+`hash_tree` is a whole BLAKE3 hash, so `reference_test` anchors it against the
+published vectors at every length they cover; `vectors.py` sets out why those
+reach a compression function at all. `chunk_output` underneath it then serves as
+an oracle for a chunk whose counter or flags no published vector reaches.
 
-Tree mode is deliberately absent: it belongs to the multi-chunk work, and this
-file only needs to reach far enough to anchor. So the flags below are hash
-mode's; the rest of Table 3 belongs with the modes that use it.
+Only hash mode is here — the flags below are its three, and the rest of Table 3
+belongs with the keyed and derive-key modes that use it.
 """
 
 from __future__ import annotations
@@ -35,6 +33,7 @@ IV = (
 # Hash mode's domain-separation flags (spec section 2.2, Table 3).
 CHUNK_START = 1 << 0
 CHUNK_END = 1 << 1
+PARENT = 1 << 2
 ROOT = 1 << 3
 
 # The message word schedule applied between rounds (spec section 2.2, Table 2).
@@ -134,12 +133,39 @@ def chunk_output(data: bytes, counter: int = 0, final_flags: int = 0) -> list[in
     return compress(cv, words_of(last), counter, len(last), flags)
 
 
-def hash_single_chunk(data: bytes) -> bytes:
-    """BLAKE3 of an input that fits in one chunk (<= 1024 bytes): 32 bytes.
+def _subtree_output(
+    chunks: list[bytes], lo: int, hi: int, final_flags: int
+) -> list[int]:
+    """The output words of the node covering chunks `[lo, hi)`.
 
-    One chunk means no tree, so the root output is the chunk's own chaining
-    value — which is why this reaches the published vectors without any of the
-    parent-node machinery.
+    Spec section 2.1 stated as the recursion it is written as: the left subtree
+    takes the largest power of two strictly below the chunk count and the right
+    takes the rest, so the left is always a perfect tree and the split is not a
+    halving. Written this way on purpose — the frx side reduces level by level
+    instead, and an oracle that reduced the same way could only confirm that
+    both had read the spec the same way.
     """
-    words = chunk_output(data, 0, ROOT)[:8]
+    if hi - lo == 1:
+        return chunk_output(chunks[lo], lo, final_flags)
+
+    left = 1
+    while left * 2 < hi - lo:
+        left *= 2
+    cv = _subtree_output(chunks, lo, lo + left, 0)[:8]
+    right = _subtree_output(chunks, lo + left, hi, 0)[:8]
+    # A parent reads the key words rather than a chaining value, its counter is
+    # always zero, and its block is the two child chaining values (section 2.5).
+    return compress(list(IV), cv + right, 0, BLOCK_LEN, final_flags | PARENT)
+
+
+def hash_tree(data: bytes) -> bytes:
+    """BLAKE3 of an input of any length: 32 bytes.
+
+    `ROOT` rides on the topmost node and no other, which for a one-chunk input
+    is the chunk itself — that case reaches the published vectors with none of
+    the parent-node machinery, and is why the oracle could anchor before the
+    tree existed.
+    """
+    chunks = [data[i : i + CHUNK_LEN] for i in range(0, len(data), CHUNK_LEN)] or [b""]
+    words = _subtree_output(chunks, 0, len(chunks), ROOT)[:8]
     return b"".join(w.to_bytes(4, "little") for w in words)

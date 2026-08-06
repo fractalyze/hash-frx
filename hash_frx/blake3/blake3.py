@@ -1,30 +1,41 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""BLAKE3's chunk — the compression function chained over the chunk's blocks.
+"""BLAKE3's chunk and tree — a whole hash, at any length.
 
-Spec section 2.4. A chunk is up to 1024 bytes split into 64-byte blocks, each
-compressed into the next one's chaining value, with `CHUNK_START` on the first
-block, `CHUNK_END` on the last, the chunk's index as the counter on every one,
-and the trailing block's true byte count riding as `block_len` — so the zeros
-that fill that block out to 64 bytes are never mistaken for message.
+Spec sections 2.1, 2.4 and 2.5. A chunk is up to 1024 bytes split into 64-byte
+blocks, each compressed into the next one's chaining value, with `CHUNK_START`
+on the first block, `CHUNK_END` on the last, the chunk's index as the counter on
+every one, and the trailing block's true byte count riding as `block_len` — so
+the zeros that fill that block out to 64 bytes are never mistaken for message.
+Above the chunks, a binary tree of parent compressions folds their chaining
+values down to one, and the topmost node carries `ROOT`.
 
-An input of at most one chunk is a whole hash on its own: that chunk is the root
-of its tree, so its last compression sets `ROOT` and the first eight output
-words, little-endian, are the digest. That is the whole of `digest` here. A
-longer input needs the parent-node tree, which this module does not have, so
-`digest` refuses it rather than hashing a prefix of it.
+**A chunk is a chain; everything else is a batch.** Blocks inside a chunk each
+feed the next, so there is nothing to parallelize there — but chunks do not
+depend on each other at all (each opens from the key words rather than from its
+neighbour's output), and nor do the nodes within a tree level. So the chunks are
+one batched call and each tree level is one more, which is the property BLAKE3
+was chosen for.
 
-**The chunk's last compression stays pending.** One chunk becomes a chaining
-value under a tree, a digest at the root, and — by repeating that same
-compression with an incrementing counter (spec section 2.6) — an output stream.
-The chain below is identical in all three and only the last call's flags and
-counter differ, so `chunk_output` returns the compression it has *not* run and
-the caller finishes it. Finishing it a second way then costs one compression
-rather than the whole chunk again.
+**The tree is built by level, and that is the spec's tree exactly.** The spec
+splits a node by giving its left subtree the largest power of two strictly below
+the chunk count — not a halving, and it makes every left subtree perfect.
+Pairing adjacent nodes from the bottom and carrying an odd trailing node up
+unpaired reproduces that shape for every chunk count, so a message of `n` chunks
+is `ceil(log2(n))` batched compressions rather than a walk over `2n - 1` nodes.
 
-Message length is static, so the block count, the flag schedule, and every block
-length are compile-time constants: the loop over blocks is an unrolled Python
-`for` over them and nothing here reads a message byte. That is what lets
-`digest` take a tracer, the property `sha256.digest` holds for the same reason.
+**A node's final compression stays pending.** One node becomes a chaining value
+under a tree, a digest at the root, and — by repeating that same compression
+with an incrementing counter (spec section 2.6) — an output stream. Everything
+below it is identical in all three and only that last call's flags differ, so
+`chunk_output` and `parent_output` return the compression they have *not* run
+and the caller finishes it with `chaining_value` or `root_words`. Finishing a
+second way then costs one compression rather than the whole subtree again.
+
+Message length is static, so the chunk count, the tree shape, the block count,
+the flag schedule and every block length are compile-time constants: the loops
+here are unrolled Python `for`/`while` over them and nothing reads a message
+byte. That is what lets `digest` take a tracer, the property `sha256.digest`
+holds for the same reason.
 """
 
 from __future__ import annotations
@@ -32,10 +43,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import frx.numpy as fnp
+import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, IV, ROOT, compress
+from hash_frx.blake3.compress import (
+    CHUNK_END,
+    CHUNK_START,
+    IV,
+    PARENT,
+    ROOT,
+    compress,
+)
 from hash_frx.word import pack_le, unpack_le
 
 U32 = fnp.uint32
@@ -121,6 +140,42 @@ def chunk_output(words: Array, chunk_len: int, counter: Array) -> Output:
     )
 
 
+def chaining_value(output: Output) -> Array:
+    """Finish a node that has a tree above it: uint32 `[B, 8]`.
+
+    The same compression `root_words` runs, without `ROOT` — which is the only
+    difference between a node's chaining value and the root's output, and the
+    reason a node is assembled once and finished by whoever knows its role.
+    """
+    return compress(
+        output.chaining_value,
+        output.block,
+        output.counter,
+        output.block_len,
+        output.flags,
+    )[:, :8]
+
+
+def parent_output(left: Array, right: Array) -> Output:
+    """A parent node's compression, assembled but not run.
+
+    left, right : uint32 `[B, 8]` — the two child chaining values
+
+    Spec section 2.5. A parent reads the key words rather than a child's
+    chaining value, its counter is always zero however deep the tree is, and its
+    block is the two children end to end — so its whole message is 64 bytes and
+    `block_len` is a full block.
+    """
+    batch = left.shape[0]
+    return Output(
+        chaining_value=fnp.broadcast_to(fnp.asarray(IV, dtype=U32), (batch, 8)),
+        block=fnp.concatenate([left, right], axis=1),
+        counter=fnp.zeros((batch, 2), dtype=U32),
+        block_len=fnp.full((batch,), BLOCK_LEN, dtype=U32),
+        flags=fnp.full((batch,), PARENT, dtype=U32),
+    )
+
+
 def root_words(output: Output) -> Array:
     """Finish a root node's compression: uint32 `[B, 16]`.
 
@@ -154,28 +209,119 @@ def _block_words(msg: Array) -> Array:
     return pack_le(msg.reshape(batch, nblocks, BLOCK_LEN))
 
 
-def digest(msg: ArrayLike) -> Array:
-    """BLAKE3 of a batch of equal-length messages: uint8 `[B, L]` -> `[B, 32]`.
+def _counters(batch: int, first: int, count: int) -> Array:
+    """Chunk indices `first .. first + count - 1`, tiled over `batch` messages.
 
-    Byte-identical to the standard per message, for an `L` of at most one
-    1024-byte chunk. `msg` may be a tracer, so a consumer can hash inside its own
-    `@jit` or `vmap`.
+    uint32 `[batch * count, 2]` as (low, high). The split is done on the host,
+    where the index is a Python int, so no 64-bit value is ever materialised —
+    the reason `compress` takes the counter in halves at all.
+    """
+    index = np.arange(first, first + count, dtype=np.uint64)
+    halves = np.stack(
+        [(index & 0xFFFFFFFF).astype(np.uint32), (index >> 32).astype(np.uint32)],
+        axis=1,
+    )
+    return fnp.asarray(np.tile(halves, (batch, 1)))
 
-    A one-chunk message is the root of its own tree, which is what makes it
-    reachable without the tree: the chunk's counter is index 0 and its last
-    compression is the root compression.
+
+def _chunk_chaining_values(message: Array, nchunks: int) -> Array:
+    """Every chunk's chaining value: uint32 `[B, nchunks, 8]`.
+
+    At most two calls, never `nchunks` of them. A chunk's length is not a
+    per-row value — it fixes the *block count*, which is a shape, and the
+    trailing block's `block_len` — so two chunks of different lengths cannot
+    share a call, and padding the short one out to sixteen blocks would hash a
+    different message. Only the last chunk can be short, so that is the only
+    split there is: everything before it is one batched chain over `B * k` rows,
+    which is the parallelism BLAKE3 exists for.
+
+    A message ending on a chunk boundary has no short chunk at all, and is then
+    **one** call. Worth the branch rather than always splitting the last chunk
+    off: that would emit the same sixteen-block chain a second time for a batch
+    of one, which is half the lowered program at any aligned length.
+    """
+    batch = message.shape[0]
+    tail_len = message.shape[1] - CHUNK_LEN * (nchunks - 1)
+    batched = nchunks if tail_len == CHUNK_LEN else nchunks - 1
+
+    outputs = []
+    if batched:
+        head = message[:, : CHUNK_LEN * batched]
+        outputs.append(
+            chunk_output(
+                _block_words(head.reshape(batch * batched, CHUNK_LEN)),
+                CHUNK_LEN,
+                _counters(batch, 0, batched),
+            )
+        )
+    if batched != nchunks:
+        tail = message[:, CHUNK_LEN * batched :]
+        outputs.append(
+            chunk_output(_block_words(tail), tail_len, _counters(batch, batched, 1))
+        )
+
+    # The batched chunks arrive as `[B * k, 8]` with the chunk index varying
+    # fastest, which is what `_counters` tiles to match, so the reshape below
+    # lands each message's chunks in order on its own row.
+    values = [chaining_value(o).reshape(batch, -1, 8) for o in outputs]
+    return fnp.concatenate(values, axis=1) if len(values) > 1 else values[0]
+
+
+def tree_output(msg: ArrayLike) -> Output:
+    """The root node of a message's tree, assembled but not run.
+
+    Spec section 2.1. The chunks are hashed in one batched call and then reduced
+    a level at a time: adjacent nodes pair into parents, and an odd trailing node
+    rides up to the next level unpaired.
+
+    **That level reduction is the spec's tree, not an approximation of it.** The
+    spec splits a node by giving its left subtree the largest power of two
+    strictly below the chunk count — a split that is not a halving, and that
+    makes every left subtree perfect. Pairing from the bottom and carrying the
+    odd node up produces exactly that shape for every chunk count, which is what
+    lets the tree be `ceil(log2(n))` batched compressions rather than a walk.
+
+    The root's own compression stays pending, for the reason `chunk_output`
+    leaves a chunk's last one pending: the root is where `ROOT` and the
+    extendable output live, and neither belongs to the tree that produced it.
     """
     message = fnp.asarray(msg, dtype=fnp.uint8)
     if message.ndim != 2:
         raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
     batch, length = message.shape
-    if length > CHUNK_LEN:
-        raise ValueError(
-            f"{length} bytes spans more than one {CHUNK_LEN}-byte chunk, which "
-            "needs the parent-node tree"
+
+    nchunks = max(1, -(-length // CHUNK_LEN))
+    if nchunks == 1:
+        # A one-chunk message is the root of its own tree, with no parent above
+        # it — so it is a chunk output, not a parent output.
+        return chunk_output(
+            _block_words(message), length, fnp.zeros((batch, 2), dtype=U32)
         )
 
-    output = chunk_output(
-        _block_words(message), length, fnp.zeros((batch, 2), dtype=U32)
-    )
-    return unpack_le(root_words(output)[:, :8])
+    nodes = _chunk_chaining_values(message, nchunks)
+    while nodes.shape[1] > 2:
+        pairs = nodes.shape[1] // 2
+        parents = chaining_value(
+            parent_output(
+                nodes[:, 0 : 2 * pairs : 2].reshape(batch * pairs, 8),
+                nodes[:, 1 : 2 * pairs : 2].reshape(batch * pairs, 8),
+            )
+        ).reshape(batch, pairs, 8)
+        # An odd node at the end has no sibling on this level and pairs with
+        # whatever the levels above hand it, so it rides up untouched.
+        nodes = (
+            parents
+            if nodes.shape[1] % 2 == 0
+            else fnp.concatenate([parents, nodes[:, -1:]], axis=1)
+        )
+
+    return parent_output(nodes[:, 0], nodes[:, 1])
+
+
+def digest(msg: ArrayLike) -> Array:
+    """BLAKE3 of a batch of equal-length messages: uint8 `[B, L]` -> `[B, 32]`.
+
+    Byte-identical to the standard per message, at any length. `msg` may be a
+    tracer, so a consumer can hash inside its own `@jit` or `vmap`.
+    """
+    return unpack_le(root_words(tree_output(msg))[:, :8])
