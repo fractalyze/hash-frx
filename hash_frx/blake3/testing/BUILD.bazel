@@ -52,6 +52,20 @@ py_test(
 )
 
 py_test(
+    name = "byte_hashes_test",
+    size = "medium",
+    srcs = ["byte_hashes_test.py"],
+    deps = [
+        ":vectors",
+        "//hash_frx:byte_hash",
+        "//hash_frx/blake3",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "blake3_test",
     size = "medium",
     srcs = ["blake3_test.py"],

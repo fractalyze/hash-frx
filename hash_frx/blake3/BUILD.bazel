@@ -6,10 +6,12 @@ py_library(
     srcs = [
         "__init__.py",
         "blake3.py",
+        "byte_hashes.py",
         "compress.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//hash_frx:byte_hash",
         "//hash_frx:word",
         requirement("frx"),
     ],
