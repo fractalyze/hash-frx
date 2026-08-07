@@ -32,10 +32,11 @@ from hash_frx.blake3.blake3 import (
     parent_output,
     root_words,
     tree_output,
+    xof,
 )
 from hash_frx.blake3.compress import ROOT
 from hash_frx.blake3.testing import reference as ref
-from hash_frx.blake3.testing.vectors import ALL_LENGTHS, official_input
+from hash_frx.blake3.testing.vectors import ALL_LENGTHS, EXTENDED, official_input
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.word import split
 
@@ -273,7 +274,83 @@ class PendingOutputTest(absltest.TestCase):
         self.assertEqual(int(np.asarray(many.flags)[0]), ref.PARENT)
 
 
+class ExtendableOutputTest(parameterized.TestCase):
+    @parameterized.parameters(*EXTENDED)
+    def test_official_extended_output(self, length: int, expected: str) -> None:
+        # The published `hash` field is 131 bytes, of which the digest is the
+        # first 32. So the same table anchors the stream, at every input length,
+        # with no second source — and 131 bytes is three output blocks and a
+        # 3-byte remainder, so the counter running 0/1/2 and the partial tail
+        # are both on the path here.
+        got = np.asarray(xof(_rows(official_input(length)), 131))
+        self.assertEqual(bytes(got[0]).hex(), expected)
+
+    def test_the_digest_is_the_head_of_the_stream(self) -> None:
+        # Not an internal consistency check — the standard says so, and the
+        # published table is where that is read from.
+        for length, extended in (EXTENDED[0], EXTENDED[11], EXTENDED[-1]):
+            with self.subTest(length=length):
+                got = np.asarray(digest(_rows(official_input(length))))
+                self.assertEqual(bytes(got[0]).hex(), extended[:64])
+
+    @parameterized.parameters(1, 31, 32, 33, 63, 64, 65, 127, 128, 129, 200)
+    def test_every_output_length_is_a_prefix(self, out_len: int) -> None:
+        # A partial trailing output block is a slice of a whole one, so a length
+        # that is not a multiple of 64 must not disturb the bytes before it.
+        data = official_input(1025)
+        got = np.asarray(xof(_rows(data), out_len))
+        self.assertEqual(out_len, got.shape[1])
+        self.assertEqual(bytes(got[0]), ref.hash_xof(data, out_len))
+
+    def test_rejects_an_empty_output(self) -> None:
+        with self.assertRaises(ValueError):
+            xof(_rows(official_input(64)), 0)
+
+    def test_rows_do_not_interact_across_the_stream(self) -> None:
+        # Every operand is spread one row per output block before the batched
+        # call, so the rows of a message sit next to each other rather than
+        # interleaved with another message's. At a batch of one those two
+        # layouts are the same array, which is why this needs three distinct
+        # messages: a transposed spread hands row 0's node to row 1's counter
+        # and still returns well-formed bytes of the right length.
+        rng = np.random.default_rng(41)
+        messages = [
+            bytes(rng.integers(0, 256, size=CHUNK_LEN + 7, dtype=np.uint8))
+            for _ in range(3)
+        ]
+        got = np.asarray(xof(_rows(*messages), 131))
+        for i, message in enumerate(messages):
+            with self.subTest(row=i):
+                self.assertEqual(bytes(got[i]), ref.hash_xof(message, 131))
+
+    def test_the_stream_is_not_the_digest_repeated(self) -> None:
+        # The counter is what separates one output block from the next, so a
+        # version that dropped it would return the same 64 bytes over and over
+        # — well-formed, the right length, and wrong.
+        got = np.asarray(xof(_rows(official_input(64)), 128))[0]
+        self.assertNotEqual(bytes(got[:64]), bytes(got[64:]))
+
+
 class LoweringTest(absltest.TestCase):
+    def test_output_length_costs_no_compressions(self) -> None:
+        # The output blocks are the rows of ONE batched call — each reads the
+        # same root node and differs only in its counter — so the program does
+        # not grow with the output at all. Sixteen blocks emit what one does.
+        #
+        # The arithmetic does grow, of course: those are sixteen rows of that
+        # call. What is pinned here is that they are rows and not call sites,
+        # which is the difference between this and a sponge's squeeze, and the
+        # thing a sequential rewrite would silently give up.
+        digest_sites = _compressions(CHUNK_LEN + 1)
+        message = _rows(official_input(CHUNK_LEN + 1))
+        for out_len in (32, 65, 131, 1024):
+            with self.subTest(out_len=out_len):
+                text = frx.jit(lambda m, n=out_len: xof(m, n)).lower(message).as_text()
+                self.assertEqual(text.count("stablehlo.xor") // 60, digest_sites)
+
+    def test_the_extendable_body_is_fusion_ready(self) -> None:
+        assert_fusion_ready(lambda m: xof(m, 131), _rows(official_input(CHUNK_LEN + 1)))
+
     def test_a_short_last_chunk_costs_no_compressions(self) -> None:
         # A short last chunk shares the batched chain to its own last block and
         # rejoins the full chunks to finish, so it emits nothing extra at all.

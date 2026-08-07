@@ -273,6 +273,47 @@ def root_words(output: Output) -> Array:
     )
 
 
+def _spread(x: Array, count: int) -> Array:
+    """Each row of `x` repeated `count` times, the rows staying in order.
+
+    A broadcast and a reshape rather than `repeat`, which lowers to a gather.
+    Row `b * count + i` is row `b`, which is the order `_counters` tiles its
+    indices in — so the two line up without either naming the other's layout.
+    """
+    wide = fnp.broadcast_to(x[:, None], (x.shape[0], count, *x.shape[1:]))
+    return wide.reshape(x.shape[0] * count, *x.shape[1:])
+
+
+def root_bytes(output: Output, out_len: int) -> Array:
+    """A root node's extendable output: uint8 `[B, out_len]`.
+
+    Spec section 2.6. The root's compression is repeated with an output-block
+    counter running 0, 1, 2, … and each run's sixteen words, little-endian, are
+    64 bytes of the stream.
+
+    **The blocks do not chain.** Every one reads the same root node and differs
+    only in that counter, so they are the rows of *one* batched call rather than
+    a sequential squeeze — the property a sponge XOF cannot offer. `out_len` is
+    static, so how many rows that is is known at trace time.
+
+    The counter replaces the root's own, and only on this compression: whatever
+    chain produced the node already ran at the counter its role fixed, and is
+    not re-run per output block. That falls out of the node arriving unrun.
+    """
+    if out_len < 1:
+        raise ValueError(f"out_len must be at least 1, got {out_len}")
+    batch = output.block.shape[0]
+    blocks = _units(out_len, BLOCK_LEN)
+    stream = compress(
+        _spread(output.input_chaining_value, blocks),
+        _spread(output.block, blocks),
+        _counters(batch, 0, blocks),
+        _spread(output.block_len, blocks),
+        _spread(output.flags, blocks) | U32(ROOT),
+    )
+    return unpack_le(stream).reshape(batch, blocks * BLOCK_LEN)[:, :out_len]
+
+
 def _block_words(msg: Array) -> Array:
     """uint8 `[B, L]` -> uint32 `[B, nblocks, 16]` little-endian message words.
 
@@ -413,5 +454,19 @@ def digest(msg: ArrayLike) -> Array:
 
     Byte-identical to the standard per message, at any length. `msg` may be a
     tracer, so a consumer can hash inside its own `@jit` or `vmap`.
+
+    The 32 bytes are the head of the root's extendable output rather than a
+    different computation, which is the standard's own construction and why this
+    is `root_bytes` at one block rather than a path of its own.
     """
-    return unpack_le(root_words(tree_output(msg))[:, :8])
+    return xof(msg, 32)
+
+
+def xof(msg: ArrayLike, out_len: int) -> Array:
+    """BLAKE3 read out to `out_len` bytes: uint8 `[B, L]` -> `[B, out_len]`.
+
+    Byte-identical to the standard per message, at any input length and any
+    output length. `digest` is this at 32, which is the standard's own
+    construction rather than a shortcut — the digest is the head of the stream.
+    """
+    return root_bytes(tree_output(msg), out_len)
