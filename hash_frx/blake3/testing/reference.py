@@ -176,8 +176,10 @@ def _subtree_output(
         left *= 2
     cv = _subtree_output(chunks, lo, lo + left, 0)[:8]
     right = _subtree_output(chunks, lo + left, hi, 0)[:8]
-    # A parent reads the key words rather than a chaining value, its counter is
-    # always zero, and its block is the two child chaining values (section 2.5).
+    # A parent reads the key words rather than a chaining value, and its block
+    # is the two child chaining values (section 2.5). Its counter is zero for
+    # every node below the root; at the root it carries the output-block index,
+    # which is the one place section 2.6 reaches.
     return compress(list(IV), cv + right, counter, BLOCK_LEN, final_flags | PARENT)
 
 

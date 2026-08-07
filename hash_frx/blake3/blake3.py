@@ -24,10 +24,11 @@ rather than a walk over `2n - 1` nodes. `tree_output` argues the equivalence.
 **A node's final compression stays pending.** One node becomes a chaining value
 under a tree, a digest at the root, and — by repeating that same compression
 with an incrementing counter (spec section 2.6) — an output stream. Everything
-below it is identical in all three and only that last call's flags differ, so
-`chunk_output` and `parent_output` return the compression they have *not* run
-and the caller finishes it with `chaining_value` or `root_words`. Finishing a
-second way then costs one compression rather than the whole subtree again.
+below it is identical in all three and only that last call's flags and counter
+differ, so `chunk_output` and `parent_output` return the compression they have
+*not* run and the caller finishes it with `chaining_value` or `root_words`.
+Finishing a second way then costs one compression rather than the whole subtree
+again, and reading further costs one more per 64 bytes.
 
 Message length is static, so the chunk count, the tree shape, the block count,
 the flag schedule and every block length are compile-time constants: the loops
@@ -178,6 +179,29 @@ def _stacked(*outputs: Output) -> Output:
     )
 
 
+def _output_blocks(output: Output, count: int) -> Output:
+    """One node's pending compression as `count` rows, one per output block.
+
+    The other way a batch arises here: `_stacked` gives several nodes a row
+    each, this gives one node `count` of them, differing only in the counter
+    that spec section 2.6 increments. The node's own counter is replaced rather
+    than added to — a root chunk is chunk 0 and a parent's counter is zero, so
+    what the field carries at the root is the output-block index and nothing
+    else.
+
+    Row `b * count + i` is message `b`'s block `i`: `repeat` holds each row for
+    `count` places and `_counters` tiles the indices inside them, so the two
+    agree on the layout the trailing reshape splits back per message.
+    """
+    return Output(
+        input_chaining_value=fnp.repeat(output.input_chaining_value, count, axis=0),
+        block=fnp.repeat(output.block, count, axis=0),
+        counter=_counters(output.block.shape[0], 0, count),
+        block_len=fnp.repeat(output.block_len, count, axis=0),
+        flags=fnp.repeat(output.flags, count, axis=0),
+    )
+
+
 def chunk_output(words: Array, chunk_len: int, counter: Array) -> Output:
     """Chain one chunk's blocks up to, but not including, its last compression.
 
@@ -273,17 +297,6 @@ def root_words(output: Output) -> Array:
     )
 
 
-def _spread(x: Array, count: int) -> Array:
-    """Each row of `x` repeated `count` times, the rows staying in order.
-
-    A broadcast and a reshape rather than `repeat`, which lowers to a gather.
-    Row `b * count + i` is row `b`, which is the order `_counters` tiles its
-    indices in — so the two line up without either naming the other's layout.
-    """
-    wide = fnp.broadcast_to(x[:, None], (x.shape[0], count, *x.shape[1:]))
-    return wide.reshape(x.shape[0] * count, *x.shape[1:])
-
-
 def root_bytes(output: Output, out_len: int) -> Array:
     """A root node's extendable output: uint8 `[B, out_len]`.
 
@@ -292,25 +305,20 @@ def root_bytes(output: Output, out_len: int) -> Array:
     64 bytes of the stream.
 
     **The blocks do not chain.** Every one reads the same root node and differs
-    only in that counter, so they are the rows of *one* batched call rather than
-    a sequential squeeze — the property a sponge XOF cannot offer. `out_len` is
-    static, so how many rows that is is known at trace time.
+    only in that counter, so they are `_output_blocks` rows of the *one* call
+    `root_words` already is, rather than a sequential squeeze — the property a
+    sponge XOF cannot offer. `out_len` is static, so how many rows that is is
+    known at trace time.
 
-    The counter replaces the root's own, and only on this compression: whatever
-    chain produced the node already ran at the counter its role fixed, and is
-    not re-run per output block. That falls out of the node arriving unrun.
+    Only this compression is repeated: whatever chain produced the node already
+    ran at the counter its role fixed, and is not re-run per output block. That
+    falls out of the node arriving unrun.
     """
     if out_len < 1:
         raise ValueError(f"out_len must be at least 1, got {out_len}")
     batch = output.block.shape[0]
     blocks = _units(out_len, BLOCK_LEN)
-    stream = compress(
-        _spread(output.input_chaining_value, blocks),
-        _spread(output.block, blocks),
-        _counters(batch, 0, blocks),
-        _spread(output.block_len, blocks),
-        _spread(output.flags, blocks) | U32(ROOT),
-    )
+    stream = root_words(_output_blocks(output, blocks))
     return unpack_le(stream).reshape(batch, blocks * BLOCK_LEN)[:, :out_len]
 
 
@@ -332,11 +340,15 @@ def _block_words(msg: Array) -> Array:
 
 
 def _counters(batch: int, first: int, count: int) -> Array:
-    """Chunk indices `first .. first + count - 1`, tiled over `batch` messages.
+    """Counter values `first .. first + count - 1`, tiled over `batch` messages.
 
     uint32 `[batch * count, 2]` as (low, high). The split is done on the host,
     where the index is a Python int, so no 64-bit value is ever materialised —
     the reason `compress` takes the counter in halves at all.
+
+    What the index counts is the caller's: a chunk's position in the message
+    for `_chunk_chaining_values`, an output block's position in the stream for
+    `_output_blocks`. The counter field carries whichever the node's role fixes.
     """
     halves = np.array([split(i) for i in range(first, first + count)], dtype=np.uint32)
     return fnp.asarray(np.tile(halves, (batch, 1)))
