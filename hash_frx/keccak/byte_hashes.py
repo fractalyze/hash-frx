@@ -23,9 +23,10 @@ KangarooTwelve would extend the same way.
 `digest_size`.** `Shake256(output_size=64)` is a different hash from
 `Shake256(output_size=32)` — not one hash asked for more bytes — so the length
 rides in the value surface that `__eq__`/`__hash__` cover, and `digest_size`
-stays the concrete integer the seam promises. It has no default: an extendable
-output has no natural size, and picking one for the caller is how a scheme ends
-up silently truncating.
+stays the concrete integer the seam promises. That the rate is a type here and
+the length a parameter is the family-wide rule, stated once in
+[`docs/reference/conventions.md`](../../docs/reference/conventions.md); it is
+also why the SHAKEs take no default where BLAKE3's rows do.
 
 **`has_dedicated_fusion` is `False` on every hash here, device and host alike**, because
 Keccak carries only the generic region marker until an emitter exists (#21). So
@@ -76,9 +77,8 @@ class _KeccakHash:
 
     A subclass supplies the row: `_rate` and `_suffix` from FIPS 202 section 6,
     plus a fixed output where the standard fixes one. Splitting by constants into
-    separate *types* rather than taking them as arguments is deliberate — a
-    consumer holding one of these in pytree aux compares by type, so `Shake128`
-    and `Shake256` must not be one class with a knob.
+    separate *types* rather than taking them as arguments is the family-wide rule
+    (`docs/reference/conventions.md`).
     """
 
     _rate: int

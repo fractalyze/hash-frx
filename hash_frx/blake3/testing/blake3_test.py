@@ -28,21 +28,34 @@ from hash_frx.blake3.blake3 import (
     CHUNK_LEN,
     chaining_value,
     chunk_output,
+    derive_key,
     digest,
+    hash_mode,
+    keyed_digest,
+    keyed_mode,
+    keyed_xof,
     parent_output,
     root_words,
     tree_output,
     xof,
 )
-from hash_frx.blake3.compress import ROOT
+from hash_frx.blake3.compress import CHUNK_END, KEYED_HASH, ROOT
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.vectors import (
     ALL_LENGTHS,
+    CONTEXT,
+    DERIVE_KEY,
     EXTENDED,
+    EXTENDED_DERIVE_KEY,
+    EXTENDED_KEYED,
     EXTENDED_MULTI_BLOCK,
     EXTENDED_MULTI_CHUNK,
     EXTENDED_SINGLE_BLOCK,
+    KEY,
+    KEYED,
+    PER_LAYER_LENGTHS,
     official_input,
+    rows,
 )
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.word import split
@@ -125,8 +138,12 @@ class ChunkCounterTest(absltest.TestCase):
         # what separates one chunk from the next under a tree.
         data = official_input(200)
         words = _words(data)
-        at_zero = np.asarray(root_words(chunk_output(words, len(data), _counter(0))))
-        at_seven = np.asarray(root_words(chunk_output(words, len(data), _counter(7))))
+        at_zero = np.asarray(
+            root_words(chunk_output(words, len(data), _counter(0), hash_mode()))
+        )
+        at_seven = np.asarray(
+            root_words(chunk_output(words, len(data), _counter(7), hash_mode()))
+        )
 
         self.assertNotEqual(list(at_zero[0]), list(at_seven[0]))
         self.assertEqual([int(w) for w in at_seven[0]], ref.chunk_output(data, 7, ROOT))
@@ -205,7 +222,9 @@ class ParentNodeTest(absltest.TestCase):
         left = rng.integers(0, 2**32, size=(1, 8), dtype=_U32)
         right = rng.integers(0, 2**32, size=(1, 8), dtype=_U32)
         got = np.asarray(
-            chaining_value(parent_output(fnp.asarray(left), fnp.asarray(right)))
+            chaining_value(
+                parent_output(fnp.asarray(left), fnp.asarray(right), hash_mode())
+            )
         )
         want = ref.compress(
             list(ref.IV),
@@ -234,7 +253,7 @@ class ParentNodeTest(absltest.TestCase):
             ("dtype on the right", good, fnp.zeros((2, 8), dtype=fnp.int32), TypeError),
         ):
             with self.subTest(case=name), self.assertRaises(err):
-                parent_output(left, right)
+                parent_output(left, right, hash_mode())
 
     def test_the_children_are_ordered(self) -> None:
         # Swapping them still produces a well-formed chaining value, so nothing
@@ -243,15 +262,15 @@ class ParentNodeTest(absltest.TestCase):
         a = fnp.asarray(rng.integers(0, 2**32, size=(1, 8), dtype=_U32))
         b = fnp.asarray(rng.integers(0, 2**32, size=(1, 8), dtype=_U32))
         self.assertNotEqual(
-            list(np.asarray(chaining_value(parent_output(a, b)))[0]),
-            list(np.asarray(chaining_value(parent_output(b, a)))[0]),
+            list(np.asarray(chaining_value(parent_output(a, b, hash_mode())))[0]),
+            list(np.asarray(chaining_value(parent_output(b, a, hash_mode())))[0]),
         )
 
     def test_root_and_chaining_value_differ_only_by_root(self) -> None:
         # The pending-Output design rests on this: the same node finished two
         # ways is the same compression bar one flag bit.
         data = official_input(200)
-        output = chunk_output(_words(data), len(data), _counter(0))
+        output = chunk_output(_words(data), len(data), _counter(0), hash_mode())
         cv = [int(w) for w in np.asarray(chaining_value(output))[0]]
         self.assertNotEqual(cv, [int(w) for w in np.asarray(root_words(output))[0, :8]])
         self.assertEqual(cv, ref.chunk_output(data, 0, 0)[:8])
@@ -272,8 +291,8 @@ class PendingOutputTest(absltest.TestCase):
         # `tree_output` is the seam the XOF and a keyed root will finish
         # differently, so what it hands back has to be the *unrun* compression:
         # a chunk when the message is one chunk, a parent when it is more.
-        one = tree_output(_rows(official_input(CHUNK_LEN)))
-        many = tree_output(_rows(official_input(CHUNK_LEN + 1)))
+        one = tree_output(_rows(official_input(CHUNK_LEN)), hash_mode())
+        many = tree_output(_rows(official_input(CHUNK_LEN + 1)), hash_mode())
         # Exact equality, so it also says neither carries ROOT — that belongs
         # to the finishing call alone, which is what lets the same node be
         # squeezed for extendable output instead.
@@ -353,6 +372,171 @@ class ExtendableOutputTest(parameterized.TestCase):
         self.assertNotEqual(bytes(got[:64]), bytes(got[64:]))
 
 
+class KeyedHashTest(parameterized.TestCase):
+    @parameterized.parameters(*KEYED)
+    def test_official_keyed_vector(self, length: int, expected: str) -> None:
+        # The whole published table under the vectors' own key. The layers it
+        # names are what makes it worth running entire here rather than at a
+        # length or two: below 65 bytes there is no parent to open from the key
+        # at all, so only the multi-chunk rows can catch a tree that kept the IV
+        # while its chunks took the key.
+        got = np.asarray(keyed_digest(KEY, _rows(official_input(length))))
+        self.assertEqual(bytes(got[0]).hex(), expected)
+
+    @parameterized.parameters(*rows(EXTENDED_KEYED, PER_LAYER_LENGTHS))
+    def test_official_keyed_extended_output(self, length: int, expected: str) -> None:
+        # One row per layer rather than the table again. Reading further is
+        # section 2.6 repeated on a node the mode has already reached, and
+        # `ExtendableOutputTest` pins that at all 35 lengths; what is left is
+        # that a keyed node survives being read as a stream rather than a digest.
+        got = np.asarray(keyed_xof(KEY, _rows(official_input(length)), 131))
+        self.assertEqual(bytes(got[0]).hex(), expected)
+
+    def test_keyed_output_differs_from_unkeyed(self) -> None:
+        # Read at a multi-chunk length, so a parent is on the path. The table
+        # above is what says the bytes are *right*; this says the two modes are
+        # not the same computation with a decorative flag.
+        message = _rows(official_input(CHUNK_LEN * 2 + 1))
+        self.assertNotEqual(
+            bytes(np.asarray(keyed_digest(KEY, message))[0]),
+            bytes(np.asarray(digest(message))[0]),
+        )
+
+    def test_a_different_key_is_a_different_hash(self) -> None:
+        # The key reaches every compression, so nothing about the message can
+        # make two keys agree.
+        message = _rows(official_input(200))
+        self.assertNotEqual(
+            bytes(np.asarray(keyed_digest(KEY, message))[0]),
+            bytes(np.asarray(keyed_digest(bytes(len(KEY)), message))[0]),
+        )
+
+    def test_the_mode_flag_rides_on_the_unrun_node(self) -> None:
+        # `root_words` only ever ORs ROOT, so a mode that reached the key words
+        # and not the flags would be absent from every compression and visible
+        # nowhere but here. Exact equality, so it also says ROOT is still the
+        # finishing call's alone.
+        node = tree_output(_rows(official_input(CHUNK_LEN)), keyed_mode(KEY))
+        self.assertEqual(int(np.asarray(node.flags)[0]), CHUNK_END | KEYED_HASH)
+
+    def test_rows_do_not_interact_under_a_key(self) -> None:
+        # One key is broadcast across the rows rather than tiled along them, and
+        # at a batch of one those two layouts are the same array — so this needs
+        # three distinct messages, checked per row against the oracle.
+        rng = np.random.default_rng(39)
+        messages = [
+            bytes(rng.integers(0, 256, size=CHUNK_LEN + 7, dtype=np.uint8))
+            for _ in range(3)
+        ]
+        got = np.asarray(keyed_xof(KEY, _rows(*messages), 131))
+        for i, message in enumerate(messages):
+            with self.subTest(row=i):
+                self.assertEqual(bytes(got[i]), ref.keyed_xof(KEY, message, 131))
+
+    def test_the_key_may_be_a_tracer(self) -> None:
+        # The key is an operand, not a host constant, so one compiled program
+        # serves every key — which is what lets a consumer re-key without
+        # re-tracing and keeps secret material out of the constant pool. A key
+        # that had been baked in fails this as a tracer error rather than as
+        # wrong bytes.
+        message = _rows(official_input(129))
+        key = fnp.asarray(np.frombuffer(KEY, dtype=np.uint8))
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(keyed_digest)(key, message)),
+            np.asarray(keyed_digest(KEY, message)),
+        )
+
+    @parameterized.named_parameters(("short", 31), ("long", 33), ("empty", 0))
+    def test_rejects_a_key_that_is_not_32_bytes(self, size: int) -> None:
+        # A key of the wrong width has no silent failure to fall into — it would
+        # reach `pack_le` and change the chaining-value shape — but the error it
+        # raises there names an operand the caller never passed.
+        with self.assertRaises(ValueError):
+            keyed_digest(bytes(size), _rows(official_input(64)))
+
+
+class DeriveKeyTest(parameterized.TestCase):
+    @parameterized.parameters(*DERIVE_KEY)
+    def test_official_derive_key_vector(self, length: int, expected: str) -> None:
+        # The published context string, at every published length of material.
+        got = np.asarray(derive_key(CONTEXT, _rows(official_input(length)), 32))
+        self.assertEqual(bytes(got[0]).hex(), expected)
+
+    @parameterized.parameters(*rows(EXTENDED_DERIVE_KEY, PER_LAYER_LENGTHS))
+    def test_official_derive_key_extended_output(
+        self, length: int, expected: str
+    ) -> None:
+        # One row per layer, for the reason the keyed case gives.
+        got = np.asarray(derive_key(CONTEXT, _rows(official_input(length)), 131))
+        self.assertEqual(bytes(got[0]).hex(), expected)
+
+    def test_the_context_separates(self) -> None:
+        # What the mode exists for. Two contexts over one key material derive
+        # unrelated keys, which is the property a consumer relies on to reuse
+        # one secret across purposes.
+        material = _rows(official_input(200))
+        self.assertNotEqual(
+            bytes(np.asarray(derive_key("one", material, 32))[0]),
+            bytes(np.asarray(derive_key("two", material, 32))[0]),
+        )
+
+    def test_the_context_and_the_material_are_not_interchangeable(self) -> None:
+        # The context is the domain and the message is the secret, which is the
+        # inverse of the reading the argument order invites. Swapped, this
+        # derives well-formed bytes of the wrong thing and nothing about the
+        # shapes objects.
+        one, two = b"context one", b"context two"
+        self.assertNotEqual(
+            bytes(np.asarray(derive_key(one, _rows(two), 32))[0]),
+            bytes(np.asarray(derive_key(two, _rows(one), 32))[0]),
+        )
+
+    def test_it_is_not_keyed_hashing_under_the_context_key(self) -> None:
+        # The two passes differ by a flag as well as by a key, so deriving under
+        # a context is not keying with that context's hash. A reading that
+        # reused KEYED_HASH for the material pass would produce the same key
+        # words and different bytes — caught by the published table above, but
+        # this is what the table would be catching.
+        material = _rows(official_input(200))
+        context_key = ref.hash_xof(CONTEXT.encode(), 32, ref.IV, ref.DERIVE_KEY_CONTEXT)
+        self.assertNotEqual(
+            bytes(np.asarray(derive_key(CONTEXT, material, 32))[0]),
+            bytes(np.asarray(keyed_digest(context_key, material))[0]),
+        )
+
+    @parameterized.named_parameters(
+        ("empty", 0), ("one block", BLOCK_LEN), ("a tree", CHUNK_LEN * 2 + 1)
+    )
+    def test_the_context_pass_is_a_whole_hash(self, size: int) -> None:
+        # Every published row shares one 47-byte context, which is a single
+        # block of a single chunk — so the table says nothing about a context
+        # that chains or that stands a tree above itself. It is the same
+        # `tree_output` the material pass runs, and these are the lengths that
+        # say so rather than assume it.
+        context = bytes(official_input(size))
+        material = official_input(200)
+        got = np.asarray(derive_key(context, _rows(material), 32))
+        self.assertEqual(bytes(got[0]), ref.derive_key(context, material, 32))
+
+    def test_a_str_context_is_its_utf8_bytes(self) -> None:
+        # The standard names the context UTF-8, so the two spellings are one
+        # context rather than two.
+        material = _rows(official_input(200))
+        np.testing.assert_array_equal(
+            np.asarray(derive_key(CONTEXT, material, 32)),
+            np.asarray(derive_key(CONTEXT.encode(), material, 32)),
+        )
+
+    def test_the_material_may_be_a_tracer(self) -> None:
+        # The context is a host constant by the standard's own instruction, but
+        # the material is a secret a consumer hashes inside its own jit.
+        material = _rows(official_input(65))
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(lambda m: derive_key(CONTEXT, m, 32))(material)),
+            np.asarray(derive_key(CONTEXT, material, 32)),
+        )
+
+
 class LoweringTest(absltest.TestCase):
     def test_output_length_costs_no_compressions(self) -> None:
         # The output blocks are the rows of ONE batched call — each reads the
@@ -410,6 +594,22 @@ class LoweringTest(absltest.TestCase):
         # partial one, and both flag placements.
         assert_fusion_ready(digest, _rows(official_input(129)))
 
+    def test_the_keyed_body_is_fusion_ready(self) -> None:
+        # The key is the one operand hash mode does not carry, and it is
+        # broadcast across the rows and packed from bytes. Both are the shapes
+        # `conventions.md` warns lower to a gather when written as an indexed
+        # read — right bytes, split kernel.
+        key = fnp.asarray(np.frombuffer(KEY, dtype=np.uint8))
+        assert_fusion_ready(keyed_digest, key, _rows(official_input(129)))
+
+    def test_the_derive_key_body_is_fusion_ready(self) -> None:
+        # Two whole hashes in one body, the first over a host constant. It is
+        # the one place a mode's key is *computed* rather than passed, so it is
+        # the one place the key could arrive as something other than a broadcast.
+        assert_fusion_ready(
+            lambda m: derive_key(CONTEXT, m, 32), _rows(official_input(129))
+        )
+
     def test_the_digest_is_32_bytes(self) -> None:
         out = digest(_rows(official_input(64), official_input(64)))
         self.assertEqual(out.dtype, fnp.uint8)
@@ -431,7 +631,7 @@ class ValidationTest(absltest.TestCase):
             ("not a chunk length at all", CHUNK_LEN + 1),
         ):
             with self.subTest(case=name), self.assertRaises(ValueError):
-                chunk_output(words, chunk_len, _counter(0))
+                chunk_output(words, chunk_len, _counter(0), hash_mode())
 
     def test_rejects_wrong_word_shapes(self) -> None:
         for name, shape in (
@@ -439,13 +639,17 @@ class ValidationTest(absltest.TestCase):
             ("rank", (4, 16)),
         ):
             with self.subTest(case=name), self.assertRaises(ValueError):
-                chunk_output(fnp.zeros(shape, dtype=fnp.uint32), 200, _counter(0))
+                chunk_output(
+                    fnp.zeros(shape, dtype=fnp.uint32), 200, _counter(0), hash_mode()
+                )
 
     def test_rejects_words_that_are_not_uint32(self) -> None:
         # Wrong-dtype words promote rather than error, so the chain would run to
         # a well-formed digest of the wrong message.
         with self.assertRaises(TypeError):
-            chunk_output(fnp.zeros((1, 4, 16), dtype=fnp.int32), 200, _counter(0))
+            chunk_output(
+                fnp.zeros((1, 4, 16), dtype=fnp.int32), 200, _counter(0), hash_mode()
+            )
 
 
 if __name__ == "__main__":

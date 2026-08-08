@@ -14,8 +14,18 @@ from __future__ import annotations
 
 from absl.testing import absltest, parameterized
 
-from hash_frx.blake3.testing.reference import hash_tree, hash_xof
-from hash_frx.blake3.testing.vectors import ALL_LENGTHS, EXTENDED, official_input
+from hash_frx.blake3.testing.reference import derive_key, hash_tree, hash_xof, keyed_xof
+from hash_frx.blake3.testing.vectors import (
+    ALL_LENGTHS,
+    CONTEXT,
+    EXTENDED,
+    EXTENDED_DERIVE_KEY,
+    EXTENDED_KEYED,
+    KEY,
+    official_input,
+)
+
+_WIDTH = 131
 
 
 class ReferenceAnchorTest(parameterized.TestCase):
@@ -34,7 +44,27 @@ class ReferenceAnchorTest(parameterized.TestCase):
         # needs its own anchor here. Held only against `blake3.xof` it would be
         # two implementations of section 2.6 agreeing, which is exactly the
         # agreement this module exists to refuse.
-        self.assertEqual(hash_xof(official_input(length), 131).hex(), expected)
+        self.assertEqual(hash_xof(official_input(length), _WIDTH).hex(), expected)
+
+    @parameterized.parameters(*EXTENDED_KEYED)
+    def test_official_keyed_vectors(self, length: int, expected: str) -> None:
+        # The mode reaches every compression rather than one, so a reading that
+        # set `KEYED_HASH` on the root alone — or that opened the parents from
+        # the IV while the chunks took the key — still produces well-formed
+        # bytes at every length. The whole table is what tells them apart: the
+        # single-block rows carry no parent at all, so only the multi-chunk ones
+        # can catch a parent opening from the wrong key.
+        got = keyed_xof(KEY, official_input(length), _WIDTH)
+        self.assertEqual(got.hex(), expected)
+
+    @parameterized.parameters(*EXTENDED_DERIVE_KEY)
+    def test_official_derive_key_vectors(self, length: int, expected: str) -> None:
+        # The two-pass mode has two flags and two keys, and swapping either pair
+        # is invisible below this anchor. It also pins the first pass being read
+        # at 32 bytes: a longer read would change nothing about the context hash
+        # and everything about the key taken from it.
+        got = derive_key(CONTEXT, official_input(length), _WIDTH)
+        self.assertEqual(got.hex(), expected)
 
 
 if __name__ == "__main__":

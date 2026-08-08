@@ -35,6 +35,29 @@ Python reviewer would prefer for a lowering that stays one kernel.
 None of this is enforced by the type system, and none of it changes an output
 byte. [Testing](#testing) is where the enforcement is.
 
+## A type per constant, a parameter per value
+
+A family whose members differ by a **constant the standard fixes** is separate
+*types* sharing a body, one per member: the rate that tells `Shake128` from
+`Shake256`, the key words and mode flag that tell BLAKE3's keyed hashing from its
+plain hash. What differs only by a **value the caller picks** rides as a
+constructor parameter of one type — an output length, a key, a context string.
+
+Folding a constant into a parameter gives one class a knob that turns it into a
+different standard, which is how a consumer ends up choosing at runtime a hash it
+should have named; splitting a value into types gives a class per output length.
+
+**Aux-safety is not the reason.** A rate folded into `__eq__` would be as
+re-trace-safe as a rate baked into a type, so [pytree
+registration](#pytree-registration) does not decide this and cannot: it says every
+parameter that survives the split must reach `__eq__`/`__hash__`, which is what
+stops a consumer holding one key from being served the trace built for another.
+
+**A default output length is permitted where the standard names one, and refused
+otherwise.** BLAKE3 names 32 bytes for each of its three modes, so every row
+takes it; an XOF with no such size has none, and picking one for the caller is
+how a scheme ends up silently truncating.
+
 ## Pytree registration
 
 A permutation or a hash is not itself a pytree; it rides in one as **aux**

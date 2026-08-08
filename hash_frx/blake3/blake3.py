@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""BLAKE3's chunk and tree — a whole hash, at any length.
+"""BLAKE3's chunk and tree — a whole hash, at any length, in any of its modes.
 
 Spec sections 2.1, 2.4 and 2.5. A chunk is up to 1024 bytes split into 64-byte
 blocks, each compressed into the next one's chaining value, with `CHUNK_START`
@@ -30,6 +30,14 @@ differ, so `chunk_output` and `parent_output` return the compression they have
 Finishing a second way then costs one compression rather than the whole subtree
 again, and reading further costs one more per 64 bytes.
 
+**A mode is a key and a flag, and nothing else about BLAKE3 moves.** Hash mode
+opens every node from the IV; keyed hashing puts a caller's 32 bytes there and
+sets `KEYED_HASH` on every compression; key derivation is that construction run
+twice, the first pass hashing the context string under `DERIVE_KEY_CONTEXT` to
+produce the key the second opens from (spec section 2.3). So the chunk, the
+tree and the root below are one implementation threaded with a `Mode` rather
+than three that would drift, and only `Mode` names which of the three is running.
+
 Message length is static, so the chunk count, the tree shape, the block count,
 the flag schedule and every block length are compile-time constants: the loops
 here are unrolled Python `for`/`while` over them and nothing reads a message
@@ -39,7 +47,7 @@ holds for the same reason.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import frx.numpy as fnp
 import numpy as np
@@ -49,7 +57,10 @@ from frx.typing import ArrayLike
 from hash_frx.blake3.compress import (
     CHUNK_END,
     CHUNK_START,
+    DERIVE_KEY_CONTEXT,
+    DERIVE_KEY_MATERIAL,
     IV,
+    KEYED_HASH,
     PARENT,
     ROOT,
     compress,
@@ -60,6 +71,11 @@ U32 = fnp.uint32
 
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
+DIGEST_LEN = 32
+# The key both keyed modes open from is 256 bits (spec section 2.3), which is
+# also what a derive-key context pass reads out — the two are the same width
+# because the second pass's key *is* the first pass's digest.
+KEY_LEN = 32
 
 
 def _units(length: int, size: int) -> int:
@@ -72,14 +88,35 @@ def _units(length: int, size: int) -> int:
     return max(1, -(-length // size))
 
 
-def _key_words(batch: int) -> Array:
+@dataclass(frozen=True)
+class Mode:
+    """Which of BLAKE3's three modes is running — the whole of the difference.
+
+    Spec section 2.3. `key_words` is what every node opens from in place of a
+    neighbour's chaining value, and `flags` is what rides on every compression
+    the mode makes, under the flags the node's own position already carries.
+    Nothing else about the hash — the chunk size, the tree shape, the round
+    function, the root — reads either field.
+
+    **One key serves the whole batch.** It is a parameter of the hash, the way
+    an output length is, rather than something a message carries: `[8]` words
+    broadcast across the rows rather than `[B, 8]` tiled along them. A caller
+    keying per message hashes per message.
+    """
+
+    key_words: Array  # uint32 [8]
+    flags: int
+
+
+def _key_words(mode: Mode, batch: int) -> Array:
     """The key words a node opens from: uint32 `[batch, 8]`.
 
-    Hash mode's key is the IV (spec section 2.3). Every chunk and every parent
-    opens from it rather than from a neighbour's chaining value, which is what
-    makes chunks independent and the tree parallel.
+    Every chunk and every parent opens from the mode's key rather than from a
+    neighbour's chaining value, which is what makes chunks independent and the
+    tree parallel. Hash mode's key is the IV (spec section 2.3); the two keyed
+    modes put 32 bytes of the caller's there and change nothing else here.
     """
-    return fnp.broadcast_to(fnp.asarray(IV, dtype=U32), (batch, 8))
+    return fnp.broadcast_to(mode.key_words, (batch, 8))
 
 
 @dataclass(frozen=True)
@@ -103,7 +140,7 @@ class Output:
     flags: Array  # uint32 [B]
 
 
-def _chain(cv: Array, words: Array, counter: Array, first: int) -> Array:
+def _chain(cv: Array, words: Array, counter: Array, first: int, mode: Mode) -> Array:
     """Compress `words` into `cv`, one block at a time: uint32 `[B, 8]`.
 
     words : uint32 `[B, k, 16]` — blocks `first .. first + k - 1` of a chunk,
@@ -118,7 +155,7 @@ def _chain(cv: Array, words: Array, counter: Array, first: int) -> Array:
     batch = cv.shape[0]
     full_block = fnp.full((batch,), BLOCK_LEN, dtype=U32)
     for i in range(words.shape[1]):  # static and at most 15
-        flags = CHUNK_START if first + i == 0 else 0
+        flags = mode.flags | (CHUNK_START if first + i == 0 else 0)
         cv = compress(
             cv,
             words[:, i],
@@ -130,7 +167,7 @@ def _chain(cv: Array, words: Array, counter: Array, first: int) -> Array:
 
 
 def _chunk_from(
-    cv: Array, words: Array, counter: Array, chunk_len: int, first: int
+    cv: Array, words: Array, counter: Array, chunk_len: int, first: int, mode: Mode
 ) -> Output:
     """Run a chunk's blocks from `first` on, leaving its last compression unrun.
 
@@ -147,7 +184,7 @@ def _chunk_from(
     """
     last = words.shape[1] - 1
     return Output(
-        input_chaining_value=_chain(cv, words[:, first:last], counter, first),
+        input_chaining_value=_chain(cv, words[:, first:last], counter, first, mode),
         block=words[:, last],
         counter=counter,
         # The trailing block's own byte count; zero only for an empty chunk,
@@ -155,7 +192,7 @@ def _chunk_from(
         block_len=fnp.full((cv.shape[0],), chunk_len - BLOCK_LEN * last, dtype=U32),
         flags=fnp.full(
             (cv.shape[0],),
-            CHUNK_END | (CHUNK_START if last == 0 else 0),
+            mode.flags | CHUNK_END | (CHUNK_START if last == 0 else 0),
             dtype=U32,
         ),
     )
@@ -202,13 +239,14 @@ def _output_blocks(output: Output, count: int) -> Output:
     )
 
 
-def chunk_output(words: Array, chunk_len: int, counter: Array) -> Output:
+def chunk_output(words: Array, chunk_len: int, counter: Array, mode: Mode) -> Output:
     """Chain one chunk's blocks up to, but not including, its last compression.
 
     words     : uint32 `[B, nblocks, 16]` — the chunk's blocks as little-endian
                 message words, the trailing one zero-padded
     chunk_len : the chunk's byte count; static, and `nblocks` follows from it
     counter   : uint32 `[B, 2]` — the chunk index as (low, high)
+    mode      : which of the three modes this chunk belongs to
 
     A chunk is a chain rather than a batch: every block feeds the next, so the
     parallelism lives across chunks and rows, never here.
@@ -227,7 +265,7 @@ def chunk_output(words: Array, chunk_len: int, counter: Array) -> Output:
             "trailing block is padded, so its length cannot be read back"
         )
 
-    return _chunk_from(_key_words(batch), words, counter, chunk_len, 0)
+    return _chunk_from(_key_words(mode, batch), words, counter, chunk_len, 0, mode)
 
 
 def chaining_value(output: Output) -> Array:
@@ -246,10 +284,11 @@ def chaining_value(output: Output) -> Array:
     )[:, :8]
 
 
-def parent_output(left: Array, right: Array) -> Output:
+def parent_output(left: Array, right: Array, mode: Mode) -> Output:
     """A parent node's compression, assembled but not run.
 
     left, right : uint32 `[B, 8]` — the two child chaining values
+    mode        : which of the three modes this tree belongs to
 
     Spec section 2.5. A parent reads the key words rather than a child's
     chaining value, its counter is always zero however deep the tree is, and its
@@ -273,11 +312,11 @@ def parent_output(left: Array, right: Array) -> Output:
 
     batch = left.shape[0]
     return Output(
-        input_chaining_value=_key_words(batch),
+        input_chaining_value=_key_words(mode, batch),
         block=fnp.concatenate([left, right], axis=1),
         counter=fnp.zeros((batch, 2), dtype=U32),
         block_len=fnp.full((batch,), BLOCK_LEN, dtype=U32),
-        flags=fnp.full((batch,), PARENT, dtype=U32),
+        flags=fnp.full((batch,), mode.flags | PARENT, dtype=U32),
     )
 
 
@@ -354,7 +393,7 @@ def _counters(batch: int, first: int, count: int) -> Array:
     return fnp.asarray(np.tile(halves, (batch, 1)))
 
 
-def _chunk_chaining_values(message: Array, nchunks: int) -> Array:
+def _chunk_chaining_values(message: Array, nchunks: int, mode: Mode) -> Array:
     """Every chunk's chaining value: uint32 `[B, nchunks, 8]`.
 
     `nchunks` is at least two — `tree_output` handles a one-chunk message itself,
@@ -388,19 +427,30 @@ def _chunk_chaining_values(message: Array, nchunks: int) -> Array:
     # The blocks both kinds of chunk run, in one call over every row.
     leaves = tail_words.shape[1] - 1
     shared = _chain(
-        _key_words(batch * nchunks),
+        _key_words(mode, batch * nchunks),
         fnp.concatenate([head_words[:, :leaves], tail_words[:, :leaves]], axis=0),
         fnp.concatenate([head_counter, tail_counter], axis=0),
         0,
+        mode,
     )
 
     values = chaining_value(
         _stacked(
             _chunk_from(
-                shared[: batch * full], head_words, head_counter, CHUNK_LEN, leaves
+                shared[: batch * full],
+                head_words,
+                head_counter,
+                CHUNK_LEN,
+                leaves,
+                mode,
             ),
             _chunk_from(
-                shared[batch * full :], tail_words, tail_counter, tail_len, leaves
+                shared[batch * full :],
+                tail_words,
+                tail_counter,
+                tail_len,
+                leaves,
+                mode,
             ),
         )
     )
@@ -416,7 +466,7 @@ def _chunk_chaining_values(message: Array, nchunks: int) -> Array:
     )
 
 
-def tree_output(msg: ArrayLike) -> Output:
+def tree_output(msg: ArrayLike, mode: Mode) -> Output:
     """The root node of a message's tree, assembled but not run.
 
     Spec section 2.1. The chunks are hashed in one or two batched calls and then
@@ -444,21 +494,85 @@ def tree_output(msg: ArrayLike) -> Output:
         # A one-chunk message is the root of its own tree, with no parent above
         # it — so it is a chunk output, not a parent output.
         return chunk_output(
-            _block_words(message), length, fnp.zeros((batch, 2), dtype=U32)
+            _block_words(message), length, fnp.zeros((batch, 2), dtype=U32), mode
         )
 
-    nodes = _chunk_chaining_values(message, nchunks)
+    nodes = _chunk_chaining_values(message, nchunks, mode)
     while nodes.shape[1] > 2:
         pairs, odd = divmod(nodes.shape[1], 2)
         paired = nodes[:, : 2 * pairs].reshape(batch * pairs, 2, 8)
-        parents = chaining_value(parent_output(paired[:, 0], paired[:, 1])).reshape(
-            batch, pairs, 8
-        )
+        parents = chaining_value(
+            parent_output(paired[:, 0], paired[:, 1], mode)
+        ).reshape(batch, pairs, 8)
         # An odd node at the end has no sibling on this level and pairs with
         # whatever the levels above hand it, so it rides up untouched.
         nodes = fnp.concatenate([parents, nodes[:, -1:]], axis=1) if odd else parents
 
-    return parent_output(nodes[:, 0], nodes[:, 1])
+    return parent_output(nodes[:, 0], nodes[:, 1], mode)
+
+
+def _bytes_array(data: ArrayLike | bytes) -> Array:
+    """Bytes, or an array of them, as uint8 — so a literal needs no wrapping."""
+    if isinstance(data, bytes | bytearray):
+        return fnp.asarray(np.frombuffer(bytes(data), dtype=np.uint8))
+    return fnp.asarray(data, dtype=fnp.uint8)
+
+
+def hash_mode() -> Mode:
+    """Plain hash mode: the IV as the key, and no mode flag at all.
+
+    Spec section 2.3. The mode every consumer that just wants "the BLAKE3 of
+    this" is asking for, and the one the published `hash` column pins.
+    """
+    return Mode(fnp.asarray(IV, dtype=U32), 0)
+
+
+def keyed_mode(key: ArrayLike | bytes) -> Mode:
+    """Keyed hashing: a 32-byte key in place of the IV, `KEYED_HASH` throughout.
+
+    Spec section 2.3. This is the mode that makes BLAKE3 a PRF rather than a
+    digest, and the key reaching *every* compression — not only the root's — is
+    what stops a chaining value computed under one key being reusable under
+    another.
+
+    **The key is an operand, not a host constant**, so it may be a tracer: a
+    caller keying per call compiles once and re-keys without re-tracing, and the
+    key stays out of the compiled program's constant pool. `bytes` is accepted
+    for the literal case and *does* bake in, which is the trade
+    [`byte_hashes.py`](byte_hashes.py) makes to fit the `ByteHash` seam.
+    """
+    words = _bytes_array(key)
+    if words.shape != (KEY_LEN,):
+        raise ValueError(f"key must be {KEY_LEN} bytes, got {words.shape}")
+    # Little-endian, like every other word BLAKE3 reads — the key is the eight
+    # words a compression's chaining value would otherwise be.
+    return Mode(pack_le(words), KEYED_HASH)
+
+
+def derive_key_mode(context: str | bytes) -> Mode:
+    """Key derivation's second pass: the context key as the key, and its flag.
+
+    Spec section 2.3's two-pass mode. The context string is itself hashed —
+    under `DERIVE_KEY_CONTEXT`, in hash mode's key — and its 32-byte output is
+    the key the material pass opens from. Both passes are whole BLAKE3 hashes of
+    the same construction, so this is `tree_output` twice rather than anything
+    of its own.
+
+    **The context pass runs on the device like any other hash**, even though the
+    context is a host constant: hashing it on the host would mean a second
+    BLAKE3 in shipped code, and `docs/reference/conventions.md` is explicit that
+    two implementations of one standard agreeing is worth nothing. It costs one
+    compression for a context that fits a block, and the standard requires the
+    string be hardcoded — so it is a constant XLA is free to fold.
+
+    The output words are taken as words rather than through bytes: a root's
+    first eight words *are* its 32-byte digest little-endian, which is exactly
+    the packing a key is read with.
+    """
+    data = context.encode() if isinstance(context, str) else bytes(context)
+    context_pass = replace(hash_mode(), flags=DERIVE_KEY_CONTEXT)
+    words = root_words(tree_output(_bytes_array(data).reshape(1, -1), context_pass))
+    return Mode(words[0, :8], DERIVE_KEY_MATERIAL)
 
 
 def digest(msg: ArrayLike) -> Array:
@@ -471,7 +585,7 @@ def digest(msg: ArrayLike) -> Array:
     different computation, which is the standard's own construction and why this
     is `root_bytes` at one block rather than a path of its own.
     """
-    return xof(msg, 32)
+    return xof(msg, DIGEST_LEN)
 
 
 def xof(msg: ArrayLike, out_len: int) -> Array:
@@ -481,4 +595,43 @@ def xof(msg: ArrayLike, out_len: int) -> Array:
     output length. `digest` is this at 32, which is the standard's own
     construction rather than a shortcut — the digest is the head of the stream.
     """
-    return root_bytes(tree_output(msg), out_len)
+    return root_bytes(tree_output(msg, hash_mode()), out_len)
+
+
+def keyed_digest(key: ArrayLike | bytes, msg: ArrayLike) -> Array:
+    """Keyed BLAKE3: uint8 `[B, L]` under a 32-byte key -> `[B, 32]`.
+
+    Byte-identical to the standard's `keyed_hash` per message. `digest` is this
+    with the IV as the key and the mode flag dropped, which is the only
+    difference between the two — a keyed hash of a message shares no compression
+    with the unkeyed one.
+    """
+    return keyed_xof(key, msg, DIGEST_LEN)
+
+
+def keyed_xof(key: ArrayLike | bytes, msg: ArrayLike, out_len: int) -> Array:
+    """Keyed BLAKE3 read out to `out_len` bytes: uint8 `[B, L]` -> `[B, out_len]`.
+
+    The stream is extendable in keyed mode for the reason it is in hash mode —
+    the mode reaches the node, and reading it further is the root's own
+    compression repeated (spec section 2.6).
+    """
+    return root_bytes(tree_output(msg, keyed_mode(key)), out_len)
+
+
+def derive_key(context: str | bytes, key_material: ArrayLike, out_len: int) -> Array:
+    """BLAKE3's KDF: `out_len` bytes derived from `key_material` under `context`.
+
+    context      : the domain separator, hashed once into the key the material
+                   pass opens from. The standard asks for a hardcoded, globally
+                   unique UTF-8 string — application name, date, purpose — so
+                   that two uses of one key material cannot collide.
+    key_material : uint8 `[B, L]`, the secret being derived from; it may be a
+                   tracer, and it is the *message*, never the key
+
+    Byte-identical to the standard's `derive_key` per row. Which of the two
+    arguments is hashed as what is the whole of this mode's fragility: the
+    context is the domain and the material is the message, and swapping them
+    derives well-formed bytes of the wrong thing.
+    """
+    return root_bytes(tree_output(key_material, derive_key_mode(context)), out_len)
