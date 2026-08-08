@@ -614,17 +614,26 @@ def derive_key_mode(context: str | bytes) -> Mode:
     BLAKE3 in shipped code, and `docs/reference/conventions.md` is explicit that
     two implementations of one standard agreeing is worth nothing.
 
-    **It costs emitted program, not arithmetic.** The pass is re-emitted per
-    call site — every `derive_key` in a traced program carries its own copy,
-    even at one shared context — which is one extra compression per site: a
-    64-byte message goes from 1 to 2 and a 1025-byte one from 17 to 18, both
-    countable with `blake3_test._compressions`. XLA then folds all of it:
-    optimized-HLO flop counts are identical to plain `digest`, and identical
-    again at a 2049-byte context that emits 21 compressions. So a consumer with
-    many derive call sites in one `@jit` pays compile time and nothing at run
-    time. Memoizing the `Mode` on a caller's object is not the fix it looks
-    like — if the first call happens under a trace, the cached `key_words` is a
-    tracer that leaks out of it.
+    **It costs emitted program, and usually not arithmetic.** The pass is
+    re-emitted per call site — every `derive_key` in a traced program carries
+    its own copy, even at one shared context — which is one extra compression
+    per site: a 64-byte message goes from 1 to 2 and a 1025-byte one from 17 to
+    18, both countable with `blake3_test._compressions`. That part is exact.
+
+    What happens to those compressions afterwards is a *heuristic*, not a
+    guarantee. At the one-block contexts the standard asks for, XLA folds the
+    whole pass away and the optimized flop count is identical to plain
+    `digest`. At a context of a couple of chunks it has been seen both to fold
+    and, on a loaded machine, to spend a minute trying and give up — shipping
+    the arithmetic it would otherwise have folded. Constant folding is time-
+    budgeted, so the outcome depends on the box rather than on the program. A
+    consumer keeping the context to a domain separator never meets this; one
+    tempted to hash something large as a context should measure rather than
+    assume.
+
+    Memoizing the `Mode` on a caller's object is not the fix it looks like — if
+    the first call happens under a trace, the cached `key_words` is a tracer
+    that leaks out of it.
 
     The output words are taken as words rather than through bytes: a root's
     first eight words *are* its 32-byte digest little-endian, which is exactly

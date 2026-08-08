@@ -299,7 +299,10 @@ class PendingOutputTest(absltest.TestCase):
         # `tree_output` is the seam the XOF and a keyed root will finish
         # differently, so what it hands back has to be the *unrun* compression:
         # a chunk when the message is one chunk, a parent when it is more.
-        one = tree_output(_rows(official_input(CHUNK_LEN)), hash_mode())
+        # Two blocks, not a whole chunk: the flags read below are the same at
+        # both, and a chunk runs fifteen compressions this discards. `many` has
+        # no such slack — 1025 bytes is the shortest two-chunk message there is.
+        one = tree_output(_rows(official_input(2 * BLOCK_LEN)), hash_mode())
         many = tree_output(_rows(official_input(CHUNK_LEN + 1)), hash_mode())
         # Exact equality, so it also says neither carries ROOT — that belongs
         # to the finishing call alone, which is what lets the same node be
