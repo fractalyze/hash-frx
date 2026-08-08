@@ -115,13 +115,22 @@ def blocks_of(data: bytes, size: int = BLOCK_LEN) -> list[bytes]:
     return [data[i : i + size] for i in range(0, len(data), size)] or [b""]
 
 
-def chunk_output(data: bytes, counter: int = 0, final_flags: int = 0) -> list[int]:
+def chunk_output(
+    data: bytes,
+    counter: int = 0,
+    final_flags: int = 0,
+    final_counter: int | None = None,
+) -> list[int]:
     """One chunk's last compression, all 16 output words.
 
     `final_flags` rides on that last compression and no other — ROOT for a chunk
     that is the root of its tree, nothing for one a tree stands on. Everything
     below it is fixed by the chunk: CHUNK_START on the first block, CHUNK_END on
     the last, `counter` on every one, and each block's own byte count.
+
+    `final_counter` replaces `counter` on that last compression alone, which is
+    what an extendable output does to a root chunk: the chain below it already
+    ran at the chunk's own index and does not re-run per output block.
     """
     if len(data) > CHUNK_LEN:
         raise ValueError(f"{len(data)} bytes exceeds one {CHUNK_LEN}-byte chunk")
@@ -134,13 +143,17 @@ def chunk_output(data: bytes, counter: int = 0, final_flags: int = 0) -> list[in
 
     last = blocks[-1]
     flags = final_flags | CHUNK_END | (CHUNK_START if len(blocks) == 1 else 0)
-    return compress(cv, words_of(last), counter, len(last), flags)
+    final = counter if final_counter is None else final_counter
+    return compress(cv, words_of(last), final, len(last), flags)
 
 
 def _subtree_output(
-    chunks: list[bytes], lo: int, hi: int, final_flags: int
+    chunks: list[bytes], lo: int, hi: int, final_flags: int, counter: int = 0
 ) -> list[int]:
     """The output words of the node covering chunks `[lo, hi)`.
+
+    `counter` is the output-block counter and reaches the root's own
+    compression only; every node below it keeps the counter its own role fixes.
 
     Spec section 2.1 stated as the recursion it is written as: the left subtree
     takes the largest power of two strictly below the chunk count and the right
@@ -150,16 +163,41 @@ def _subtree_output(
     both had read the spec the same way.
     """
     if hi - lo == 1:
-        return chunk_output(chunks[lo], lo, final_flags)
+        # The output-block counter reaches a root chunk's *last* compression
+        # only. Its leading blocks already ran at the chunk's own index and are
+        # not re-run per output block — reading section 2.6 as replacing the
+        # counter everywhere gets every multi-block single-chunk message wrong
+        # and every other length right.
+        final = counter if final_flags & ROOT else None
+        return chunk_output(chunks[lo], lo, final_flags, final)
 
     left = 1
     while left * 2 < hi - lo:
         left *= 2
     cv = _subtree_output(chunks, lo, lo + left, 0)[:8]
     right = _subtree_output(chunks, lo + left, hi, 0)[:8]
-    # A parent reads the key words rather than a chaining value, its counter is
-    # always zero, and its block is the two child chaining values (section 2.5).
-    return compress(list(IV), cv + right, 0, BLOCK_LEN, final_flags | PARENT)
+    # A parent reads the key words rather than a chaining value, and its block
+    # is the two child chaining values (section 2.5). Its counter is zero for
+    # every node below the root; at the root it carries the output-block index,
+    # which is the one place section 2.6 reaches.
+    return compress(list(IV), cv + right, counter, BLOCK_LEN, final_flags | PARENT)
+
+
+def hash_xof(data: bytes, out_len: int) -> bytes:
+    """BLAKE3 of any input, read out to `out_len` bytes.
+
+    Spec section 2.6: the root's compression is repeated with the output block
+    counter running 0, 1, 2, … and each run's sixteen words, little-endian, are
+    64 bytes of the stream. Nothing chains — every block reads the same root
+    node — which is why a digest is the head of this rather than a different
+    computation, and why the frx side can run the blocks in one batched call.
+    """
+    chunks = blocks_of(data, CHUNK_LEN)
+    stream = bytearray()
+    for counter in range(-(-out_len // BLOCK_LEN)):
+        words = _subtree_output(chunks, 0, len(chunks), ROOT, counter)
+        stream += b"".join(w.to_bytes(4, "little") for w in words)
+    return bytes(stream[:out_len])
 
 
 def hash_tree(data: bytes) -> bytes:

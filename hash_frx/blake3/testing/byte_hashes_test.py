@@ -64,15 +64,24 @@ class SeamConformanceTest(absltest.TestCase):
         # rows do not interact, against the reference oracle and through the
         # tree, which is more than a delegation can break.
         msg = _rows(official_input(200), official_input(200))
-        out = np.asarray(Blake3().digest(msg))
-        self.assertEqual(out.shape, (2, Blake3().digest_size))
+        for size in (32, 131):
+            with self.subTest(output_size=size):
+                out = np.asarray(Blake3(size).digest(msg))
+                self.assertEqual(out.shape, (2, Blake3(size).digest_size))
 
     def test_value_identity_keeps_the_seam_re_trace_safe(self) -> None:
-        # Param-free, so equality is by type. Identity equality here would make
-        # every freshly built instance a new jit cache key and silently re-trace
-        # a consumer's enclosing zone.
+        # The output length is part of the value, so two lengths are two hashes
+        # rather than one asked twice. Identity equality would make every fresh
+        # instance a new jit cache key and silently re-trace a consumer's zone;
+        # by-type equality would do the reverse and hand a consumer that asked
+        # for 64 bytes the trace built for 32. Neither errors, so both have to
+        # be pinned here.
         self.assertEqual(Blake3(), Blake3())
         self.assertEqual(hash(Blake3()), hash(Blake3()))
+        self.assertEqual(Blake3(64), Blake3(64))
+        self.assertEqual(hash(Blake3(64)), hash(Blake3(64)))
+        self.assertNotEqual(Blake3(32), Blake3(64))
+        self.assertEqual(Blake3(), Blake3(32))
         self.assertNotEqual(Blake3(), object())
 
     def test_digest_accepts_a_tracer(self) -> None:

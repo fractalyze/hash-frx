@@ -32,10 +32,18 @@ from hash_frx.blake3.blake3 import (
     parent_output,
     root_words,
     tree_output,
+    xof,
 )
 from hash_frx.blake3.compress import ROOT
 from hash_frx.blake3.testing import reference as ref
-from hash_frx.blake3.testing.vectors import ALL_LENGTHS, official_input
+from hash_frx.blake3.testing.vectors import (
+    ALL_LENGTHS,
+    EXTENDED,
+    EXTENDED_MULTI_BLOCK,
+    EXTENDED_MULTI_CHUNK,
+    EXTENDED_SINGLE_BLOCK,
+    official_input,
+)
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.word import split
 
@@ -57,15 +65,15 @@ def _words(data: bytes) -> frx.Array:
     return fnp.asarray(np.array([[ref.words_of(b) for b in blocks]], dtype=_U32))
 
 
-def _compressions(length: int) -> int:
-    """How many `compress` calls a `length`-byte digest emits.
+def _compressions(length: int, out_len: int = 32) -> int:
+    """How many `compress` calls reading `length` bytes out to `out_len` emits.
 
     Read off the lowered module rather than by patching, so it counts what the
     program actually carries: every call site is a copy of the compression body,
     and a body is exactly 60 xors.
     """
-    text = frx.jit(digest).lower(_rows(official_input(length))).as_text()
-    xors = text.count("stablehlo.xor")
+    text = frx.jit(lambda m: xof(m, out_len)).lower(_rows(official_input(length)))
+    xors = text.as_text().count("stablehlo.xor")
     assert xors % 60 == 0, f"{xors} xors is not a whole number of compressions"
     return xors // 60
 
@@ -273,7 +281,105 @@ class PendingOutputTest(absltest.TestCase):
         self.assertEqual(int(np.asarray(many.flags)[0]), ref.PARENT)
 
 
+class ExtendableOutputTest(parameterized.TestCase):
+    @parameterized.parameters(*EXTENDED)
+    def test_official_extended_output(self, length: int, expected: str) -> None:
+        # The published `hash` field is 131 bytes, of which the digest is the
+        # first 32. So the same table anchors the stream, at every input length,
+        # with no second source — and 131 bytes is three output blocks and a
+        # 3-byte remainder, so the counter running 0/1/2 and the partial tail
+        # are both on the path here.
+        got = np.asarray(xof(_rows(official_input(length)), 131))
+        self.assertEqual(bytes(got[0]).hex(), expected)
+
+    @parameterized.parameters(
+        EXTENDED_SINGLE_BLOCK[-1], EXTENDED_MULTI_BLOCK[0], EXTENDED_MULTI_CHUNK[-1]
+    )
+    def test_the_digest_is_the_head_of_the_stream(
+        self, length: int, expected: str
+    ) -> None:
+        # That the two published columns agree is structural in `vectors.py` —
+        # the digest one is sliced off this one — so what is left to check is
+        # that `digest` and `xof` agree with it *through the implementation*,
+        # once per layer. One row each: a chunk with no tree, a chunk that
+        # chains, and a parent-node tree.
+        message = _rows(official_input(length))
+        self.assertEqual(bytes(np.asarray(digest(message))[0]).hex(), expected[:64])
+        self.assertEqual(bytes(np.asarray(xof(message, 131))[0]).hex(), expected)
+
+    @parameterized.parameters(1, 63, 64, 65, 128, 200)
+    def test_every_output_length_is_a_prefix(self, out_len: int) -> None:
+        # A partial trailing output block is a slice of a whole one, so a length
+        # that is not a multiple of 64 must not disturb the bytes before it.
+        # One length per shape: short of a block, one short, exact, one over,
+        # an exact multiple, and a partial tail several blocks in.
+        #
+        # Read at a multi-block single chunk. That is the root kind the counter
+        # subtlety bites — its leading blocks already ran at the chunk's index
+        # and must not be re-run at the output counter — and it is the case
+        # `reference.py` names for the same reason. A larger input would cost
+        # a tree per parameter and pin nothing this does not.
+        data = official_input(129)
+        got = np.asarray(xof(_rows(data), out_len))
+        self.assertEqual(out_len, got.shape[1])
+        self.assertEqual(bytes(got[0]), ref.hash_xof(data, out_len))
+
+    def test_rejects_an_empty_output(self) -> None:
+        with self.assertRaises(ValueError):
+            xof(_rows(official_input(64)), 0)
+
+    def test_rows_do_not_interact_across_the_stream(self) -> None:
+        # Every operand is spread one row per output block before the batched
+        # call, so the rows of a message sit next to each other rather than
+        # interleaved with another message's. At a batch of one those two
+        # layouts are the same array, which is why this needs three distinct
+        # messages: a transposed spread hands row 0's node to row 1's counter
+        # and still returns well-formed bytes of the right length.
+        rng = np.random.default_rng(41)
+        messages = [
+            bytes(rng.integers(0, 256, size=CHUNK_LEN + 7, dtype=np.uint8))
+            for _ in range(3)
+        ]
+        got = np.asarray(xof(_rows(*messages), 131))
+        for i, message in enumerate(messages):
+            with self.subTest(row=i):
+                self.assertEqual(bytes(got[i]), ref.hash_xof(message, 131))
+
+    def test_the_stream_is_not_the_digest_repeated(self) -> None:
+        # The counter is what separates one output block from the next, so a
+        # version that dropped it would return the same 64 bytes over and over
+        # — well-formed, the right length, and wrong.
+        got = np.asarray(xof(_rows(official_input(64)), 128))[0]
+        self.assertNotEqual(bytes(got[:64]), bytes(got[64:]))
+
+
 class LoweringTest(absltest.TestCase):
+    def test_output_length_costs_no_compressions(self) -> None:
+        # The output blocks are the rows of ONE batched call — each reads the
+        # same root node and differs only in its counter — so the program does
+        # not grow with the output at all. Sixteen blocks emit what one does.
+        #
+        # The arithmetic does grow, of course: those are sixteen rows of that
+        # call. What is pinned here is that they are rows and not call sites,
+        # which is the difference between this and a sponge's squeeze, and the
+        # thing a sequential rewrite would silently give up.
+        #
+        # Read at a one-block input, where the whole program is that single
+        # compression: the claim is then 1 site against the 16 a sequential
+        # squeeze would emit, rather than 17 against 32 — the tree underneath
+        # is not what this is about, and paying for it here buys nothing.
+        for out_len in (32, 131, 1024):
+            with self.subTest(out_len=out_len):
+                self.assertEqual(_compressions(BLOCK_LEN, out_len), 1)
+
+    def test_the_extendable_body_is_fusion_ready(self) -> None:
+        # The spread that widens one node to a row per output block is the new
+        # shape here, and it has to stay `broadcast_in_dim`/`reshape` — a
+        # per-row gather would return the same bytes and split the kernel. The
+        # tree beneath is covered by the two cases below, so this reads at the
+        # smallest input with more than one output block to spread.
+        assert_fusion_ready(lambda m: xof(m, 131), _rows(official_input(129)))
+
     def test_a_short_last_chunk_costs_no_compressions(self) -> None:
         # A short last chunk shares the batched chain to its own last block and
         # rejoins the full chunks to finish, so it emits nothing extra at all.
