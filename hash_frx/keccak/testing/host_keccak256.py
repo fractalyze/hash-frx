@@ -34,6 +34,8 @@ from hash_frx.keccak.byte_hashes import (
 from hash_frx.keccak.testing.reference import sponge
 
 if TYPE_CHECKING:
+    from _typeshed import ReadableBuffer
+
     from hash_frx.byte_hash import ByteHash
 
 
@@ -47,8 +49,12 @@ class HostKeccak256(_HostKeccak):
     def __init__(self) -> None:
         super().__init__(KECCAK256_DIGEST_SIZE)
 
-    def _hash_one(self, data: bytes) -> bytes:
-        return sponge(data, KECCAK256_RATE, KECCAK256_SUFFIX, self.digest_size)
+    def _hash_one(self, data: ReadableBuffer) -> bytes:
+        # The shipped rows take the row straight from `host_digest` and let the
+        # buffer protocol do the rest; the oracle asks for `bytes`, and one copy
+        # is nothing beside a pure-Python permutation two orders of magnitude
+        # slower than `hashlib`.
+        return sponge(bytes(data), KECCAK256_RATE, KECCAK256_SUFFIX, self.digest_size)
 
 
 if TYPE_CHECKING:
