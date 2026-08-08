@@ -620,20 +620,18 @@ def derive_key_mode(context: str | bytes) -> Mode:
     per site: a 64-byte message goes from 1 to 2 and a 1025-byte one from 17 to
     18, both countable with `blake3_test._compressions`. That part is exact.
 
-    What happens to those compressions afterwards is a *heuristic*, not a
-    guarantee. At the one-block contexts the standard asks for, XLA folds the
-    whole pass away in a fraction of a second and the optimized flop count is
-    identical to plain `digest`. At a context of a couple of chunks the same
-    program has been measured folding quickly, folding after minutes, and being
-    abandoned after a minute — shipping the arithmetic it would otherwise have
-    folded. Constant folding is time-budgeted, so the outcome depends on the box
-    and its load rather than on the program, and a *slow* compile is not a
-    reliable sign of either result.
+    What happens to those compressions afterwards is XLA's, and it folds them:
+    the optimized flop count comes out identical to plain `digest` at every
+    context measured, from the one-block separator the standard asks for up to
+    three chunks, each compiling in a few seconds. That is an optimizer
+    heuristic rather than a property of this code, so it is worth stating as a
+    measurement rather than a guarantee — a large context that failed to fold
+    would ship the arithmetic instead, and only the flop count would say so.
 
-    A consumer keeping the context to a domain separator never meets any of
-    this. One tempted to hash something large as a context should measure both
-    the compile and the flops rather than assume, and should read a compile that
-    will not finish as this rather than as a hang.
+    A consumer keeping the context to a domain separator, which is what the
+    standard mandates, stays well inside the measured range. One tempted to
+    hash something large as a context should read the flop count rather than
+    assume.
 
     Memoizing the `Mode` on a caller's object is not the fix it looks like — if
     the first call happens under a trace, the cached `key_words` is a tracer
