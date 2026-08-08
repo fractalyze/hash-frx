@@ -622,14 +622,18 @@ def derive_key_mode(context: str | bytes) -> Mode:
 
     What happens to those compressions afterwards is a *heuristic*, not a
     guarantee. At the one-block contexts the standard asks for, XLA folds the
-    whole pass away and the optimized flop count is identical to plain
-    `digest`. At a context of a couple of chunks it has been seen both to fold
-    and, on a loaded machine, to spend a minute trying and give up — shipping
-    the arithmetic it would otherwise have folded. Constant folding is time-
-    budgeted, so the outcome depends on the box rather than on the program. A
-    consumer keeping the context to a domain separator never meets this; one
-    tempted to hash something large as a context should measure rather than
-    assume.
+    whole pass away in a fraction of a second and the optimized flop count is
+    identical to plain `digest`. At a context of a couple of chunks the same
+    program has been measured folding quickly, folding after minutes, and being
+    abandoned after a minute — shipping the arithmetic it would otherwise have
+    folded. Constant folding is time-budgeted, so the outcome depends on the box
+    and its load rather than on the program, and a *slow* compile is not a
+    reliable sign of either result.
+
+    A consumer keeping the context to a domain separator never meets any of
+    this. One tempted to hash something large as a context should measure both
+    the compile and the flops rather than assume, and should read a compile that
+    will not finish as this rather than as a hang.
 
     Memoizing the `Mode` on a caller's object is not the fix it looks like — if
     the first call happens under a trace, the cached `key_words` is a tracer
