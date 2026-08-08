@@ -121,6 +121,34 @@ dispatch-bound rather than compute-bound, and these are CPU-backend numbers — 
 a sequential caller pays the gap on every machine, not just a machine without a
 GPU.
 
+**Every family has host rows, and one body runs them all.** `host_digest`
+([`byte_hash.py`](../../hash_frx/byte_hash.py)) is that body — `hash_one` per
+message, over the batch row's own buffer rather than a `bytes` copy of it — so a
+row is that callable plus its `digest_size`, and a new one is a two-line
+`_hash_one` instead of a fourth transcription of the same loop.
+
+**A host row may cost a dependency, and BLAKE3's does.** SHA-256 and the FIPS 202
+rows ride `hashlib`; the standard library has no BLAKE3 and will not grow one, so
+`HostBlake3` and its keyed and derive-key siblings are built on `blake3`, the
+BLAKE3 team's own Rust binding, and it is a declared runtime dependency of this
+package. What clears that bar is the property the row exists for: native speed is
+the whole reason to choose a host row, and a plain-Python implementation is
+slower than the device dispatch it would be standing in for — which is why
+`HostKeccak256` is `testonly` and these are not.
+
+The dependency buys a second thing the published vectors cannot: a differential
+partner that is not this tree. The binding wraps the reference implementation the
+vectors are generated from, so device-against-host agreement at lengths nobody
+published is evidence about the implementation rather than about one reading of
+the spec applied twice — which is what
+[the byte-exactness rule](../reference/conventions.md) asks for when it refuses a
+pin against another implementation in this tree.
+
+It also narrows one row. The binding takes a derive-key context as a `str`, so
+`HostBlake3DeriveKey` refuses a context that is not valid UTF-8 where
+`Blake3DeriveKey` hashes it. The standard names that context UTF-8, so a caller
+following it never meets the narrowing.
+
 ## Names say the construction, not the shape
 
 An identifier names the construction it implements —
