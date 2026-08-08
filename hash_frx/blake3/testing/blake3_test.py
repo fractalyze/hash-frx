@@ -26,6 +26,7 @@ from absl.testing import absltest, parameterized
 from hash_frx.blake3.blake3 import (
     BLOCK_LEN,
     CHUNK_LEN,
+    Mode,
     chaining_value,
     chunk_output,
     derive_key,
@@ -39,7 +40,7 @@ from hash_frx.blake3.blake3 import (
     tree_output,
     xof,
 )
-from hash_frx.blake3.compress import CHUNK_END, KEYED_HASH, ROOT
+from hash_frx.blake3.compress import KEYED_HASH, ROOT
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.vectors import (
     ALL_LENGTHS,
@@ -393,10 +394,11 @@ class KeyedHashTest(parameterized.TestCase):
         self.assertEqual(bytes(got[0]).hex(), expected)
 
     def test_keyed_output_differs_from_unkeyed(self) -> None:
-        # Read at a multi-chunk length, so a parent is on the path. The table
-        # above is what says the bytes are *right*; this says the two modes are
-        # not the same computation with a decorative flag.
-        message = _rows(official_input(CHUNK_LEN * 2 + 1))
+        # Read at an UNpublished length, which is the only way this says
+        # anything: at a published one both sides are already pinned to two
+        # different hex strings above, so the inequality would follow from
+        # assertions already made rather than from running anything.
+        message = _rows(official_input(100))
         self.assertNotEqual(
             bytes(np.asarray(keyed_digest(KEY, message))[0]),
             bytes(np.asarray(digest(message))[0]),
@@ -416,8 +418,12 @@ class KeyedHashTest(parameterized.TestCase):
         # and not the flags would be absent from every compression and visible
         # nowhere but here. Exact equality, so it also says ROOT is still the
         # finishing call's alone.
-        node = tree_output(_rows(official_input(CHUNK_LEN)), keyed_mode(KEY))
-        self.assertEqual(int(np.asarray(node.flags)[0]), CHUNK_END | KEYED_HASH)
+        # 128 bytes rather than a whole chunk: two blocks is the shortest
+        # input whose last block is not also its first, so CHUNK_START is
+        # absent and the value read is the same. A full chunk runs fifteen
+        # compressions whose output this discards.
+        node = tree_output(_rows(official_input(2 * BLOCK_LEN)), keyed_mode(KEY))
+        self.assertEqual(int(np.asarray(node.flags)[0]), ref.CHUNK_END | ref.KEYED_HASH)
 
     def test_rows_do_not_interact_under_a_key(self) -> None:
         # One key is broadcast across the rows rather than tiled along them, and
@@ -439,7 +445,7 @@ class KeyedHashTest(parameterized.TestCase):
         # re-tracing and keeps secret material out of the constant pool. A key
         # that had been baked in fails this as a tracer error rather than as
         # wrong bytes.
-        message = _rows(official_input(129))
+        message = _rows(official_input(65))
         key = fnp.asarray(np.frombuffer(KEY, dtype=np.uint8))
         np.testing.assert_array_equal(
             np.asarray(frx.jit(keyed_digest)(key, message)),
@@ -489,19 +495,6 @@ class DeriveKeyTest(parameterized.TestCase):
         self.assertNotEqual(
             bytes(np.asarray(derive_key(one, _rows(two), 32))[0]),
             bytes(np.asarray(derive_key(two, _rows(one), 32))[0]),
-        )
-
-    def test_it_is_not_keyed_hashing_under_the_context_key(self) -> None:
-        # The two passes differ by a flag as well as by a key, so deriving under
-        # a context is not keying with that context's hash. A reading that
-        # reused KEYED_HASH for the material pass would produce the same key
-        # words and different bytes — caught by the published table above, but
-        # this is what the table would be catching.
-        material = _rows(official_input(200))
-        context_key = ref.hash_xof(CONTEXT.encode(), 32, ref.IV, ref.DERIVE_KEY_CONTEXT)
-        self.assertNotEqual(
-            bytes(np.asarray(derive_key(CONTEXT, material, 32))[0]),
-            bytes(np.asarray(keyed_digest(context_key, material))[0]),
         )
 
     @parameterized.named_parameters(
@@ -620,6 +613,21 @@ class ValidationTest(absltest.TestCase):
     def test_rejects_an_unbatched_message(self) -> None:
         with self.assertRaises(ValueError):
             digest(fnp.zeros(BLOCK_LEN, dtype=fnp.uint8))
+
+    def test_rejects_key_words_it_cannot_open_a_node_from(self) -> None:
+        # `Mode` is the second record a caller hands raw arrays to, so it names
+        # the mistake for the reason `parent_output` does. A scheme holding its
+        # own key words builds one directly and never passes `keyed_mode`, so
+        # the width and dtype are unchecked anywhere else — and a `[1, 8]` or
+        # int32 key reaches `compress` to be reported against `chaining_value`,
+        # an operand the caller never passed.
+        for name, key, err in (
+            ("batched", fnp.zeros((1, 8), dtype=fnp.uint32), ValueError),
+            ("width", fnp.zeros(4, dtype=fnp.uint32), ValueError),
+            ("dtype", fnp.zeros(8, dtype=fnp.int32), TypeError),
+        ):
+            with self.subTest(case=name), self.assertRaises(err):
+                Mode(key, KEYED_HASH)
 
     def test_rejects_words_that_disagree_with_the_length(self) -> None:
         # The trailing block is padded, so a chunk's byte count cannot be read

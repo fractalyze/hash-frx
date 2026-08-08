@@ -527,8 +527,9 @@ class Sha256:
     def __eq__(self, other: object) -> bool:
         # By type, because SHA-256 is parameterless — but `type(other) is not
         # type(self)` rather than `isinstance`, which is asymmetric under
-        # subclassing and blocks Python's reflected-`__eq__` fallback. The rest
-        # of the family agrees on this form.
+        # subclassing and blocks Python's reflected-`__eq__` fallback. Every
+        # `ByteHash` now agrees on this form; the `Permutation` side still
+        # spells the parameterless case with `isinstance`.
         if type(other) is not type(self):
             return NotImplemented
         return True

@@ -88,7 +88,7 @@ def _units(length: int, size: int) -> int:
     return max(1, -(-length // size))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Mode:
     """Which of BLAKE3's three modes is running — the whole of the difference.
 
@@ -101,11 +101,28 @@ class Mode:
     **One key serves the whole batch.** It is a parameter of the hash, the way
     an output length is, rather than something a message carries: `[8]` words
     broadcast across the rows rather than `[B, 8]` tiled along them. A caller
-    keying per message hashes per message.
+    wanting a key *per* message maps over both — `frx.vmap` of a keyed call over
+    `(key, msg)` — rather than hashing one message at a time.
+
+    `eq=False` because the dataclass-derived `__eq__` would be element-wise over
+    `key_words` and the derived `__hash__` would hash an `Array`
+    (`docs/reference/conventions.md`). A mode is an operand record, not a
+    parameter record a consumer compares.
     """
 
     key_words: Array  # uint32 [8]
     flags: int
+
+    def __post_init__(self) -> None:
+        # The second record a caller hands raw arrays to, so it validates for
+        # the reason `parent_output` does: a `[B, 8]` or int32 key otherwise
+        # surfaces from `compress` as a complaint about `chaining_value`, an
+        # operand the caller never passed. A scheme that derives its own key
+        # words reaches this without going through `keyed_mode`.
+        if self.key_words.shape != (8,):
+            raise ValueError(f"key_words must be [8], got {self.key_words.shape}")
+        if self.key_words.dtype != U32:
+            raise TypeError(f"key_words must be uint32, got {self.key_words.dtype}")
 
 
 def _key_words(mode: Mode, batch: int) -> Array:
@@ -513,9 +530,21 @@ def tree_output(msg: ArrayLike, mode: Mode) -> Output:
 
 def _bytes_array(data: ArrayLike | bytes) -> Array:
     """Bytes, or an array of them, as uint8 — so a literal needs no wrapping."""
-    if isinstance(data, bytes | bytearray):
-        return fnp.asarray(np.frombuffer(bytes(data), dtype=np.uint8))
+    if isinstance(data, bytes):
+        return fnp.asarray(np.frombuffer(data, dtype=np.uint8))
     return fnp.asarray(data, dtype=fnp.uint8)
+
+
+def context_bytes(context: str | bytes) -> bytes:
+    """A derive-key context as the bytes that are actually hashed.
+
+    The standard names the context UTF-8, so a `str` and its encoding are one
+    context rather than two. Exported because `Blake3DeriveKey` has to compare
+    on the *same* answer this hashes on: a row whose value identity disagreed
+    with what it derives would serve one context's trace under another's name,
+    and neither side would error.
+    """
+    return context.encode() if isinstance(context, str) else bytes(context)
 
 
 def hash_mode() -> Mode:
@@ -561,17 +590,31 @@ def derive_key_mode(context: str | bytes) -> Mode:
     **The context pass runs on the device like any other hash**, even though the
     context is a host constant: hashing it on the host would mean a second
     BLAKE3 in shipped code, and `docs/reference/conventions.md` is explicit that
-    two implementations of one standard agreeing is worth nothing. It costs one
-    compression for a context that fits a block, and the standard requires the
-    string be hardcoded — so it is a constant XLA is free to fold.
+    two implementations of one standard agreeing is worth nothing.
+
+    **It costs emitted program, not arithmetic.** The pass is re-emitted per
+    call site — every `derive_key` in a traced program carries its own copy,
+    even at one shared context — which measures as one extra compression per
+    site (a 64-byte message goes from 1 to 2, a 1025-byte one from 17 to 18) and
+    around a third more StableHLO and compile time for four sites. XLA then
+    folds all of it: optimized-HLO flop counts are identical to plain `digest`,
+    and identical again at a 2049-byte context that emits 21 compressions. So a
+    consumer with many derive call sites in one `@jit` pays compile time and
+    nothing at run time. Memoizing the `Mode` on a caller's object is not the
+    fix it looks like — if the first call happens under a trace, the cached
+    `key_words` is a tracer that leaks out of it.
 
     The output words are taken as words rather than through bytes: a root's
     first eight words *are* its 32-byte digest little-endian, which is exactly
     the packing a key is read with.
+
+    The context pass is a fourth `Mode` value, not a fourth mode: it is key
+    derivation's own first half, which is why it is built here rather than
+    exported beside the three.
     """
-    data = context.encode() if isinstance(context, str) else bytes(context)
+    data = _bytes_array(context_bytes(context))
     context_pass = replace(hash_mode(), flags=DERIVE_KEY_CONTEXT)
-    words = root_words(tree_output(_bytes_array(data).reshape(1, -1), context_pass))
+    words = root_words(tree_output(data.reshape(1, -1), context_pass))
     return Mode(words[0, :8], DERIVE_KEY_MATERIAL)
 
 
@@ -619,7 +662,9 @@ def keyed_xof(key: ArrayLike | bytes, msg: ArrayLike, out_len: int) -> Array:
     return root_bytes(tree_output(msg, keyed_mode(key)), out_len)
 
 
-def derive_key(context: str | bytes, key_material: ArrayLike, out_len: int) -> Array:
+def derive_key(
+    context: str | bytes, key_material: ArrayLike, out_len: int = DIGEST_LEN
+) -> Array:
     """BLAKE3's KDF: `out_len` bytes derived from `key_material` under `context`.
 
     context      : the domain separator, hashed once into the key the material
@@ -633,5 +678,10 @@ def derive_key(context: str | bytes, key_material: ArrayLike, out_len: int) -> A
     arguments is hashed as what is the whole of this mode's fragility: the
     context is the domain and the material is the message, and swapping them
     derives well-formed bytes of the wrong thing.
+
+    The default length is here rather than in a `derive_key_digest` sibling
+    because there is nothing for such a name to distinguish: `digest`/`xof` and
+    `keyed_digest`/`keyed_xof` are pairs only so that each mode has one spelling
+    of "32 bytes", and this mode's is the default.
     """
     return root_bytes(tree_output(key_material, derive_key_mode(context)), out_len)

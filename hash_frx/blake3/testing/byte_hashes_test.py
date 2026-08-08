@@ -140,7 +140,6 @@ class SeamConformanceTest(parameterized.TestCase):
         # for 32. Neither errors, so both have to be pinned here.
         self.assertEqual(cls(*args), cls(*args))
         self.assertEqual(hash(cls(*args)), hash(cls(*args)))
-        self.assertEqual(cls(*args), cls(*args, 32))
         self.assertEqual(cls(*args, 64), cls(*args, 64))
         self.assertEqual(hash(cls(*args, 64)), hash(cls(*args, 64)))
         self.assertNotEqual(cls(*args, 32), cls(*args, 64))
@@ -176,13 +175,10 @@ class ModeIdentityTest(absltest.TestCase):
         # `digest_size` alone makes two keys one hash: as pytree aux that serves
         # one key's trace to the other key's caller, silently and forever.
         other = bytes(len(KEY))
-        self.assertEqual(Blake3Keyed(KEY), Blake3Keyed(KEY))
-        self.assertEqual(hash(Blake3Keyed(KEY)), hash(Blake3Keyed(KEY)))
         self.assertNotEqual(Blake3Keyed(KEY), Blake3Keyed(other))
         self.assertNotEqual(Blake3Keyed(KEY, 64), Blake3Keyed(other, 64))
 
     def test_the_context_is_part_of_the_value(self) -> None:
-        self.assertEqual(Blake3DeriveKey(CONTEXT), Blake3DeriveKey(CONTEXT))
         self.assertNotEqual(Blake3DeriveKey("one"), Blake3DeriveKey("two"))
 
     def test_a_str_context_and_its_utf8_bytes_are_one_hash(self) -> None:

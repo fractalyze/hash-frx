@@ -10,11 +10,19 @@ every compression carries, and an output length.
 | `Blake3Keyed` | the caller's 32 bytes | `KEYED_HASH` |
 | `Blake3DeriveKey` | the hashed context string | `DERIVE_KEY_MATERIAL` |
 
-The first two columns are constants the standard fixes and the output length is
-the caller's, which is why the rows are types and the length is a parameter —
+What the standard fixes per row is the mode flag and *where* the key comes from
+— not the key's value, which is the caller's on two of the three. That is why
+the rows are types and the key, context and length are parameters;
 [`docs/reference/conventions.md`](../../docs/reference/conventions.md) states the
 rule for the family, including why every row takes a 32-byte default where
-`Shake256` refuses one. Keccak's file is laid out the same way.
+`Shake256` refuses one.
+
+Keccak's file is the same table one layer down: its rows differ by data on the
+class (`_rate`, `_suffix`) where these differ by which mode function `_read`
+calls. The hook is a method here because a row routes through `blake3`'s own
+`xof` / `keyed_xof` / `derive_key`, so the seam cannot drift from the functional
+API — the same bytes by construction rather than by a second assembly of the
+same `Mode`.
 
 **What the message is differs per row, and only the name says so.** `Blake3` and
 `Blake3Keyed` hash a message; `Blake3DeriveKey` hashes *key material*, with the
@@ -59,7 +67,7 @@ class _Blake3Hash:
             raise ValueError(f"output_size must be at least 1, got {output_size}")
         self.digest_size = output_size
 
-    def _read(self, msg: ArrayLike, out_len: int) -> Array:
+    def _read(self, msg: ArrayLike) -> Array:
         raise NotImplementedError
 
     def _parameters(self) -> tuple[object, ...]:
@@ -67,7 +75,7 @@ class _Blake3Hash:
         return (self.digest_size,)
 
     def digest(self, msg: ArrayLike) -> Array:
-        return self._read(msg, self.digest_size)
+        return self._read(msg)
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
@@ -86,8 +94,8 @@ class Blake3(_Blake3Hash):
     instances compare on.
     """
 
-    def _read(self, msg: ArrayLike, out_len: int) -> Array:
-        return blake3.xof(msg, out_len)
+    def _read(self, msg: ArrayLike) -> Array:
+        return blake3.xof(msg, self.digest_size)
 
 
 class Blake3Keyed(_Blake3Hash):
@@ -113,8 +121,8 @@ class Blake3Keyed(_Blake3Hash):
         super().__init__(output_size)
         self._key = bytes(key)
 
-    def _read(self, msg: ArrayLike, out_len: int) -> Array:
-        return blake3.keyed_xof(self._key, msg, out_len)
+    def _read(self, msg: ArrayLike) -> Array:
+        return blake3.keyed_xof(self._key, msg, self.digest_size)
 
     def _parameters(self) -> tuple[object, ...]:
         return (*super()._parameters(), self._key)
@@ -139,10 +147,10 @@ class Blake3DeriveKey(_Blake3Hash):
         self, context: str | bytes, output_size: int = blake3.DIGEST_LEN
     ) -> None:
         super().__init__(output_size)
-        self._context = context.encode() if isinstance(context, str) else bytes(context)
+        self._context = blake3.context_bytes(context)
 
-    def _read(self, msg: ArrayLike, out_len: int) -> Array:
-        return blake3.derive_key(self._context, msg, out_len)
+    def _read(self, msg: ArrayLike) -> Array:
+        return blake3.derive_key(self._context, msg, self.digest_size)
 
     def _parameters(self) -> tuple[object, ...]:
         return (*super()._parameters(), self._context)

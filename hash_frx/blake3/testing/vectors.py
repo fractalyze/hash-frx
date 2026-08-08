@@ -11,8 +11,9 @@ The vectors pin whole hashes rather than compression intermediates, which looks
 at first like they cannot reach anything below a whole hash. They can: an input
 of at most one 1024-byte chunk hashes as the compression function chained over
 that chunk's blocks with no tree above it, and at most 64 bytes is a single
-compression call. So `SINGLE_BLOCK` pins the compression function directly and
-`MULTI_BLOCK` adds the chaining, both without any tree machinery in between.
+compression call. So `SINGLE_BLOCK` pins the compression function directly, and
+the lengths just above it add the chaining, both without any tree machinery in
+between.
 
 **The published `hash` field is 131 bytes, not 32.** The digest is its first
 32, so what is written down here is the full-width value and the digest column
@@ -32,10 +33,11 @@ length to go missing from, and the three modes are the same 35 inputs.
 **The groups are a property of the input, not of the mode.** Which layer a
 length first reaches — a single compression, a chunk chain, a parent-node tree —
 follows from the block and chunk sizes, so it is derived from the length rather
-than listed, and the same split serves every mode. A test that wants one layer
-selects its group; `ALL_LENGTHS` and `EXTENDED` are the whole published table in
-hash mode, `KEYED` / `EXTENDED_KEYED` and `DERIVE_KEY` / `EXTENDED_DERIVE_KEY`
-the same in the other two.
+than listed, and the same split serves every mode. `ALL_LENGTHS` and `EXTENDED`
+are the whole published table in hash mode, `KEYED` / `EXTENDED_KEYED` and
+`DERIVE_KEY` / `EXTENDED_DERIVE_KEY` the same in the other two. A test wanting a
+subset takes it with `rows` — by layer (`_SINGLE_BLOCK` and its siblings, which
+hash mode exports pre-taken) or by `PER_LAYER_LENGTHS` for a row of each.
 
 Provenance: `test_vectors/test_vectors.json` in BLAKE3-team/BLAKE3.
 """
@@ -468,10 +470,18 @@ PER_LAYER_LENGTHS = (BLOCK_LEN, 129, CHUNK_LEN + 1)
 _HASH, _KEYED, _DERIVE_KEY = 0, 1, 2
 
 
-def _column(column: int, lengths: tuple[int, ...]) -> tuple[tuple[int, str], ...]:
-    """One mode's column at `lengths`, as the `(length, expected)` rows a test
-    parameterizes over."""
-    return tuple((n, _PUBLISHED[n][column]) for n in lengths)
+def _column(column: int) -> tuple[tuple[int, str], ...]:
+    """One mode's whole column, as the `(length, expected)` rows a test
+    parameterizes over. Subsets of it are taken with `rows`."""
+    return tuple((n, values[column]) for n, values in _PUBLISHED.items())
+
+
+def rows(
+    table: tuple[tuple[int, str], ...], lengths: tuple[int, ...]
+) -> tuple[tuple[int, str], ...]:
+    """The rows of `table` at `lengths`, in the order given."""
+    by_length = dict(table)
+    return tuple((n, by_length[n]) for n in lengths)
 
 
 def _digests(table: tuple[tuple[int, str], ...]) -> tuple[tuple[int, str], ...]:
@@ -483,31 +493,23 @@ def _digests(table: tuple[tuple[int, str], ...]) -> tuple[tuple[int, str], ...]:
     return tuple((n, h[: 2 * DIGEST_LEN]) for n, h in table)  # two hex per byte
 
 
-# Hash mode, grouped by the layer each range first reaches.
-EXTENDED_SINGLE_BLOCK = _column(_HASH, _SINGLE_BLOCK)
-EXTENDED_MULTI_BLOCK = _column(_HASH, _MULTI_BLOCK)
-EXTENDED_MULTI_CHUNK = _column(_HASH, _MULTI_CHUNK)
-SINGLE_BLOCK = _digests(EXTENDED_SINGLE_BLOCK)
-MULTI_BLOCK = _digests(EXTENDED_MULTI_BLOCK)
-MULTI_CHUNK = _digests(EXTENDED_MULTI_CHUNK)
-
 # Every published length, per mode. A mode changes what a length hashes to and
-# not which layers it reaches, so these are ungrouped: a test naming a layer
-# does it once, in hash mode, and a mode is anchored across the whole table.
-EXTENDED = _column(_HASH, _ALL)
-EXTENDED_KEYED = _column(_KEYED, _ALL)
-EXTENDED_DERIVE_KEY = _column(_DERIVE_KEY, _ALL)
+# not which layers it reaches, so the mode tables are ungrouped: a test naming a
+# layer does it once, in hash mode, and a mode is anchored across the whole
+# table.
+EXTENDED = _column(_HASH)
+EXTENDED_KEYED = _column(_KEYED)
+EXTENDED_DERIVE_KEY = _column(_DERIVE_KEY)
 ALL_LENGTHS = _digests(EXTENDED)
 KEYED = _digests(EXTENDED_KEYED)
 DERIVE_KEY = _digests(EXTENDED_DERIVE_KEY)
 
-
-def rows(
-    table: tuple[tuple[int, str], ...], lengths: tuple[int, ...]
-) -> tuple[tuple[int, str], ...]:
-    """The rows of `table` at `lengths`, in the order given."""
-    by_length = dict(table)
-    return tuple((n, by_length[n]) for n in lengths)
+# Hash mode by the layer each range first reaches, for the tests that select one
+# layer rather than a row of each.
+EXTENDED_SINGLE_BLOCK = rows(EXTENDED, _SINGLE_BLOCK)
+EXTENDED_MULTI_BLOCK = rows(EXTENDED, _MULTI_BLOCK)
+EXTENDED_MULTI_CHUNK = rows(EXTENDED, _MULTI_CHUNK)
+SINGLE_BLOCK = _digests(EXTENDED_SINGLE_BLOCK)
 
 
 def official_input(length: int) -> bytes:

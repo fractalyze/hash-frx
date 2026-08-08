@@ -125,10 +125,15 @@ def blocks_of(data: bytes, size: int = BLOCK_LEN) -> list[bytes]:
 
 
 def key_words(key: bytes) -> list[int]:
-    """A 32-byte key as the eight little-endian words a node opens from."""
+    """A 32-byte key as the eight little-endian words a node opens from.
+
+    The same little-endian read `words_of` already does — a key is half a block
+    — rather than a second copy of the shift chain, which is the transcription
+    no reviewer can check by eye.
+    """
     if len(key) != KEY_LEN:
         raise ValueError(f"key must be {KEY_LEN} bytes, got {len(key)}")
-    return [int.from_bytes(key[4 * i : 4 * i + 4], "little") for i in range(8)]
+    return words_of(key)[:8]
 
 
 def chunk_output(

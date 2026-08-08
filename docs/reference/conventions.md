@@ -39,9 +39,17 @@ byte. [Testing](#testing) is where the enforcement is.
 
 A family whose members differ by a **constant the standard fixes** is separate
 *types* sharing a body, one per member: the rate that tells `Shake128` from
-`Shake256`, the key words and mode flag that tell BLAKE3's keyed hashing from its
-plain hash. What differs only by a **value the caller picks** rides as a
-constructor parameter of one type — an output length, a key, a context string.
+`Shake256`, the mode flag that tells BLAKE3's keyed hashing from its plain hash.
+What the caller picks rides as a constructor parameter of one type — an output
+length, a key, a context string.
+
+A member can be both, and BLAKE3's keyed row is: the standard fixes its flag and
+fixes that its tree opens from a caller-supplied key rather than from the IV, and
+the caller supplies that key's 32 bytes. **The test is what a member would have
+to change to become a different member**, not whether a value appears in it.
+`Blake3Keyed(k1)` and `Blake3Keyed(k2)` are one hash under two keys;
+`Blake3Keyed` and `Blake3` are two hashes, and no key makes one the other. So the
+flag splits the type and the key rides inside it.
 
 Folding a constant into a parameter gives one class a knob that turns it into a
 different standard, which is how a consumer ends up choosing at runtime a hash it
