@@ -36,8 +36,9 @@ follows from the block and chunk sizes, so it is derived from the length rather
 than listed, and the same split serves every mode. `ALL_LENGTHS` and `EXTENDED`
 are the whole published table in hash mode, `KEYED` / `EXTENDED_KEYED` and
 `DERIVE_KEY` / `EXTENDED_DERIVE_KEY` the same in the other two. A test wanting a
-subset takes it with `rows` — by layer (`_SINGLE_BLOCK` and its siblings, which
-hash mode exports pre-taken) or by `PER_LAYER_LENGTHS` for a row of each.
+subset takes it with `rows`, at `PER_LAYER_LENGTHS` for one row per layer; hash
+mode also exports its layer groups pre-taken, since those are what a test of a
+single layer selects.
 
 Provenance: `test_vectors/test_vectors.json` in BLAKE3-team/BLAKE3.
 """

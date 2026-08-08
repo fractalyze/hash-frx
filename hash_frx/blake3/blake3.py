@@ -77,6 +77,12 @@ DIGEST_LEN = 32
 # because the second pass's key *is* the first pass's digest.
 KEY_LEN = 32
 
+# The mode flags spec section 2.3 defines, and the whole of what a `Mode` may
+# carry: plain hashing sets none, and the other three name a mode each. They are
+# never combined — a compression runs in one mode — so this is a set of legal
+# values rather than a mask.
+_MODE_FLAGS = frozenset({0, KEYED_HASH, DERIVE_KEY_CONTEXT, DERIVE_KEY_MATERIAL})
+
 
 def _units(length: int, size: int) -> int:
     """`length` bytes as a count of `size`-byte units — empty still occupies one.
@@ -88,7 +94,7 @@ def _units(length: int, size: int) -> int:
     return max(1, -(-length // size))
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class Mode:
     """Which of BLAKE3's three modes is running — the whole of the difference.
 
@@ -104,25 +110,42 @@ class Mode:
     wanting a key *per* message maps over both — `frx.vmap` of a keyed call over
     `(key, msg)` — rather than hashing one message at a time.
 
-    `eq=False` because the dataclass-derived `__eq__` would be element-wise over
-    `key_words` and the derived `__hash__` would hash an `Array`
-    (`docs/reference/conventions.md`). A mode is an operand record, not a
-    parameter record a consumer compares.
+    Comparing or hashing a `Mode` raises, and is meant to: the dataclass-derived
+    `__eq__` is element-wise over an `Array` and the derived `__hash__` hashes
+    one. A mode is an operand record rather than a parameter record, so it is
+    not a jit static argument the way a `ByteHash` is — and the raise is what
+    says so at the first call, rather than a per-instance cache miss that
+    re-traces and bakes the key in on every one. `Output` is the same kind of
+    record and answers the same way.
     """
 
     key_words: Array  # uint32 [8]
     flags: int
 
     def __post_init__(self) -> None:
-        # The second record a caller hands raw arrays to, so it validates for
-        # the reason `parent_output` does: a `[B, 8]` or int32 key otherwise
-        # surfaces from `compress` as a complaint about `chaining_value`, an
-        # operand the caller never passed. A scheme that derives its own key
-        # words reaches this without going through `keyed_mode`.
+        # Both fields fail silently unchecked, which is why this is here rather
+        # than left to `compress`.
+        #
+        # A `[1, 8]` or `[B, 8]` key does not error at all: `_key_words`
+        # broadcasts it and the result is well-formed: at `[1, 8]` byte-identical
+        # to the `[8]` spelling, and at `[B, 8]` a per-row keying this does not
+        # offer. Only a width that cannot broadcast errors, and it errors inside
+        # `broadcast_to` rather than against anything a caller passed. A wrong
+        # dtype is the one case `compress` catches, and it names `chaining_value`
+        # there — an operand the caller never passed.
         if self.key_words.shape != (8,):
             raise ValueError(f"key_words must be [8], got {self.key_words.shape}")
         if self.key_words.dtype != U32:
             raise TypeError(f"key_words must be uint32, got {self.key_words.dtype}")
+        # Flags never error anywhere: a wrong mode flag rides through every
+        # compression and produces well-formed bytes under the wrong domain
+        # separation. Spec section 2.3 names exactly these four, and a caller
+        # assembling a `Mode` by hand is exactly the caller who picks one.
+        if self.flags not in _MODE_FLAGS:
+            raise ValueError(
+                f"flags must be one of {sorted(_MODE_FLAGS)} (spec section 2.3), "
+                f"got {self.flags}"
+            )
 
 
 def _key_words(mode: Mode, batch: int) -> Array:
@@ -313,10 +336,9 @@ def parent_output(left: Array, right: Array, mode: Mode) -> Output:
     `block_len` is a full block.
     """
     for name, child in (("left", left), ("right", right)):
-        # The one entry here a caller hands raw arrays to, so it is the one that
-        # has to name the caller's mistake. Without this a `[B, 4]` child reaches
-        # `compress` and is reported against `block`, an operand the caller never
-        # passed.
+        # A caller hands these in raw, so the mistake is named here. Without
+        # this a `[B, 4]` child reaches `compress` and is reported against
+        # `block`, an operand the caller never passed.
         if child.ndim != 2 or child.shape[1] != 8:
             raise ValueError(f"{name} must be [B, 8], got {child.shape}")
         if child.dtype != U32:
@@ -594,15 +616,15 @@ def derive_key_mode(context: str | bytes) -> Mode:
 
     **It costs emitted program, not arithmetic.** The pass is re-emitted per
     call site — every `derive_key` in a traced program carries its own copy,
-    even at one shared context — which measures as one extra compression per
-    site (a 64-byte message goes from 1 to 2, a 1025-byte one from 17 to 18) and
-    around a third more StableHLO and compile time for four sites. XLA then
-    folds all of it: optimized-HLO flop counts are identical to plain `digest`,
-    and identical again at a 2049-byte context that emits 21 compressions. So a
-    consumer with many derive call sites in one `@jit` pays compile time and
-    nothing at run time. Memoizing the `Mode` on a caller's object is not the
-    fix it looks like — if the first call happens under a trace, the cached
-    `key_words` is a tracer that leaks out of it.
+    even at one shared context — which is one extra compression per site: a
+    64-byte message goes from 1 to 2 and a 1025-byte one from 17 to 18, both
+    countable with `blake3_test._compressions`. XLA then folds all of it:
+    optimized-HLO flop counts are identical to plain `digest`, and identical
+    again at a 2049-byte context that emits 21 compressions. So a consumer with
+    many derive call sites in one `@jit` pays compile time and nothing at run
+    time. Memoizing the `Mode` on a caller's object is not the fix it looks
+    like — if the first call happens under a trace, the cached `key_words` is a
+    tracer that leaks out of it.
 
     The output words are taken as words rather than through bytes: a root's
     first eight words *are* its 32-byte digest little-endian, which is exactly

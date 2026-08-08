@@ -53,11 +53,14 @@ if TYPE_CHECKING:
 class _Blake3Hash:
     """The shared body of the three modes — everything but which mode it is.
 
-    A subclass supplies the row: how a message is read to `out_len` bytes, and
-    what the mode's own parameters are. The second is not bookkeeping —
-    `__eq__` covers whatever `_parameters` returns, so a row that adds a key and
-    forgets to name it here compares two different keys equal, and serves one
-    key's trace for another as pytree aux. It never errors.
+    A subclass supplies the row: `_read`, which of `blake3`'s mode functions
+    reads a message, and `_parameters`, what the mode's own parameters are.
+    `digest` stays here and forwards, so the seam's name and signature are
+    written once however many rows there are.
+
+    `_parameters` is not bookkeeping — `__eq__` covers whatever it returns, so a
+    row that adds a key and forgets to name it there compares two different keys
+    equal, and serves one key's trace for another as pytree aux. It never errors.
     """
 
     has_dedicated_fusion = False

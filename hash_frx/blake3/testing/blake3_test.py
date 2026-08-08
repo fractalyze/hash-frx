@@ -40,7 +40,12 @@ from hash_frx.blake3.blake3 import (
     tree_output,
     xof,
 )
-from hash_frx.blake3.compress import KEYED_HASH, ROOT
+from hash_frx.blake3.compress import (
+    CHUNK_START,
+    DERIVE_KEY_CONTEXT,
+    DERIVE_KEY_MATERIAL,
+    KEYED_HASH,
+)
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.vectors import (
     ALL_LENGTHS,
@@ -147,7 +152,9 @@ class ChunkCounterTest(absltest.TestCase):
         )
 
         self.assertNotEqual(list(at_zero[0]), list(at_seven[0]))
-        self.assertEqual([int(w) for w in at_seven[0]], ref.chunk_output(data, 7, ROOT))
+        self.assertEqual(
+            [int(w) for w in at_seven[0]], ref.chunk_output(data, 7, ref.ROOT)
+        )
 
     def test_the_counter_increments_across_the_tree(self) -> None:
         # Every chunk carries its own index, so two messages differing only by a
@@ -614,13 +621,15 @@ class ValidationTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             digest(fnp.zeros(BLOCK_LEN, dtype=fnp.uint8))
 
-    def test_rejects_key_words_it_cannot_open_a_node_from(self) -> None:
-        # `Mode` is the second record a caller hands raw arrays to, so it names
-        # the mistake for the reason `parent_output` does. A scheme holding its
-        # own key words builds one directly and never passes `keyed_mode`, so
-        # the width and dtype are unchecked anywhere else — and a `[1, 8]` or
-        # int32 key reaches `compress` to be reported against `chaining_value`,
-        # an operand the caller never passed.
+    def test_rejects_a_mode_it_cannot_open_a_node_from(self) -> None:
+        # A scheme holding its own key words builds a `Mode` directly and never
+        # passes `keyed_mode`, so this is the only guard those fields meet. The
+        # batched case is the one that motivates the check: `_key_words`
+        # broadcasts a `[1, 8]` or `[B, 8]` key without complaint, so before the
+        # guard it returned well-formed bytes — a per-row keying this does not
+        # offer, silently. Only `dtype` was ever reported at all, and `compress`
+        # reports it against `chaining_value`, an operand the caller never
+        # passed.
         for name, key, err in (
             ("batched", fnp.zeros((1, 8), dtype=fnp.uint32), ValueError),
             ("width", fnp.zeros(4, dtype=fnp.uint32), ValueError),
@@ -628,6 +637,22 @@ class ValidationTest(absltest.TestCase):
         ):
             with self.subTest(case=name), self.assertRaises(err):
                 Mode(key, KEYED_HASH)
+
+        # Flags are the field with no downstream check at all: a wrong one rides
+        # through every compression and returns well-formed bytes under the
+        # wrong domain separation. The four the spec names are accepted; a fifth
+        # value and a combination of two are not, since a compression runs in
+        # one mode.
+        good = fnp.zeros(8, dtype=fnp.uint32)
+        for flags in (0, KEYED_HASH, DERIVE_KEY_CONTEXT, DERIVE_KEY_MATERIAL):
+            with self.subTest(flags=flags):
+                self.assertEqual(Mode(good, flags).flags, flags)
+        for name, flags in (
+            ("not a mode flag", CHUNK_START),
+            ("two modes at once", KEYED_HASH | DERIVE_KEY_MATERIAL),
+        ):
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                Mode(good, flags)
 
     def test_rejects_words_that_disagree_with_the_length(self) -> None:
         # The trailing block is padded, so a chunk's byte count cannot be read

@@ -35,25 +35,36 @@ Python reviewer would prefer for a lowering that stays one kernel.
 None of this is enforced by the type system, and none of it changes an output
 byte. [Testing](#testing) is where the enforcement is.
 
-## A type per constant, a parameter per value
+## A type per named member, a parameter per choice within one
 
-A family whose members differ by a **constant the standard fixes** is separate
-*types* sharing a body, one per member: the rate that tells `Shake128` from
-`Shake256`, the mode flag that tells BLAKE3's keyed hashing from its plain hash.
-What the caller picks rides as a constructor parameter of one type — an output
-length, a key, a context string.
+**Where a standard names its members, each name is a type.** FIPS 202 names
+SHA3-256, SHAKE128, SHAKE256; the BLAKE3 spec names `hash`, `keyed_hash`,
+`derive_key`. Those become `Sha3_256` / `Shake128` / `Shake256` and `Blake3` /
+`Blake3Keyed` / `Blake3DeriveKey`, sharing a body and differing by the constants
+the standard attaches to the name — a rate, a domain-separation byte, a mode
+flag. What a caller then chooses *within* one named member rides as a
+constructor parameter: an output length, a key, a context string.
 
-A member can be both, and BLAKE3's keyed row is: the standard fixes its flag and
-fixes that its tree opens from a caller-supplied key rather than from the IV, and
-the caller supplies that key's 32 bytes. **The test is what a member would have
-to change to become a different member**, not whether a value appears in it.
-`Blake3Keyed(k1)` and `Blake3Keyed(k2)` are one hash under two keys;
-`Blake3Keyed` and `Blake3` are two hashes, and no key makes one the other. So the
-flag splits the type and the key rides inside it.
+A member can carry both, and BLAKE3's keyed row does. The standard fixes its
+mode flag and fixes that its tree opens from a caller-supplied key rather than
+from the IV; the caller supplies the key's 32 bytes. **The test is whether a
+caller could reach a different member by changing it**, not whether a value
+appears in it. No key turns `Blake3Keyed` into `Blake3`, so the flag splits the
+type and the key rides inside it. Folding that flag into a parameter would give
+one class a knob that turns it into a different standard, which is how a
+consumer ends up choosing at runtime a hash it should have named.
 
-Folding a constant into a parameter gives one class a knob that turns it into a
-different standard, which is how a consumer ends up choosing at runtime a hash it
-should have named; splitting a value into types gives a class per output length.
+**Where a standard specifies a generator over members instead of naming them,
+the parameterization is one value-compared object.** Poseidon2 is a construction
+over a field, a width, an α and a round-constant schedule, with no enumerated
+list to make types from — so `Poseidon2(params)` takes the whole
+parameterization as a parameter and `Params` carries the value equality. Writing
+a type per parameterization there would be a class per instantiation of an
+infinite family.
+
+Either way the split decides only what is a *type*. Everything left over is a
+parameter, and **two instances differing in any parameter are two hashes** — the
+next section is why that has to reach `__eq__`.
 
 **Aux-safety is not the reason.** A rate folded into `__eq__` would be as
 re-trace-safe as a rate baked into a type, so [pytree
