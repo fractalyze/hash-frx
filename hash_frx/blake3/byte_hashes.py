@@ -35,18 +35,39 @@ No BLAKE3 emitter exists, so `digest` carries no hash-dedicated marker. It is
 still a device function that takes a tracer and returns an `Array`, which is what
 lets a consumer hash inside its own `@jit` — the flag and that property came
 apart at Keccak, and [`byte_hash.py`](../byte_hash.py) is where the rule lives.
+
+**Each row has a host sibling** — `HostBlake3`, `HostBlake3Keyed`,
+`HostBlake3DeriveKey` — over the BLAKE3 team's own Rust binding, mirroring
+`HostSha256` and the Keccak host rows. They are the right choice for a
+strictly-sequential caller that reads each digest back immediately, where a
+device dispatch per short message costs more than a native hash does, and they
+are the differential partner the published vectors cannot be: agreement with the
+reference implementation at a random length is a check no table of 35 lengths
+performs. Since the flag reads `False` on every row here, device and host alike,
+the return type is again the only thing separating them.
+
+The narrowing worth knowing before reaching for one: the binding takes a
+derive-key context as a `str`, so `HostBlake3DeriveKey` refuses a context that is
+not valid UTF-8 where the device row would hash it.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+# The BLAKE3 team's Rust binding (the `blake3` distribution on PyPI), aliased
+# because the unqualified name is this package's own `blake3` module below.
+import blake3 as blake3_py
+import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake3 import blake3
+from hash_frx.byte_hash import host_digest
 
 if TYPE_CHECKING:
+    from _typeshed import ReadableBuffer
+
     from hash_frx.byte_hash import ByteHash
 
 
@@ -159,9 +180,120 @@ class Blake3DeriveKey(_Blake3Hash):
         return (*super()._parameters(), self._context)
 
 
+class _HostBlake3Hash:
+    """The shared body of the three host siblings — `blake3` per message.
+
+    The same `_read` / `_parameters` split as `_Blake3Hash`, and for the same
+    reason: a row that adds a key and forgets to name it in `_parameters` compares
+    two different keys equal and hands one key's trace to the other's caller. The
+    Keccak host base compares on `digest_size` alone, which is why it is not the
+    shape these rows copy — two of the three carry a parameter beyond the length.
+
+    The loop `_read` runs under is [`byte_hash.host_digest`](../byte_hash.py),
+    shared with every other host row in the package.
+    """
+
+    has_dedicated_fusion = False
+
+    def __init__(self, output_size: int = blake3.DIGEST_LEN) -> None:
+        if output_size < 1:
+            raise ValueError(f"output_size must be at least 1, got {output_size}")
+        self.digest_size = output_size
+
+    def _read(self, msg: ReadableBuffer) -> bytes:
+        raise NotImplementedError
+
+    def _parameters(self) -> tuple[object, ...]:
+        """Everything two instances of this row compare on."""
+        return (self.digest_size,)
+
+    def digest(self, msg: ArrayLike) -> np.ndarray:
+        return host_digest(self._read, self.digest_size, msg)
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return self._parameters() == other._parameters()
+
+    def __hash__(self) -> int:
+        return hash((type(self), self._parameters()))
+
+
+class HostBlake3(_HostBlake3Hash):
+    """`ByteHash` for host BLAKE3 in hash mode, read out to `output_size` bytes."""
+
+    def _read(self, msg: ReadableBuffer) -> bytes:
+        return blake3_py.blake3(msg).digest(self.digest_size)
+
+
+class HostBlake3Keyed(_HostBlake3Hash):
+    """`ByteHash` for host keyed BLAKE3 — `Blake3Keyed`'s sibling.
+
+    The key is a 32-byte `bytes` for the reason it is on the device row: the seam
+    has nowhere to put a per-call one, so it is part of *which hash this is*. The
+    two caveats stated there hold here bar the tracing one — it is secret material
+    in a plain attribute, and `__hash__` is over the bytes.
+    """
+
+    def __init__(self, key: bytes, output_size: int = blake3.DIGEST_LEN) -> None:
+        if len(key) != blake3.KEY_LEN:
+            raise ValueError(f"key must be {blake3.KEY_LEN} bytes, got {len(key)}")
+        super().__init__(output_size)
+        self._key = bytes(key)
+
+    def _read(self, msg: ReadableBuffer) -> bytes:
+        return blake3_py.blake3(msg, key=self._key).digest(self.digest_size)
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (*super()._parameters(), self._key)
+
+
+class HostBlake3DeriveKey(_HostBlake3Hash):
+    """`ByteHash` for host BLAKE3 key derivation — `Blake3DeriveKey`'s sibling.
+
+    As on the device row, the context is the instance's parameter and `digest`
+    reads *key material*.
+
+    **The context is held as a `str` here and as `bytes` there, and that is a real
+    narrowing rather than a style difference.** `blake3.blake3(...,
+    derive_key_context=...)` takes only a `str`, while the device row hashes
+    whatever bytes `blake3.context_bytes` produced — so a context that is not
+    valid UTF-8 is a hash the device row can compute and this one cannot. It is
+    refused at construction, where the caller can still choose another context,
+    rather than at the first `digest`. The standard asks for a UTF-8 context
+    string, so nothing that follows it can hit this.
+
+    A `str` context and its UTF-8 bytes remain one hash, the same as on the device
+    row: both normalize to the same `str` and so compare equal.
+    """
+
+    def __init__(
+        self, context: str | bytes, output_size: int = blake3.DIGEST_LEN
+    ) -> None:
+        super().__init__(output_size)
+        try:
+            self._context = blake3.context_bytes(context).decode()
+        except UnicodeDecodeError as e:
+            raise ValueError(
+                "context must be valid UTF-8 for the host row; the standard names "
+                f"the derive-key context a UTF-8 string, got {context!r}"
+            ) from e
+
+    def _read(self, msg: ReadableBuffer) -> bytes:
+        return blake3_py.blake3(msg, derive_key_context=self._context).digest(
+            self.digest_size
+        )
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (*super()._parameters(), self._context)
+
+
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md). Named individually
     # because mypy rejects re-annotating one name.
     _bh_blake3: type[ByteHash] = Blake3
     _bh_blake3_keyed: type[ByteHash] = Blake3Keyed
     _bh_blake3_derive_key: type[ByteHash] = Blake3DeriveKey
+    _bh_host_blake3: type[ByteHash] = HostBlake3
+    _bh_host_blake3_keyed: type[ByteHash] = HostBlake3Keyed
+    _bh_host_blake3_derive_key: type[ByteHash] = HostBlake3DeriveKey

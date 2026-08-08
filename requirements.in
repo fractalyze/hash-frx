@@ -16,8 +16,19 @@
 # extracted from there, so a ported hash must be byte-comparable against its
 # origin — a simultaneous toolchain bump would make any mismatch ambiguous
 # between the port and the bump.
+#
+# `blake3` is the BLAKE3 team's own Rust binding, and the one runtime dependency
+# here that is not frx or numpy. It backs the `HostBlake3*` rows, which need a
+# native BLAKE3 the way the other host rows need `hashlib` — the standard library
+# ships `blake2b`/`blake2s` and will not ship BLAKE3. Taking it rather than the
+# in-tree `blake3/testing/reference.py` oracle is deliberate twice over: the
+# oracle is test-only code and orders of magnitude slower than the device
+# dispatch a host row exists to beat, and a differential test against this tree's
+# own transcription of the spec proves far less than one against the reference
+# the published vectors come from (`docs/reference/conventions.md`, byte-exactness).
 absl-py
 numpy
+blake3
 frx==0.10.1.dev20260801051831
 frxlib==0.10.1.dev20260801051831
 frx-cuda12-pjrt==0.10.1.dev20260801051831
