@@ -11,15 +11,19 @@ published vectors at every length they cover; `vectors.py` sets out why those
 reach a compression function at all. `chunk_output` underneath it then serves as
 an oracle for a chunk whose counter or flags no published vector reaches.
 
-Only hash mode is here — the flags below are its three, and the rest of Table 3
-belongs with the keyed and derive-key modes that use it.
+All three modes are here, because all three are published. They are the same
+functions with a different key and one more flag — `derive_key` is written as
+the two `hash_xof` calls the spec defines it to be, which is the whole of it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 _MASK = 0xFFFFFFFF
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
+KEY_LEN = 32
 
 # BLAKE3 spec section 2.2, Table 1 — the SHA-2 IV, unchanged. Fenced from the
 # formatter, which would flatten the transcribed table one word per line.
@@ -30,11 +34,16 @@ IV = (
 )
 # fmt: on
 
-# Hash mode's domain-separation flags (spec section 2.2, Table 3).
+# Domain-separation flags (spec section 2.2, Table 3). The first four are the
+# node's own position in its tree; the last three name the mode, and ride on
+# every compression that mode makes.
 CHUNK_START = 1 << 0
 CHUNK_END = 1 << 1
 PARENT = 1 << 2
 ROOT = 1 << 3
+KEYED_HASH = 1 << 4
+DERIVE_KEY_CONTEXT = 1 << 5
+DERIVE_KEY_MATERIAL = 1 << 6
 
 # The message word schedule applied between rounds (spec section 2.2, Table 2).
 MSG_PERMUTATION = (2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8)
@@ -115,11 +124,25 @@ def blocks_of(data: bytes, size: int = BLOCK_LEN) -> list[bytes]:
     return [data[i : i + size] for i in range(0, len(data), size)] or [b""]
 
 
+def key_words(key: bytes) -> list[int]:
+    """A 32-byte key as the eight little-endian words a node opens from.
+
+    The same little-endian read `words_of` already does — a key is half a block
+    — rather than a second copy of the shift chain, which is the transcription
+    no reviewer can check by eye.
+    """
+    if len(key) != KEY_LEN:
+        raise ValueError(f"key must be {KEY_LEN} bytes, got {len(key)}")
+    return words_of(key)[:8]
+
+
 def chunk_output(
     data: bytes,
     counter: int = 0,
     final_flags: int = 0,
     final_counter: int | None = None,
+    key: Sequence[int] = IV,
+    mode_flags: int = 0,
 ) -> list[int]:
     """One chunk's last compression, all 16 output words.
 
@@ -131,24 +154,36 @@ def chunk_output(
     `final_counter` replaces `counter` on that last compression alone, which is
     what an extendable output does to a root chunk: the chain below it already
     ran at the chunk's own index and does not re-run per output block.
+
+    `key` and `mode_flags` are the mode (section 2.3), and they are the opposite
+    of `final_flags` in every respect: the key opens the chunk rather than
+    finishing it, and the flag rides on *every* compression rather than one.
     """
     if len(data) > CHUNK_LEN:
         raise ValueError(f"{len(data)} bytes exceeds one {CHUNK_LEN}-byte chunk")
     blocks = blocks_of(data)
 
-    cv = list(IV)
+    cv = list(key)
     for i, block in enumerate(blocks[:-1]):
-        flags = CHUNK_START if i == 0 else 0
+        flags = mode_flags | (CHUNK_START if i == 0 else 0)
         cv = compress(cv, words_of(block), counter, len(block), flags)[:8]
 
     last = blocks[-1]
-    flags = final_flags | CHUNK_END | (CHUNK_START if len(blocks) == 1 else 0)
+    flags = (
+        mode_flags | final_flags | CHUNK_END | (CHUNK_START if len(blocks) == 1 else 0)
+    )
     final = counter if final_counter is None else final_counter
     return compress(cv, words_of(last), final, len(last), flags)
 
 
 def _subtree_output(
-    chunks: list[bytes], lo: int, hi: int, final_flags: int, counter: int = 0
+    chunks: list[bytes],
+    lo: int,
+    hi: int,
+    final_flags: int,
+    counter: int = 0,
+    key: Sequence[int] = IV,
+    mode_flags: int = 0,
 ) -> list[int]:
     """The output words of the node covering chunks `[lo, hi)`.
 
@@ -169,33 +204,44 @@ def _subtree_output(
         # counter everywhere gets every multi-block single-chunk message wrong
         # and every other length right.
         final = counter if final_flags & ROOT else None
-        return chunk_output(chunks[lo], lo, final_flags, final)
+        return chunk_output(chunks[lo], lo, final_flags, final, key, mode_flags)
 
     left = 1
     while left * 2 < hi - lo:
         left *= 2
-    cv = _subtree_output(chunks, lo, lo + left, 0)[:8]
-    right = _subtree_output(chunks, lo + left, hi, 0)[:8]
+    cv = _subtree_output(chunks, lo, lo + left, 0, 0, key, mode_flags)[:8]
+    right = _subtree_output(chunks, lo + left, hi, 0, 0, key, mode_flags)[:8]
     # A parent reads the key words rather than a chaining value, and its block
     # is the two child chaining values (section 2.5). Its counter is zero for
     # every node below the root; at the root it carries the output-block index,
     # which is the one place section 2.6 reaches.
-    return compress(list(IV), cv + right, counter, BLOCK_LEN, final_flags | PARENT)
+    return compress(
+        list(key),
+        cv + right,
+        counter,
+        BLOCK_LEN,
+        mode_flags | final_flags | PARENT,
+    )
 
 
-def hash_xof(data: bytes, out_len: int) -> bytes:
-    """BLAKE3 of any input, read out to `out_len` bytes.
+def hash_xof(
+    data: bytes, out_len: int, key: Sequence[int] = IV, mode_flags: int = 0
+) -> bytes:
+    """BLAKE3 of any input, read out to `out_len` bytes, in any of the modes.
 
     Spec section 2.6: the root's compression is repeated with the output block
     counter running 0, 1, 2, … and each run's sixteen words, little-endian, are
     64 bytes of the stream. Nothing chains — every block reads the same root
     node — which is why a digest is the head of this rather than a different
     computation, and why the frx side can run the blocks in one batched call.
+
+    The mode reaches the tree and nothing here: reading further is the same
+    repeated compression whichever key opened the nodes below it.
     """
     chunks = blocks_of(data, CHUNK_LEN)
     stream = bytearray()
     for counter in range(-(-out_len // BLOCK_LEN)):
-        words = _subtree_output(chunks, 0, len(chunks), ROOT, counter)
+        words = _subtree_output(chunks, 0, len(chunks), ROOT, counter, key, mode_flags)
         stream += b"".join(w.to_bytes(4, "little") for w in words)
     return bytes(stream[:out_len])
 
@@ -210,3 +256,29 @@ def hash_tree(data: bytes) -> bytes:
     chunks = blocks_of(data, CHUNK_LEN)
     words = _subtree_output(chunks, 0, len(chunks), ROOT)[:8]
     return b"".join(w.to_bytes(4, "little") for w in words)
+
+
+def keyed_xof(key: bytes, data: bytes, out_len: int) -> bytes:
+    """Keyed BLAKE3 of any input, read out to `out_len` bytes.
+
+    Spec section 2.3: the 32-byte key takes the IV's place as what every node
+    opens from, and `KEYED_HASH` rides on every compression. Nothing else about
+    the hash moves, which is why this is one call.
+    """
+    return hash_xof(data, out_len, key_words(key), KEYED_HASH)
+
+
+def derive_key(context: str | bytes, key_material: bytes, out_len: int) -> bytes:
+    """BLAKE3's KDF: `out_len` bytes from `key_material` under `context`.
+
+    Spec section 2.3's two passes, written as the two hashes they are. The first
+    hashes the context string under `DERIVE_KEY_CONTEXT` in hash mode's key; its
+    32-byte output is the key the second opens from, under
+    `DERIVE_KEY_MATERIAL`. The first pass is read at 32 bytes and no further —
+    it is a key, not a stream.
+
+    The standard names the context UTF-8, so a `str` is encoded as such.
+    """
+    data = context.encode() if isinstance(context, str) else context
+    context_key = hash_xof(data, KEY_LEN, IV, DERIVE_KEY_CONTEXT)
+    return hash_xof(key_material, out_len, key_words(context_key), DERIVE_KEY_MATERIAL)

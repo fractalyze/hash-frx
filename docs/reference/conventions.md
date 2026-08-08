@@ -35,6 +35,48 @@ Python reviewer would prefer for a lowering that stays one kernel.
 None of this is enforced by the type system, and none of it changes an output
 byte. [Testing](#testing) is where the enforcement is.
 
+## A type per named member, a parameter per choice within one
+
+**Where a standard names its members, each name is a type.** FIPS 202 names
+SHA3-256, SHAKE128, SHAKE256; the BLAKE3 spec names `hash`, `keyed_hash`,
+`derive_key`. Those become `Sha3_256` / `Shake128` / `Shake256` and `Blake3` /
+`Blake3Keyed` / `Blake3DeriveKey`, sharing a body and differing by the constants
+the standard attaches to the name — a rate, a domain-separation byte, a mode
+flag. What a caller then chooses *within* one named member rides as a
+constructor parameter: an output length, a key, a context string.
+
+A member can carry both, and BLAKE3's keyed row does. The standard fixes its
+mode flag and fixes that its tree opens from a caller-supplied key rather than
+from the IV; the caller supplies the key's 32 bytes. **The test is whether a
+caller could reach a different member by changing it**, not whether a value
+appears in it. No key turns `Blake3Keyed` into `Blake3`, so the flag splits the
+type and the key rides inside it. Folding that flag into a parameter would give
+one class a knob that turns it into a different standard, which is how a
+consumer ends up choosing at runtime a hash it should have named.
+
+**Where a standard specifies a generator over members instead of naming them,
+the parameterization is one value-compared object.** Poseidon2 is a construction
+over a field, a width, an α and a round-constant schedule, with no enumerated
+list to make types from — so `Poseidon2(params)` takes the whole
+parameterization as a parameter and `Params` carries the value equality. Writing
+a type per parameterization there would be a class per instantiation of an
+infinite family.
+
+Either way the split decides only what is a *type*. Everything left over is a
+parameter, and **two instances differing in any parameter are two hashes** — the
+next section is why that has to reach `__eq__`.
+
+**Aux-safety is not the reason.** A rate folded into `__eq__` would be as
+re-trace-safe as a rate baked into a type, so [pytree
+registration](#pytree-registration) does not decide this and cannot: it says every
+parameter that survives the split must reach `__eq__`/`__hash__`, which is what
+stops a consumer holding one key from being served the trace built for another.
+
+**A default output length is permitted where the standard names one, and refused
+otherwise.** BLAKE3 names 32 bytes for each of its three modes, so every row
+takes it; an XOF with no such size has none, and picking one for the caller is
+how a scheme ends up silently truncating.
+
 ## Pytree registration
 
 A permutation or a hash is not itself a pytree; it rides in one as **aux**
