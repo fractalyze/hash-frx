@@ -43,9 +43,7 @@ def _composite_lines(perm: Permutation, state: Array) -> list[str]:
     return [ln for ln in txt.splitlines() if "stablehlo.composite" in ln]
 
 
-def assert_marker_matches_emission(
-    test: Any, perm: Permutation, state: Array
-) -> None:
+def assert_marker_matches_emission(test: Any, perm: Permutation, state: Array) -> None:
     """Assert `perm.fused_region_marker` names the composite `permute` emits, and
     that `has_dedicated_fusion` agrees with it."""
     name, version = perm.fused_region_marker
