@@ -267,7 +267,7 @@ def _output_blocks(output: Output, count: int) -> Output:
     else.
 
     Row `b * count + i` is message `b`'s block `i`: `repeat` holds each row for
-    `count` places and `_counters` tiles the indices inside them, so the two
+    `count` places and `_counters` runs the indices inside them, so the two
     agree on the layout the trailing reshape splits back per message.
     """
     return Output(
@@ -418,7 +418,7 @@ def _block_words(msg: Array) -> Array:
 
 
 def _counters(batch: int, first: int, count: int) -> Array:
-    """Counter values `first .. first + count - 1`, tiled over `batch` messages.
+    """Counter values `first .. first + count - 1`, repeated per message.
 
     uint32 `[batch * count, 2]` as (low, high). The split is done on the host,
     where the index is a Python int, so no 64-bit value is ever materialised —
@@ -427,9 +427,17 @@ def _counters(batch: int, first: int, count: int) -> Array:
     What the index counts is the caller's: a chunk's position in the message
     for `_chunk_chaining_values`, an output block's position in the stream for
     `_output_blocks`. The counter field carries whichever the node's role fixes.
+
+    **The repetition is a broadcast, not a host tile.** Every message numbers
+    its blocks alike, so expanding the sequence on the host bakes `batch`
+    identical copies of it into the program — a megabyte of constant for 128
+    bytes of value at four thousand messages and sixteen output blocks. Held
+    shaped, the program carries the sequence once whatever the batch is. The
+    host keeps only what it must, which is the 64-bit split.
     """
     halves = np.array([split(i) for i in range(first, first + count)], dtype=np.uint32)
-    return fnp.asarray(np.tile(halves, (batch, 1)))
+    spread = fnp.broadcast_to(fnp.asarray(halves), (batch, count, 2))
+    return spread.reshape(batch * count, 2)
 
 
 def _chunk_chaining_values(message: Array, nchunks: int, mode: Mode) -> Array:
@@ -494,7 +502,7 @@ def _chunk_chaining_values(message: Array, nchunks: int, mode: Mode) -> Array:
         )
     )
     # The full chunks arrive as `[B * k, 8]` with the chunk index varying
-    # fastest, which is what `_counters` tiles to match, so the reshape lands
+    # fastest, which is what `_counters` repeats to match, so the reshape lands
     # each message's chunks in order on its own row, the short one last.
     return fnp.concatenate(
         [

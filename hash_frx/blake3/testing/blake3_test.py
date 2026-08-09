@@ -18,6 +18,8 @@ the right digest and only splits the kernel, so values alone cannot catch it.
 
 from __future__ import annotations
 
+import re
+
 import frx
 import frx.numpy as fnp
 import numpy as np
@@ -95,6 +97,18 @@ def _compressions(length: int, out_len: int = 32) -> int:
     xors = text.as_text().count("stablehlo.xor")
     assert xors % 60 == 0, f"{xors} xors is not a whole number of compressions"
     return xors // 60
+
+
+def _widest_constant(length: int, out_len: int, batch: int) -> int:
+    """The widest literal a lowered `xof` bakes into its program, in characters.
+
+    A value the program *builds* on device costs nothing here; only one written
+    out operand-by-operand at trace time shows up, which is the difference this
+    reads.
+    """
+    message = _rows(*[official_input(length)] * batch)
+    text = frx.jit(lambda m: xof(m, out_len)).lower(message).as_text()
+    return max(len(lit) for lit in re.findall(r"stablehlo\.constant [^\n]*", text))
 
 
 def _counter(value: int) -> frx.Array:
@@ -558,6 +572,27 @@ class LoweringTest(absltest.TestCase):
         for out_len in (32, 131, 1024):
             with self.subTest(out_len=out_len):
                 self.assertEqual(_compressions(BLOCK_LEN, out_len), 1)
+
+    def test_the_batch_costs_no_constant(self) -> None:
+        # Every message numbers its output blocks alike, so the counter
+        # sequence is one value however many rows read it. Written out per row
+        # at trace time it is baked in `batch` times instead: at 64 rows and
+        # sixteen output blocks a 16 KB literal, and at four thousand rows a
+        # megabyte of program carrying 128 bytes of value.
+        #
+        # Read as the widest literal rather than the module size, which grows
+        # with the batch either way — every op's shape annotation gains a
+        # digit. What is pinned is that no *constant* does.
+        #
+        # One output block is here because it is the case that used to be free:
+        # block zero's counter is zero, which folds to a splat whatever the
+        # batch, so only extendable output ever exposed this.
+        for out_len in (32, 1024):
+            with self.subTest(out_len=out_len):
+                self.assertEqual(
+                    _widest_constant(BLOCK_LEN, out_len, 64),
+                    _widest_constant(BLOCK_LEN, out_len, 1),
+                )
 
     def test_the_extendable_body_is_fusion_ready(self) -> None:
         # The spread that widens one node to a row per output block is the new
