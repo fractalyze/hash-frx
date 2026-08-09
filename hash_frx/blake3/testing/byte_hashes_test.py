@@ -20,22 +20,53 @@ parameters they carry, so what is worth testing per row is exactly what a row
 adds: that its parameter reaches the hash, and that it reaches `__eq__`. A row
 that forgot the second returns right bytes forever and hands one key's trace to
 another key's caller.
+
+**And every case runs on both substrates.** Each mode is two rows — the device
+one and its host sibling — answering to one seam, so a case that named a
+substrate would stop covering half the family. The two exceptions are the two
+claims that are *about* substrate: a device row takes a tracer, and a host row
+returns `np.ndarray`, which is the only thing separating them once
+`has_dedicated_fusion` reads `False` on all six.
+
+Two cases exist only for the host rows, and neither duplicates the above:
+
+- **The whole published table**, in all three modes, at the digest length and the
+  extended one. The device rows get one vector per layer here because each length
+  is a compile; a native hash is free, so there is no reason to pin the host rows
+  against three lengths when thirty-five cost nothing.
+- **The differential sweep**, device against host at lengths the table does not
+  publish. That is what a third-party implementation buys and a second in-tree
+  transcription would not: the published vectors cover 35 lengths, and a
+  device-only bug at an unlucky remainder between them survives every other test
+  in this package. `docs/reference/conventions.md` asks for exactly this
+  independence when it refuses a pin against another implementation in this tree.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import cache
 
 import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.blake3.byte_hashes import Blake3, Blake3DeriveKey, Blake3Keyed
+from hash_frx.blake3.byte_hashes import (
+    Blake3,
+    Blake3DeriveKey,
+    Blake3Keyed,
+    HostBlake3,
+    HostBlake3DeriveKey,
+    HostBlake3Keyed,
+)
 from hash_frx.blake3.testing.vectors import (
     ALL_LENGTHS,
     CONTEXT,
     DERIVE_KEY,
+    EXTENDED,
+    EXTENDED_DERIVE_KEY,
+    EXTENDED_KEYED,
     KEY,
     KEYED,
     PER_LAYER_LENGTHS,
@@ -44,28 +75,92 @@ from hash_frx.blake3.testing.vectors import (
 )
 from hash_frx.byte_hash import ByteHash
 
+# The published extended column is 131 bytes and its head is the digest, so one
+# table anchors both output lengths (`vectors._digests` takes the head rather
+# than transcribing it).
+_EXTENDED_LEN = 131
+
 
 def _rows(*messages: bytes) -> frx.Array:
     return fnp.asarray(np.array([list(m) for m in messages], dtype=np.uint8))
 
 
-# Each row with the arguments that name its mode, and the published column it
-# reproduces. Everything below is parameterized over this, because the three are
-# one body with different parameters and a case that ran for only one of them
-# would be a case that stops covering the family the moment a fourth row lands.
+@cache
+def _official_batch(length: int) -> np.ndarray:
+    """The vectors' input at `length`, as a one-message host batch.
+
+    Cached because the host sweeps below run every published length in three
+    modes, and the vectors build their input a byte at a time — at 102400 bytes
+    that dominates the hash it is feeding.
+    """
+    return np.frombuffer(official_input(length), dtype=np.uint8).reshape(1, length)
+
+
+# Each mode as its two rows, the arguments that name it, and the two published
+# columns it reproduces. Everything below is parameterized over this, because the
+# modes are one body with different parameters and a case that ran for only one of
+# them would stop covering the family the moment a fourth row lands.
 _ROWS = (
-    ("hash", Blake3, (), ALL_LENGTHS),
-    ("keyed", Blake3Keyed, (KEY,), KEYED),
-    ("derive_key", Blake3DeriveKey, (CONTEXT,), DERIVE_KEY),
+    ("hash", Blake3, HostBlake3, (), ALL_LENGTHS, EXTENDED),
+    ("keyed", Blake3Keyed, HostBlake3Keyed, (KEY,), KEYED, EXTENDED_KEYED),
+    (
+        "derive_key",
+        Blake3DeriveKey,
+        HostBlake3DeriveKey,
+        (CONTEXT,),
+        DERIVE_KEY,
+        EXTENDED_DERIVE_KEY,
+    ),
 )
 
+_SUBSTRATES = ("device", "host")
+
+# Every row on both substrates — what the seam sweeps run over.
+_EVERY_ROW = tuple(
+    (f"{substrate}_{name}", cls, args)
+    for name, device, host, args, _, _ in _ROWS
+    for substrate, cls in zip(_SUBSTRATES, (device, host))
+)
+
+_DEVICE_ROWS = tuple((name, device, args) for name, device, _, args, _, _ in _ROWS)
+_HOST_ROWS = tuple((name, host, args) for name, _, host, args, _, _ in _ROWS)
+
+# The two rows of one mode, for the cases that compare them against each other.
+_PAIRS = tuple((name, device, host, args) for name, device, host, args, _, _ in _ROWS)
+
 _PER_LAYER = tuple(
-    (f"{name}_{length}", cls, args, length, expected)
-    for name, cls, args, table in _ROWS
+    (f"{substrate}_{name}_{length}", cls, args, length, expected)
+    for name, device, host, args, table, _ in _ROWS
+    for substrate, cls in zip(_SUBSTRATES, (device, host))
     for length, expected in rows(table, PER_LAYER_LENGTHS)
 )
 
-_EVERY_ROW = tuple((name, cls, args) for name, cls, args, _ in _ROWS)
+# Every published length in every mode, for the host rows alone.
+_HOST_TABLE = tuple(
+    (f"{name}_{length}", host, args, length, expected)
+    for name, _, host, args, _, extended in _ROWS
+    for length, expected in extended
+)
+
+# Lengths the published table does not carry, which is the whole point of the
+# differential sweep. Drawn rather than chosen so they are not lengths anybody
+# reasoned about, and seeded so a failure reproduces.
+_PUBLISHED_LENGTHS = frozenset(length for length, _ in ALL_LENGTHS)
+
+
+def _unpublished_lengths(count: int, high: int, seed: int) -> tuple[int, ...]:
+    rng = np.random.default_rng(seed)
+    drawn: list[int] = []
+    while len(drawn) < count:
+        length = int(rng.integers(1, high))
+        if length not in _PUBLISHED_LENGTHS and length not in drawn:
+            drawn.append(length)
+    return tuple(drawn)
+
+
+# Kept short and under two chunks on purpose: every length is a separate device
+# compile, and the property under test does not scale with the tree.
+_RANDOM_LENGTHS = _unpublished_lengths(count=6, high=1200, seed=0)
 
 
 class ForwardedVectorTest(parameterized.TestCase):
@@ -82,6 +177,63 @@ class ForwardedVectorTest(parameterized.TestCase):
         # (1025 B).
         got = np.asarray(cls(*args).digest(_rows(official_input(length))))
         self.assertEqual(bytes(got[0]).hex(), expected)
+
+
+class HostVectorTest(parameterized.TestCase):
+    """The host rows against the whole published table, at both output lengths.
+
+    Affordable here and not on the device rows: a native hash costs no compile,
+    so the thin-wrapper claim gets thirty-five lengths instead of three. It is
+    also what makes the differential sweep below meaningful — a host row anchored
+    to the standard is a partner worth disagreeing with.
+    """
+
+    @parameterized.named_parameters(*_HOST_TABLE)
+    def test_official_vector_at_both_output_lengths(
+        self,
+        cls: Callable[..., ByteHash],
+        args: tuple[object, ...],
+        length: int,
+        expected: str,
+    ) -> None:
+        msg = _official_batch(length)
+        with self.subTest(output_size=32):
+            got = np.asarray(cls(*args).digest(msg))
+            self.assertEqual(bytes(got[0]).hex(), expected[: 2 * 32])
+        with self.subTest(output_size=_EXTENDED_LEN):
+            # 131 bytes is three output blocks and a 3-byte remainder, so the
+            # stream running past one block and the partial tail are both here.
+            got = np.asarray(cls(*args, _EXTENDED_LEN).digest(msg))
+            self.assertEqual(bytes(got[0]).hex(), expected)
+
+
+class DifferentialTest(parameterized.TestCase):
+    """Device against host, on random messages at lengths nobody published.
+
+    The one case in this package whose partner is not this tree: the `blake3`
+    binding is the BLAKE3 team's own, wrapping the reference the vectors are
+    generated from. Agreement is therefore evidence about the implementation
+    rather than about one reading of the spec being applied twice.
+    """
+
+    @parameterized.named_parameters(*_PAIRS)
+    def test_the_two_substrates_agree_at_unpublished_lengths(
+        self,
+        device: Callable[..., ByteHash],
+        host: Callable[..., ByteHash],
+        args: tuple[object, ...],
+    ) -> None:
+        rng = np.random.default_rng(7)
+        for length in _RANDOM_LENGTHS:
+            # Two rows, so a length that packed the batch axis wrongly on one
+            # substrate and not the other fails here rather than passing on a
+            # batch of one.
+            msg = rng.integers(0, 256, size=(2, length), dtype=np.uint8)
+            with self.subTest(length=length):
+                np.testing.assert_array_equal(
+                    np.asarray(device(*args).digest(msg)),
+                    np.asarray(host(*args).digest(msg)),
+                )
 
 
 class SeamConformanceTest(parameterized.TestCase):
@@ -104,6 +256,10 @@ class SeamConformanceTest(parameterized.TestCase):
         # here rather than in a case of its own — `blake3_test` already checks
         # rows do not interact, against the reference oracle and through the
         # tree, which is more than a delegation can break.
+        #
+        # The batch is a device array for both substrates, which also pins that
+        # a host row takes one: a consumer holding device bytes should not have
+        # to convert them to reach the host path.
         msg = _rows(official_input(200), official_input(200))
         for size in (32, 131):
             with self.subTest(output_size=size):
@@ -145,7 +301,7 @@ class SeamConformanceTest(parameterized.TestCase):
         self.assertNotEqual(cls(*args, 32), cls(*args, 64))
         self.assertNotEqual(cls(*args), object())
 
-    @parameterized.named_parameters(*_EVERY_ROW)
+    @parameterized.named_parameters(*_DEVICE_ROWS)
     def test_digest_accepts_a_tracer(
         self, cls: Callable[..., ByteHash], args: tuple[object, ...]
     ) -> None:
@@ -166,43 +322,121 @@ class SeamConformanceTest(parameterized.TestCase):
             np.asarray(cls(*args).digest(message)),
         )
 
+    @parameterized.named_parameters(*_HOST_ROWS)
+    def test_a_host_row_returns_a_host_array(
+        self, cls: Callable[..., ByteHash], args: tuple[object, ...]
+    ) -> None:
+        # The mirror of the case above, and the only thing separating the two
+        # substrates here: every row reports `has_dedicated_fusion = False`, so
+        # what tells a consumer it may not hash inside its own jit is that this
+        # one hands back an `np.ndarray`.
+        self.assertIsInstance(cls(*args).digest(_rows(official_input(65))), np.ndarray)
 
-class ModeIdentityTest(absltest.TestCase):
+
+class ModeIdentityTest(parameterized.TestCase):
     """What each row adds to the value surface, and that the rows are distinct."""
 
-    def test_the_key_is_part_of_the_value(self) -> None:
+    @parameterized.named_parameters(
+        ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
+        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
+    )
+    def test_the_key_is_part_of_the_value(
+        self,
+        _hash: Callable[..., ByteHash],
+        keyed: Callable[..., ByteHash],
+        _derive: Callable[..., ByteHash],
+    ) -> None:
         # The one thing a keyed row must not inherit unchanged. Comparing on
         # `digest_size` alone makes two keys one hash: as pytree aux that serves
         # one key's trace to the other key's caller, silently and forever.
         other = bytes(len(KEY))
-        self.assertNotEqual(Blake3Keyed(KEY), Blake3Keyed(other))
-        self.assertNotEqual(Blake3Keyed(KEY, 64), Blake3Keyed(other, 64))
+        self.assertNotEqual(keyed(KEY), keyed(other))
+        self.assertNotEqual(keyed(KEY, 64), keyed(other, 64))
 
-    def test_the_context_is_part_of_the_value(self) -> None:
-        self.assertNotEqual(Blake3DeriveKey("one"), Blake3DeriveKey("two"))
+    @parameterized.named_parameters(
+        ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
+        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
+    )
+    def test_the_context_is_part_of_the_value(
+        self,
+        _hash: Callable[..., ByteHash],
+        _keyed: Callable[..., ByteHash],
+        derive: Callable[..., ByteHash],
+    ) -> None:
+        self.assertNotEqual(derive("one"), derive("two"))
 
-    def test_a_str_context_and_its_utf8_bytes_are_one_hash(self) -> None:
+    @parameterized.named_parameters(
+        ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
+        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
+    )
+    def test_a_str_context_and_its_utf8_bytes_are_one_hash(
+        self,
+        _hash: Callable[..., ByteHash],
+        _keyed: Callable[..., ByteHash],
+        derive: Callable[..., ByteHash],
+    ) -> None:
         # They derive identical bytes, so treating them as two would make one of
         # them a second jit cache key for no computation.
-        self.assertEqual(Blake3DeriveKey(CONTEXT), Blake3DeriveKey(CONTEXT.encode()))
-        self.assertEqual(
-            hash(Blake3DeriveKey(CONTEXT)), hash(Blake3DeriveKey(CONTEXT.encode()))
-        )
+        self.assertEqual(derive(CONTEXT), derive(CONTEXT.encode()))
+        self.assertEqual(hash(derive(CONTEXT)), hash(derive(CONTEXT.encode())))
 
-    def test_the_rows_are_three_hashes_and_not_one(self) -> None:
+    @parameterized.named_parameters(
+        ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
+        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
+    )
+    def test_the_rows_are_three_hashes_and_not_one(
+        self,
+        plain: Callable[..., ByteHash],
+        keyed: Callable[..., ByteHash],
+        derive: Callable[..., ByteHash],
+    ) -> None:
         # They share a base and a `digest_size`, which is exactly the shape in
         # which a value comparison over the base's parameters alone would call
         # them equal.
-        self.assertNotEqual(Blake3(), Blake3Keyed(KEY))
-        self.assertNotEqual(Blake3(), Blake3DeriveKey(CONTEXT))
-        self.assertNotEqual(Blake3Keyed(KEY), Blake3DeriveKey(CONTEXT))
+        self.assertNotEqual(plain(), keyed(KEY))
+        self.assertNotEqual(plain(), derive(CONTEXT))
+        self.assertNotEqual(keyed(KEY), derive(CONTEXT))
 
-    def test_rejects_a_key_that_is_not_32_bytes(self) -> None:
+    @parameterized.named_parameters(*_PAIRS)
+    def test_a_row_and_its_host_sibling_are_two_hashes(
+        self,
+        device: Callable[..., ByteHash],
+        host: Callable[..., ByteHash],
+        args: tuple[object, ...],
+    ) -> None:
+        # Same bytes, different substrate — and a consumer choosing between them
+        # is choosing between a kernel and a host loop. Equal as pytree aux, they
+        # would share a jit cache entry across that choice.
+        self.assertNotEqual(device(*args), host(*args))
+        self.assertNotEqual(host(*args), device(*args))
+
+    @parameterized.named_parameters(("device", Blake3Keyed), ("host", HostBlake3Keyed))
+    def test_rejects_a_key_that_is_not_32_bytes(
+        self, keyed: Callable[..., ByteHash]
+    ) -> None:
         # Refused at construction, where the caller can still act on it, rather
         # than at the first `digest`.
         for name, size in (("short", 31), ("long", 33), ("empty", 0)):
             with self.subTest(case=name), self.assertRaises(ValueError):
-                Blake3Keyed(bytes(size))
+                keyed(bytes(size))
+
+
+class HostDeriveKeyContextTest(absltest.TestCase):
+    """The one place the host row is narrower than the device row it mirrors."""
+
+    def test_rejects_a_context_that_is_not_utf8(self) -> None:
+        # `blake3.blake3(..., derive_key_context=...)` takes a `str`, so a
+        # context the device row would happily hash as bytes has no host path.
+        # Refused at construction rather than at the first `digest`, and with the
+        # reason, since a caller hitting this has to choose another context.
+        with self.assertRaises(ValueError):
+            HostBlake3DeriveKey(b"\xff\xfe not utf-8")
+
+    def test_the_device_row_takes_the_context_the_host_row_refuses(self) -> None:
+        # The narrowing is the binding's and not the standard's, so it is pinned
+        # from both sides: were the device row to start refusing these too, this
+        # fails and the docstring stops being true.
+        self.assertEqual(Blake3DeriveKey(b"\xff\xfe").digest_size, 32)
 
 
 if __name__ == "__main__":

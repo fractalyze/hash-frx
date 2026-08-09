@@ -30,6 +30,7 @@ from frx import Array
 from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
+from hash_frx.byte_hash import host_digest
 from hash_frx.fusion import fused_region
 from hash_frx.word import rotr
 
@@ -555,13 +556,9 @@ class HostSha256:
     has_dedicated_fusion = False
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
-        rows = np.ascontiguousarray(np.asarray(msg, dtype=np.uint8))  # [B, L]
-        out = np.empty((rows.shape[0], 32), dtype=np.uint8)
-        for i, row in enumerate(rows):
-            out[i] = np.frombuffer(
-                hashlib.sha256(row.tobytes()).digest(), dtype=np.uint8
-            )
-        return out
+        return host_digest(
+            lambda row: hashlib.sha256(row).digest(), self.digest_size, msg
+        )
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):

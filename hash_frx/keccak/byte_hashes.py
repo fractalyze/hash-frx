@@ -46,9 +46,12 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.byte_hash import host_digest
 from hash_frx.keccak.sponge import KeccakSponge
 
 if TYPE_CHECKING:
+    from _typeshed import ReadableBuffer
+
     from hash_frx.byte_hash import ByteHash
 
 # FIPS 202 section 6.1: SHA3-256(M) = KECCAK[512](M ‖ 01, 256), and section B.2
@@ -154,6 +157,11 @@ class _HostKeccak:
     for a strictly sequential caller that reads each digest back immediately: a
     device dispatch per short message costs more than `hashlib` does. It can never
     be called on a traced message, which is the return type saying so.
+
+    A subclass supplies `_hash_one`, which is the whole row: which `hashlib`
+    function, and — for the XOFs — how many bytes to read out of it. The loop it
+    runs under is [`byte_hash.host_digest`](../byte_hash.py), shared with every
+    other host row in the package.
     """
 
     has_dedicated_fusion = False
@@ -161,15 +169,11 @@ class _HostKeccak:
     def __init__(self, digest_size: int) -> None:
         self.digest_size = digest_size
 
-    def _hash_one(self, data: bytes) -> bytes:
+    def _hash_one(self, data: ReadableBuffer) -> bytes:
         raise NotImplementedError
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
-        rows = np.ascontiguousarray(np.asarray(msg, dtype=np.uint8))  # [B, L]
-        out = np.empty((rows.shape[0], self.digest_size), dtype=np.uint8)
-        for i, row in enumerate(rows):
-            out[i] = np.frombuffer(self._hash_one(row.tobytes()), dtype=np.uint8)
-        return out
+        return host_digest(self._hash_one, self.digest_size, msg)
 
     def __eq__(self, other: object) -> bool:
         if type(other) is not type(self):
@@ -186,21 +190,21 @@ class HostSha3_256(_HostKeccak):
     def __init__(self) -> None:
         super().__init__(SHA3_256_DIGEST_SIZE)
 
-    def _hash_one(self, data: bytes) -> bytes:
+    def _hash_one(self, data: ReadableBuffer) -> bytes:
         return hashlib.sha3_256(data).digest()
 
 
 class HostShake128(_HostKeccak):
     """`ByteHash` for host SHAKE128 over `hashlib.shake_128`."""
 
-    def _hash_one(self, data: bytes) -> bytes:
+    def _hash_one(self, data: ReadableBuffer) -> bytes:
         return hashlib.shake_128(data).digest(self.digest_size)
 
 
 class HostShake256(_HostKeccak):
     """`ByteHash` for host SHAKE256 over `hashlib.shake_256`."""
 
-    def _hash_one(self, data: bytes) -> bytes:
+    def _hash_one(self, data: ReadableBuffer) -> bytes:
         return hashlib.shake_256(data).digest(self.digest_size)
 
 

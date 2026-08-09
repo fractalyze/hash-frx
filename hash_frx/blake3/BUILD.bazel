@@ -13,6 +13,8 @@ py_library(
     deps = [
         "//hash_frx:byte_hash",
         "//hash_frx:word",
+        requirement("blake3"),
         requirement("frx"),
+        requirement("numpy"),
     ],
 )
