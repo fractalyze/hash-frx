@@ -12,6 +12,7 @@ tests live here too, since the construction is the Sponge's, not a permutation's
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import frx
 import frx.numpy as fnp
@@ -25,7 +26,14 @@ from hash_frx.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
-from hash_frx.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams, SpongeType
+from hash_frx.sponge import (
+    SPONGE_HASH_MARKER,
+    Sponge,
+    SpongeParams,
+    SpongeType,
+    _hash_body,
+)
+from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 # Plonky3 golden vectors (p3_commit=4318eba..., default_koalabear_poseidon2_16):
@@ -185,6 +193,29 @@ def _ref_merkle_damgard(
         st = st.at[rate : rate + out].set(cap)  # chain
         st = perm.permute(st)
     return st[:out]
+
+
+class SpongeTraceCacheTest(absltest.TestCase):
+    """`_hash_body` is a module-level jit zone, and nothing about the output can
+    see it: `inline=True` splices the cached jaxpr, so bytes and the lowered
+    module are identical whether or not the zone is there. Only a trace count
+    separates them — which is why the zone needs a test of its own rather than
+    riding on the correctness suite."""
+
+    def test_hash_reuses_one_trace_across_instances(self) -> None:
+        # Freshly built same-parameter sponges must share one trace: the static
+        # key (sponge + construction) compares by value. Without the zone every
+        # emission re-traces the decomposition — and `lax.composite` re-traces it
+        # again under each vmap batching, so a Merkle commit that hashes a leaf
+        # per row pays it per row.
+        x = fnp.arange(12, dtype=F)
+        calls = [
+            functools.partial(
+                Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8)).hash, x
+            )
+            for _ in (0, 1)
+        ]
+        assert_single_trace(self, _hash_body, calls)
 
 
 # Permutations the construction is exercised over — add a row to cover another
