@@ -196,7 +196,8 @@ class KeccakF1600:
     width = WIDTH
     dtype = fnp.uint32
     # No `hash_frx.keccak_f` emitter exists yet; consumers fall back to the
-    # generic region marker.
+    # generic region marker, which carries no version.
+    fused_region_marker = (FUSED_REGION_MARKER, 0)
     has_dedicated_fusion = False
 
     def __eq__(self, other: object) -> bool:

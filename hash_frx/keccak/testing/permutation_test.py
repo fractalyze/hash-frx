@@ -29,6 +29,7 @@ from hash_frx.keccak.testing.reference import (
 from hash_frx.permutation import Permutation
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_seam import assert_marker_matches_emission
 
 _ALL_ONES = 0xFFFFFFFFFFFFFFFF
 
@@ -99,6 +100,11 @@ class KeccakF1600Test(absltest.TestCase):
         text = frx.jit(k.permute).lower(_device_state(_STATES["zeros"])).as_text()
         self.assertEqual(text.count("stablehlo.composite"), 1)
         self.assertIn(f'"{FUSED_REGION_MARKER}"', text)
+
+    def test_seam_marker_matches_the_emission(self) -> None:
+        assert_marker_matches_emission(
+            self, KeccakF1600(), _device_state(_STATES["zeros"])
+        )
 
     def test_the_marked_decomposition_is_fusion_ready(self) -> None:
         # The generic rewriter accepts a straight-line element-wise body only, so

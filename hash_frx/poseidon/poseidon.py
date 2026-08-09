@@ -28,7 +28,7 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import fused_region
+from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
 from hash_frx.poseidon.linear import apply_dense_mds
 from hash_frx.poseidon.params import PoseidonParams
 
@@ -63,7 +63,11 @@ class Poseidon:
         # Classic Poseidon always applies its dense MDS via integer literals and
         # routes to the dedicated `hash_frx.poseidon` emitter — there is no
         # free-form fallback (the MDS rides as a marker attribute either way).
-        self.has_dedicated_fusion = True
+        self.fused_region_marker = (POSEIDON_MARKER, POSEIDON_MARKER_VERSION)
+        # Derived from the marker rather than asserted alongside it, so the two
+        # cannot drift (mirrors Poseidon2 and SparsePoseidon, whose marker is a
+        # runtime choice).
+        self.has_dedicated_fusion = self.fused_region_marker[0] != FUSED_REGION_MARKER
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
@@ -157,11 +161,12 @@ def _permute_body(perm: Poseidon, state: Array) -> Array:
     # `dense<[..]>:tensor<N*Nxi64>` the recognizer parses with
     # GetCompositeAttrIntArray; a plain list lowers to an unparsed ArrayAttr.
     marker_attrs: dict[str, object] = _poseidon_marker_attrs(perm)
+    name, version = perm.fused_region_marker
     return fused_region(
         permutation,
         *operands,
-        name=POSEIDON_MARKER,
-        version=POSEIDON_MARKER_VERSION,
+        name=name,
+        version=version,
         **marker_attrs,
     )
 
