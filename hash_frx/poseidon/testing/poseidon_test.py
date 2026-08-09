@@ -23,6 +23,7 @@ from hash_frx.poseidon.poseidon import (
     Poseidon,
 )
 from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.marker_seam import assert_marker_matches_emission
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -190,6 +191,10 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         assert_marker_recognized(
             self, "poseidon", p.permute, fnp.arange(p.width, dtype=F)
         )
+
+    def test_seam_marker_matches_the_emission(self) -> None:
+        p = Poseidon(_poseidon_params())
+        assert_marker_matches_emission(self, p, fnp.arange(p.width, dtype=F))
 
 
 if __name__ == "__main__":

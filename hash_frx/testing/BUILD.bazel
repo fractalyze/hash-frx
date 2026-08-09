@@ -57,6 +57,7 @@ py_test(
     size = "small",
     srcs = ["permutation_test.py"],
     deps = [
+        "//hash_frx:fusion",
         "//hash_frx:permutation",
         requirement("absl_py"),
         requirement("frx"),
@@ -117,6 +118,21 @@ py_library(
         "jit_cache.py",
     ],
     visibility = ["//hash_frx:__subpackages__"],
+)
+
+py_library(
+    name = "marker_seam",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "marker_seam.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [
+        "//hash_frx:fusion",
+        "//hash_frx:permutation",
+        requirement("frx"),
+    ],
 )
 
 py_library(

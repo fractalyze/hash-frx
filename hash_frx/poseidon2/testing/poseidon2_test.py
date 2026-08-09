@@ -25,6 +25,7 @@ from hash_frx.poseidon2.testing.koalabear16 import (
 )
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.marker_seam import assert_marker_matches_emission
 
 
 class Poseidon2Koalabear16Test(absltest.TestCase):
@@ -75,6 +76,11 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
     def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
         p = koalabear16_perm()
         assert_marker_recognized(self, "poseidon2", p.permute, fnp.arange(16, dtype=F))
+
+    def test_seam_marker_matches_the_emission(self) -> None:
+        assert_marker_matches_emission(
+            self, koalabear16_perm(), fnp.arange(16, dtype=F)
+        )
 
     def test_non_identity_j_scale_stays_five_operands_canonical(self) -> None:
         # A non-identity J scale must ride as the CANONICAL attribute value and

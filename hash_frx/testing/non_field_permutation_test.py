@@ -32,6 +32,7 @@ from frx import Array
 
 from hash_frx.compression import Compression, CompressionParams
 from hash_frx.duplex_sponge import DuplexSponge
+from hash_frx.fusion import FUSED_REGION_MARKER
 from hash_frx.permutation import Permutation
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.sponge import Sponge, SpongeParams, SpongeType
@@ -58,6 +59,7 @@ class _WordPerm:
     width = _WIDTH
     dtype = fnp.uint32
     has_dedicated_fusion = False
+    fused_region_marker = (FUSED_REGION_MARKER, 0)
 
     def permute(self, state: Array) -> Array:
         return _rotl(fnp.roll(state, 1), _ROT) ^ fnp.uint32(_K)

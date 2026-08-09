@@ -33,6 +33,7 @@ from hash_frx.poseidon.sparse import (
     SparsePoseidon,
 )
 from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.marker_seam import assert_marker_matches_emission
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -219,6 +220,11 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         )
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
 
+    def test_seam_marker_matches_the_generic_emission(self) -> None:
+        assert_marker_matches_emission(
+            self, _generic_perm(), fnp.arange(_WIDTH, dtype=F)
+        )
+
 
 def _generic_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
     """A SparsePoseidon built with the dedicated emitter forced unavailable, so its
@@ -252,6 +258,11 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         self.assertIn(f"version = {POSEIDON_SPARSE_MARKER_VERSION}", composite_line)
         operands = composite_line.split(f'"{POSEIDON_SPARSE_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 6, composite_line)
+
+    def test_seam_marker_matches_the_dedicated_emission(self) -> None:
+        assert_marker_matches_emission(
+            self, SparsePoseidon(_params()), fnp.arange(_WIDTH, dtype=F)
+        )
 
     def test_shape_and_matrix_attrs_serialize_as_dense_i64(self) -> None:
         # The schedule shape rides as int attrs and the four matrices as
