@@ -191,6 +191,7 @@ py_test(
     size = "medium",
     srcs = ["sponge_test.py"],
     deps = [
+        ":jit_cache",
         ":marker_recognized",
         "//hash_frx:permutation",
         "//hash_frx:sponge",
