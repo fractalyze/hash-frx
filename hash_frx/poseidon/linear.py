@@ -13,7 +13,9 @@ Two matrix forms, by where the matrix rides:
   name-routed `fused_region`, where a closed-over array lifts to a leading operand
   and breaks the emitter's ABI (the structure rides as an int64 marker attribute
   instead). The dedicated `hash_frx.sparse_poseidon` emitter's reference body uses
-  these; it supports only fields whose canonical values fit an int64 literal.
+  these; entries past the int-literal staging cap are assembled in field
+  arithmetic by `_scale`, so any u64-representable field works here (classic
+  `Poseidon`'s own int64 marker attributes still bound its fields at 2^63).
 - **Field-array** (`apply_matrix` (shared), `apply_sparse_partial`) — the matrix
   stays a field array, which the generic `zorch.fused_region` marker lifts to an
   operand harmlessly (no name-routed ABI). This is the optimized-sparse variant's
@@ -27,6 +29,49 @@ import frx.numpy as fnp
 from frx import Array
 
 from hash_frx.linear import unrolled_sum
+
+# Widest canonical constant that can ride as a bare Python-int literal: without
+# x64, frx stages a plain int operand as an int32. A wider constant is
+# assembled in field arithmetic by `_scale` instead.
+_LITERAL_MAX = 2**31 - 1
+
+
+def _scale(c: int, x: Array, zero: Array | None) -> Array:
+    """`c * x` for a canonical int `c` of any width the field holds.
+
+    Below `_LITERAL_MAX` this is the plain literal multiply. A wider `c` —
+    Goldilocks canonical values reach `2^64 - 2^32` — cannot stage as an int
+    literal, and staging it as an array constant would have the composite lift
+    it to a leading operand and break the dedicated emitter's ABI. So it is
+    rebuilt in field arithmetic from 16-bit literals: Horner over base `2^16`,
+    seeded from `zero`, the caller's const-free field zero hoisted once per
+    body — the assembly then reads `x` once, instead of spending an extra
+    `x - x` read per call (the chained-input rule in `hash_frx.linear`; this
+    body executes on any backend that does not route the marker). All
+    intermediates are `< p` reductions of the same integer, so the assembled
+    value is exactly `c`.
+    """
+    if c <= _LITERAL_MAX:
+        return c * x
+    assert zero is not None, "wide constant, but the caller hoisted no zero seed"
+    limbs = []  # little-endian base-2^16
+    v = c
+    while v:
+        limbs.append(v & 0xFFFF)
+        v >>= 16
+    acc = zero + limbs[-1]
+    for limb in reversed(limbs[:-1]):
+        acc = acc * 0x10000 + limb
+    return acc * x
+
+
+def _shared_zero(entries: tuple[int, ...], x: Array) -> Array | None:
+    """The Horner seed `_scale` needs when any entry is past `_LITERAL_MAX`:
+    one const-free zero for the whole body, or None when every entry stages as
+    a literal (so a narrow-field body traces unchanged)."""
+    if all(c <= _LITERAL_MAX for c in entries):
+        return None
+    return x - x
 
 
 def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Array:
@@ -50,8 +95,12 @@ def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Arra
     # input w**2 times, which is the same per-lane fan-out the chained-input rule
     # in `hash_frx.linear` forbids, squared.
     lanes = [state[j] for j in range(w)]
+    zero = _shared_zero(tuple(c for row in mds_rows for c in row), lanes[0])
     return fnp.stack(
-        [unrolled_sum([mds_rows[i][j] * lanes[j] for j in range(w)]) for i in range(w)]
+        [
+            unrolled_sum([_scale(mds_rows[i][j], lanes[j], zero) for j in range(w)])
+            for i in range(w)
+        ]
     )
 
 
@@ -116,14 +165,12 @@ def apply_sparse_partial_ints(
     marker attribute instead). Same arithmetic and reduction-free normal form as
     `apply_sparse_partial`; this is the sparse-partial sibling of `apply_dense_mds`.
 
-    Unlike its twin this reads `active` once per lane, against the chained-input
-    rule in `hash_frx.linear`. Broadcasting `active` to a vector first would hold
-    the rule without capturing an array, but costs ~23% more traced equations, and
-    nothing chains this body at a width where that matters: the int64 literals
-    confine it to fields under 2^63, and those route to the dedicated emitter,
-    which replaces it. **That safety is incidental** — the gate is about marker
-    attribute width, not fan-out — so a field between 2^32 and 2^63 would put a
-    real permutation back on this shape. Give it the broadcast then.
+    Like its twin, `active` is read O(1) times: once for lane 0's dense term and
+    once to broadcast for the rank-1 column (the chained-input rule in
+    `hash_frx.linear`). The broadcast costs a few extra traced equations over
+    re-reading the scalar per lane, but this body EXECUTES on any backend that
+    compiles the marker without routing it, where the per-lane fan-out is a
+    real cost, not a hypothetical.
     """
     w = len(dot_row)
     if len(col_vec) != w - 1:
@@ -139,8 +186,14 @@ def apply_sparse_partial_ints(
             f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
             f"width {w}"
         )
+    zero = _shared_zero((*dot_row, *col_vec), active)
+    # Lanes read the broadcast, not the chained scalar.
+    av = fnp.broadcast_to(active, (w - 1,))
     out0 = unrolled_sum(
-        [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
+        [_scale(dot_row[0], active, zero)]
+        + [_scale(dot_row[j], tail[j - 1], zero) for j in range(1, w)]
     )
-    out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])
+    out_rest = fnp.stack(
+        [tail[t] + _scale(col_vec[t], av[t], zero) for t in range(w - 1)]
+    )
     return fnp.concatenate([out0[None], out_rest])
