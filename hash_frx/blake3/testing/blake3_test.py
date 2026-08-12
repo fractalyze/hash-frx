@@ -931,10 +931,11 @@ class NonRootDigestTest(parameterized.TestCase):
             np.array_equal(np.asarray(non_root_digest(message)), _digest(message))
         )
 
-    def test_the_marker_rides_version_2_with_the_non_root_attr(self) -> None:
-        # Version 2 rather than a version-1 attribute, so a pre-non_root
-        # emitter REJECTS the marker (its recognizer pins version 1) instead of
-        # ROOT-finalizing a non-root request into well-formed wrong bytes.
+    def test_the_marker_rides_version_1_with_the_non_root_attr(self) -> None:
+        # An attribute rather than a version bump: hash-frx and the emitters
+        # pin each other through the auto-bump chain, so no shipped emitter
+        # meets a marker it predates, and the version stays a rewrite-or-die
+        # gate rather than a finalization switch.
         marker = _composite(non_root_digest, _rows(official_input(BLOCK_LEN)))
         self.assertEqual(marker.regions, 1)
         self.assertEqual(
@@ -944,11 +945,11 @@ class NonRootDigestTest(parameterized.TestCase):
         self.assertEqual(marker.result, f"tensor<1x{DIGEST_LEN}xui8>")
         self.assertIn("non_root = 1 : i64", marker.attrs)
         self.assertIn(f"out_len = {DIGEST_LEN} : i64", marker.attrs)
-        self.assertIn("version = 2", marker.attrs)
+        self.assertIn("version = 1", marker.attrs)
 
-    def test_a_root_digest_still_rides_version_1(self) -> None:
-        # The root path's wire is untouched: published emitters keep
-        # recognizing every existing call site.
+    def test_a_root_digest_carries_no_non_root_attr(self) -> None:
+        # The root path's wire is untouched: existing call sites emit the
+        # exact marker they always did.
         marker = _composite(digest, _rows(official_input(BLOCK_LEN)))
         self.assertIn("version = 1", marker.attrs)
         self.assertNotIn("non_root", marker.attrs)

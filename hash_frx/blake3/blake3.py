@@ -77,12 +77,6 @@ BLAKE3_MARKER = "hash_frx.blake3"
 # carries one: a contract change stages through it rather than through a rename,
 # which the recognizer would not accept and which would silently lose fusion.
 BLAKE3_MARKER_VERSION = 1
-# The non-root contract (`non_root = 1`, output = the final node's chaining
-# value) rides version 2 — its own version rather than a version-1 attribute,
-# because an emitter that predates it validates version 1 and would otherwise
-# ROOT-finalize a non-root request into well-formed wrong bytes. Version 1
-# call sites are untouched, so published emitters keep recognizing them.
-BLAKE3_MARKER_VERSION_NON_ROOT = 2
 
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
@@ -782,7 +776,7 @@ def unmarked_non_root_hash(msg: ArrayLike, mode: Mode) -> Array:
 # the cached jaxpr into the enclosing trace, so the emitted module — one
 # composite per hash — is unchanged. `out_len`, `flags` and `non_root` are
 # static: each fixes the shape or the finalization of the emitted program, and
-# each rides the marker (`non_root` only at version 2).
+# each rides the marker as an attribute.
 @partial(frx.jit, inline=True, static_argnames=("out_len", "flags", "non_root"))
 def tree_hash(
     msg: Array, key_words: Array, *, out_len: int, flags: int, non_root: bool = False
@@ -823,15 +817,13 @@ def tree_hash(
     `DERIVE_KEY_MATERIAL`, never a mask. The flags a node's own position carries
     — `CHUNK_START`, `CHUNK_END`, `PARENT`, `ROOT` — belong to the hash rather
     than the caller, so the emitter derives them and they never appear here.
-    Under `non_root=True` a third attribute `non_root = 1` rides, and the
-    marker's version moves to `BLAKE3_MARKER_VERSION_NON_ROOT` — see that
-    constant for why it is a version rather than a version-1 attribute.
+    Under `non_root=True` a third attribute `non_root = 1` rides.
 
     **The result.** uint8 `[B, out_len]`: the root node's extendable output read
     from the start (spec section 2.6), which at `out_len = 32` is the standard
     digest. Under `non_root=True` it is instead the final node's 32-byte
-    chaining value — the same compression without `ROOT` (spec section 2.4),
-    which is what a Merkle tree built on BLAKE3's own tree semantics (leaf =
+    chaining value — the same compression without `ROOT`, which is what a
+    Merkle tree built on BLAKE3's own tree semantics (leaf =
     `finalize_non_root`) commits to. A chaining value is one 256-bit value, not
     a stream, so `out_len` must be 32: extending output is the `ROOT`
     compression's mechanism, which non-root finalization by definition never
@@ -861,7 +853,7 @@ def tree_hash(
             key_words,
             IV_WORDS,
             name=BLAKE3_MARKER,
-            version=BLAKE3_MARKER_VERSION_NON_ROOT,
+            version=BLAKE3_MARKER_VERSION,
             out_len=out_len,
             flags=flags,
             non_root=1,
