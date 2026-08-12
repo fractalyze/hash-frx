@@ -43,6 +43,12 @@ IV = (
 )
 # fmt: on
 
+# The IV as a device array, held once for the whole package: it is what hash mode
+# opens its nodes from, and it is an operand of the marked region rather than a
+# constant the body builds (see `compress`), so every emission has to pass the
+# same value rather than materialise one per call site.
+IV_WORDS = fnp.asarray(IV, dtype=U32)
+
 # Domain-separation flags (spec section 2.2, Table 3). A caller ORs these into
 # `flags`.
 CHUNK_START = 1 << 0
@@ -125,6 +131,7 @@ def compress(
     counter: Array,
     block_len: Array,
     flags: Array,
+    iv: Array = IV_WORDS,
 ) -> Array:
     """Compress one block per batch row: `[B, 16]` uint32 output.
 
@@ -133,6 +140,15 @@ def compress(
     counter        : uint32 `[B, 2]` — the 64-bit chunk counter as (low, high)
     block_len      : uint32 `[B]`
     flags          : uint32 `[B]`
+    iv             : uint32 `[8]` — the spec IV, of which the first four words
+                     open the state's third row. An operand rather than a
+                     constant this body builds, for the reason
+                     `docs/reference/conventions.md` gives: a `lax.composite`
+                     lifts such a constant into an operand ahead of the explicit
+                     ones, one copy per call site, so the marker's ABI would
+                     otherwise be a function of the message length. A caller
+                     under a marked region passes the region's operand; everyone
+                     else takes the module table.
 
     The first eight output words are the new chaining value; a root node reads
     all sixteen as extendable output.
@@ -152,13 +168,18 @@ def compress(
         # coerce, so the caller's dtype bug surfaces here and not one layer out.
         if arr.dtype != U32:
             raise TypeError(f"{name} must be uint32, got {arr.dtype}")
+    # Unbatched, so it is checked apart from the loop above rather than folded
+    # into it: one IV serves every row, the way one key serves a whole `Mode`.
+    if iv.shape != (8,):
+        raise ValueError(f"iv must be [8], got {iv.shape}")
+    if iv.dtype != U32:
+        raise TypeError(f"iv must be uint32, got {iv.dtype}")
 
     batch = chaining_value.shape[0]
-    iv = fnp.broadcast_to(fnp.asarray(IV[:4], dtype=U32), (batch, 4))
     rows = (
         chaining_value[:, 0:4],
         chaining_value[:, 4:8],
-        iv,
+        fnp.broadcast_to(iv[:4], (batch, 4)),
         fnp.stack([counter[:, 0], counter[:, 1], block_len, flags], axis=1),
     )
 

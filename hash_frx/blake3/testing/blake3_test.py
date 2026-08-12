@@ -18,7 +18,9 @@ the right digest and only splits the kernel, so values alone cannot catch it.
 
 from __future__ import annotations
 
+import functools
 import re
+from typing import NamedTuple
 
 import frx
 import frx.numpy as fnp
@@ -26,20 +28,24 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.blake3.blake3 import (
+    BLAKE3_MARKER,
     BLOCK_LEN,
     CHUNK_LEN,
+    DIGEST_LEN,
     Mode,
     chaining_value,
     chunk_output,
     derive_key,
+    derive_key_mode,
     digest,
     hash_mode,
     keyed_digest,
     keyed_mode,
-    keyed_xof,
     parent_output,
     root_words,
+    tree_hash,
     tree_output,
+    unmarked_hash,
     xof,
 )
 from hash_frx.blake3.compress import (
@@ -66,9 +72,50 @@ from hash_frx.blake3.testing.vectors import (
     rows,
 )
 from hash_frx.testing.fusion_ready import assert_fusion_ready
+from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.word import split
 
 _U32 = np.uint32
+
+
+# `blake3.unmarked_hash` under each mode — the same implementation the shipped
+# entry points run, without the marker around it, which is what the tables below
+# read in place of `digest`/`xof`/`keyed_digest`/`derive_key`.
+#
+# **Why not the shipped names.** A marked call compiles the whole unrolled body,
+# and that compile is super-linear in the compression count: 0.83s at two blocks,
+# 4.17s at four, 25.72s at eight, and at one chunk it did not finish in eleven
+# minutes (46 GB resident). The wall is XLA's codegen of the unrolled hash rather
+# than the marker — at one block a marked call is 0.30s against 0.27s for a plain
+# `frx.jit` of the same body — so the marker did not introduce it, it only put it
+# on every call. The dedicated emitter removes it outright: a recognized
+# composite is one custom fusion and the body is never codegen'd
+# (fractalyze/xla#336), and these helpers go away with it.
+#
+# **What still pins the shipped path**: `MarkerTest`, which lowers rather than
+# runs and so is free at any length, plus the compiled cases at ≤ 4 blocks.
+def _unmarked(mode: Mode, msg: object, out_len: int = DIGEST_LEN) -> frx.Array:
+    return unmarked_hash(msg, mode, out_len)
+
+
+def _xof(msg: object, out_len: int) -> frx.Array:
+    return _unmarked(hash_mode(), msg, out_len)
+
+
+def _digest(msg: object) -> frx.Array:
+    return _unmarked(hash_mode(), msg)
+
+
+def _keyed_xof(key: object, msg: object, out_len: int) -> frx.Array:
+    return _unmarked(keyed_mode(key), msg, out_len)
+
+
+def _keyed_digest(key: object, msg: object) -> frx.Array:
+    return _unmarked(keyed_mode(key), msg)
+
+
+def _derive_key(context: str | bytes, material: object, out_len: int) -> frx.Array:
+    return _unmarked(derive_key_mode(context), material, out_len)
 
 
 def _rows(*messages: bytes) -> frx.Array:
@@ -93,7 +140,7 @@ def _compressions(length: int, out_len: int = 32) -> int:
     program actually carries: every call site is a copy of the compression body,
     and a body is exactly 60 xors.
     """
-    text = frx.jit(lambda m: xof(m, out_len)).lower(_rows(official_input(length)))
+    text = frx.jit(lambda m: _xof(m, out_len)).lower(_rows(official_input(length)))
     xors = text.as_text().count("stablehlo.xor")
     assert xors % 60 == 0, f"{xors} xors is not a whole number of compressions"
     return xors // 60
@@ -107,7 +154,7 @@ def _widest_constant(length: int, out_len: int, batch: int) -> int:
     reads.
     """
     message = _rows(*[official_input(length)] * batch)
-    text = frx.jit(lambda m: xof(m, out_len)).lower(message).as_text()
+    text = frx.jit(lambda m: _xof(m, out_len)).lower(message).as_text()
     return max(len(lit) for lit in re.findall(r"stablehlo\.constant [^\n]*", text))
 
 
@@ -116,10 +163,43 @@ def _counter(value: int) -> frx.Array:
     return fnp.asarray(np.array([split(value)], dtype=_U32))
 
 
+class _Composite(NamedTuple):
+    """One `stablehlo.composite` as the four things a marker test asks about."""
+
+    operands: list[str]
+    result: str
+    attrs: str
+    regions: int
+
+
+def _composite(fn: object, *args: frx.Array) -> _Composite:
+    """The `hash_frx.blake3` marker a lowered `fn` carries: the first one's
+    operand types, result type and attribute text, plus how many there are.
+
+    Read off the lowered MLIR rather than the jaxpr, because the module is the
+    artifact the XLA emitter reads — operand order included, which is the half of
+    the ABI a name and a version do not carry.
+    """
+    text = frx.jit(fn).lower(*args).as_text()
+    lines = [
+        ln for ln in text.splitlines() if f'stablehlo.composite "{BLAKE3_MARKER}"' in ln
+    ]
+    if not lines:
+        raise AssertionError(f"no {BLAKE3_MARKER} composite in the lowered module")
+    # The trailing `{attrs} : (operands) -> result`; the greedy first group runs
+    # to the last `} : (`, which is the signature's own rather than one nested
+    # inside `composite_attributes`.
+    match = re.search(r"\{(.*)\} : \((.*)\) -> (\S+)", lines[0])
+    if match is None:
+        raise AssertionError(f"unreadable composite line: {lines[0]}")
+    operands = [t.strip() for t in match.group(2).split(",")]
+    return _Composite(operands, match.group(3), match.group(1), len(lines))
+
+
 class DigestAgainstPublishedVectorsTest(parameterized.TestCase):
     @parameterized.parameters(*ALL_LENGTHS)
     def test_official_vector(self, length: int, expected: str) -> None:
-        got = np.asarray(digest(_rows(official_input(length))))
+        got = np.asarray(_digest(_rows(official_input(length))))
         self.assertEqual(bytes(got[0]).hex(), expected)
 
 
@@ -136,7 +216,7 @@ class BatchingTest(parameterized.TestCase):
         messages = [
             bytes(rng.integers(0, 256, size=size, dtype=np.uint8)) for _ in range(3)
         ]
-        got = np.asarray(digest(_rows(*messages)))
+        got = np.asarray(_digest(_rows(*messages)))
         for i, message in enumerate(messages):
             with self.subTest(row=i):
                 self.assertEqual(bytes(got[i]), ref.hash_tree(message))
@@ -148,7 +228,7 @@ class BatchingTest(parameterized.TestCase):
         # is compiled here, so the length is kept to what the property needs.
         rows = _rows(official_input(65), official_input(65))
         np.testing.assert_array_equal(
-            np.asarray(frx.jit(digest)(rows)), np.asarray(digest(rows))
+            np.asarray(frx.jit(digest)(rows)), np.asarray(_digest(rows))
         )
 
 
@@ -177,7 +257,7 @@ class ChunkCounterTest(absltest.TestCase):
         rng = np.random.default_rng(32)
         a = bytes(rng.integers(0, 256, size=CHUNK_LEN, dtype=np.uint8))
         b = bytes(rng.integers(0, 256, size=CHUNK_LEN, dtype=np.uint8))
-        got = np.asarray(digest(_rows(a + b, b + a)))
+        got = np.asarray(_digest(_rows(a + b, b + a)))
         self.assertNotEqual(bytes(got[0]), bytes(got[1]))
         self.assertEqual(bytes(got[0]), ref.hash_tree(a + b))
 
@@ -195,7 +275,7 @@ class TreeShapeTest(parameterized.TestCase):
         # rather than by pairing levels. Agreement between two spellings of the
         # shape is worth something; between two copies of one spelling, nothing.
         data = official_input(CHUNK_LEN * (nchunks - 1) + 1)
-        got = np.asarray(digest(_rows(data)))
+        got = np.asarray(_digest(_rows(data)))
         self.assertEqual(bytes(got[0]), ref.hash_tree(data))
 
     def test_a_halving_tree_would_disagree(self) -> None:
@@ -216,7 +296,7 @@ class TreeShapeTest(parameterized.TestCase):
             cvs[0], parent(cvs[1], cvs[2], ref.PARENT)[:8], ref.PARENT | ref.ROOT
         )
         self.assertNotEqual(standard[:8], halving[:8])
-        got = np.asarray(digest(_rows(data)))[0]
+        got = np.asarray(_digest(_rows(data)))[0]
         self.assertEqual(
             bytes(got), b"".join(w.to_bytes(4, "little") for w in standard[:8])
         )
@@ -232,7 +312,7 @@ class TailChunkTest(parameterized.TestCase):
     def test_a_short_last_chunk_hashes_the_same_as_the_oracle(self, tail: int) -> None:
         rng = np.random.default_rng(tail)
         data = bytes(rng.integers(0, 256, size=CHUNK_LEN * 2 + tail, dtype=np.uint8))
-        got = np.asarray(digest(_rows(data)))
+        got = np.asarray(_digest(_rows(data)))
         self.assertEqual(bytes(got[0]), ref.hash_tree(data))
 
 
@@ -303,7 +383,7 @@ class ParentNodeTest(absltest.TestCase):
         rng = np.random.default_rng(32)
         a = bytes(rng.integers(0, 256, size=CHUNK_LEN, dtype=np.uint8))
         b = bytes(rng.integers(0, 256, size=CHUNK_LEN, dtype=np.uint8))
-        got = np.asarray(digest(_rows(a + b, b + a)))
+        got = np.asarray(_digest(_rows(a + b, b + a)))
         self.assertNotEqual(bytes(got[0]), bytes(got[1]))
         self.assertEqual(bytes(got[0]), ref.hash_tree(a + b))
 
@@ -333,7 +413,7 @@ class ExtendableOutputTest(parameterized.TestCase):
         # with no second source — and 131 bytes is three output blocks and a
         # 3-byte remainder, so the counter running 0/1/2 and the partial tail
         # are both on the path here.
-        got = np.asarray(xof(_rows(official_input(length)), 131))
+        got = np.asarray(_xof(_rows(official_input(length)), 131))
         self.assertEqual(bytes(got[0]).hex(), expected)
 
     @parameterized.parameters(
@@ -348,8 +428,8 @@ class ExtendableOutputTest(parameterized.TestCase):
         # once per layer. One row each: a chunk with no tree, a chunk that
         # chains, and a parent-node tree.
         message = _rows(official_input(length))
-        self.assertEqual(bytes(np.asarray(digest(message))[0]).hex(), expected[:64])
-        self.assertEqual(bytes(np.asarray(xof(message, 131))[0]).hex(), expected)
+        self.assertEqual(bytes(np.asarray(_digest(message))[0]).hex(), expected[:64])
+        self.assertEqual(bytes(np.asarray(_xof(message, 131))[0]).hex(), expected)
 
     @parameterized.parameters(1, 63, 64, 65, 128, 200)
     def test_every_output_length_is_a_prefix(self, out_len: int) -> None:
@@ -364,13 +444,13 @@ class ExtendableOutputTest(parameterized.TestCase):
         # `reference.py` names for the same reason. A larger input would cost
         # a tree per parameter and pin nothing this does not.
         data = official_input(129)
-        got = np.asarray(xof(_rows(data), out_len))
+        got = np.asarray(_xof(_rows(data), out_len))
         self.assertEqual(out_len, got.shape[1])
         self.assertEqual(bytes(got[0]), ref.hash_xof(data, out_len))
 
     def test_rejects_an_empty_output(self) -> None:
         with self.assertRaises(ValueError):
-            xof(_rows(official_input(64)), 0)
+            _xof(_rows(official_input(64)), 0)
 
     def test_rows_do_not_interact_across_the_stream(self) -> None:
         # Every operand is spread one row per output block before the batched
@@ -384,7 +464,7 @@ class ExtendableOutputTest(parameterized.TestCase):
             bytes(rng.integers(0, 256, size=CHUNK_LEN + 7, dtype=np.uint8))
             for _ in range(3)
         ]
-        got = np.asarray(xof(_rows(*messages), 131))
+        got = np.asarray(_xof(_rows(*messages), 131))
         for i, message in enumerate(messages):
             with self.subTest(row=i):
                 self.assertEqual(bytes(got[i]), ref.hash_xof(message, 131))
@@ -393,7 +473,7 @@ class ExtendableOutputTest(parameterized.TestCase):
         # The counter is what separates one output block from the next, so a
         # version that dropped it would return the same 64 bytes over and over
         # — well-formed, the right length, and wrong.
-        got = np.asarray(xof(_rows(official_input(64)), 128))[0]
+        got = np.asarray(_xof(_rows(official_input(64)), 128))[0]
         self.assertNotEqual(bytes(got[:64]), bytes(got[64:]))
 
 
@@ -405,7 +485,7 @@ class KeyedHashTest(parameterized.TestCase):
         # length or two: below 65 bytes there is no parent to open from the key
         # at all, so only the multi-chunk rows can catch a tree that kept the IV
         # while its chunks took the key.
-        got = np.asarray(keyed_digest(KEY, _rows(official_input(length))))
+        got = np.asarray(_keyed_digest(KEY, _rows(official_input(length))))
         self.assertEqual(bytes(got[0]).hex(), expected)
 
     @parameterized.parameters(*rows(EXTENDED_KEYED, PER_LAYER_LENGTHS))
@@ -414,7 +494,7 @@ class KeyedHashTest(parameterized.TestCase):
         # section 2.6 repeated on a node the mode has already reached, and
         # `ExtendableOutputTest` pins that at all 35 lengths; what is left is
         # that a keyed node survives being read as a stream rather than a digest.
-        got = np.asarray(keyed_xof(KEY, _rows(official_input(length)), 131))
+        got = np.asarray(_keyed_xof(KEY, _rows(official_input(length)), 131))
         self.assertEqual(bytes(got[0]).hex(), expected)
 
     def test_keyed_output_differs_from_unkeyed(self) -> None:
@@ -424,8 +504,8 @@ class KeyedHashTest(parameterized.TestCase):
         # assertions already made rather than from running anything.
         message = _rows(official_input(100))
         self.assertNotEqual(
-            bytes(np.asarray(keyed_digest(KEY, message))[0]),
-            bytes(np.asarray(digest(message))[0]),
+            bytes(np.asarray(_keyed_digest(KEY, message))[0]),
+            bytes(np.asarray(_digest(message))[0]),
         )
 
     def test_a_different_key_is_a_different_hash(self) -> None:
@@ -433,8 +513,8 @@ class KeyedHashTest(parameterized.TestCase):
         # make two keys agree.
         message = _rows(official_input(200))
         self.assertNotEqual(
-            bytes(np.asarray(keyed_digest(KEY, message))[0]),
-            bytes(np.asarray(keyed_digest(bytes(len(KEY)), message))[0]),
+            bytes(np.asarray(_keyed_digest(KEY, message))[0]),
+            bytes(np.asarray(_keyed_digest(bytes(len(KEY)), message))[0]),
         )
 
     def test_the_mode_flag_rides_on_the_unrun_node(self) -> None:
@@ -458,7 +538,7 @@ class KeyedHashTest(parameterized.TestCase):
             bytes(rng.integers(0, 256, size=CHUNK_LEN + 7, dtype=np.uint8))
             for _ in range(3)
         ]
-        got = np.asarray(keyed_xof(KEY, _rows(*messages), 131))
+        got = np.asarray(_keyed_xof(KEY, _rows(*messages), 131))
         for i, message in enumerate(messages):
             with self.subTest(row=i):
                 self.assertEqual(bytes(got[i]), ref.keyed_xof(KEY, message, 131))
@@ -473,7 +553,7 @@ class KeyedHashTest(parameterized.TestCase):
         key = fnp.asarray(np.frombuffer(KEY, dtype=np.uint8))
         np.testing.assert_array_equal(
             np.asarray(frx.jit(keyed_digest)(key, message)),
-            np.asarray(keyed_digest(KEY, message)),
+            np.asarray(_keyed_digest(KEY, message)),
         )
 
     @parameterized.named_parameters(("short", 31), ("long", 33), ("empty", 0))
@@ -482,14 +562,14 @@ class KeyedHashTest(parameterized.TestCase):
         # reach `pack_le` and change the chaining-value shape — but the error it
         # raises there names an operand the caller never passed.
         with self.assertRaises(ValueError):
-            keyed_digest(bytes(size), _rows(official_input(64)))
+            _keyed_digest(bytes(size), _rows(official_input(64)))
 
 
 class DeriveKeyTest(parameterized.TestCase):
     @parameterized.parameters(*DERIVE_KEY)
     def test_official_derive_key_vector(self, length: int, expected: str) -> None:
         # The published context string, at every published length of material.
-        got = np.asarray(derive_key(CONTEXT, _rows(official_input(length)), 32))
+        got = np.asarray(_derive_key(CONTEXT, _rows(official_input(length)), 32))
         self.assertEqual(bytes(got[0]).hex(), expected)
 
     @parameterized.parameters(*rows(EXTENDED_DERIVE_KEY, PER_LAYER_LENGTHS))
@@ -497,7 +577,7 @@ class DeriveKeyTest(parameterized.TestCase):
         self, length: int, expected: str
     ) -> None:
         # One row per layer, for the reason the keyed case gives.
-        got = np.asarray(derive_key(CONTEXT, _rows(official_input(length)), 131))
+        got = np.asarray(_derive_key(CONTEXT, _rows(official_input(length)), 131))
         self.assertEqual(bytes(got[0]).hex(), expected)
 
     def test_the_context_separates(self) -> None:
@@ -506,8 +586,8 @@ class DeriveKeyTest(parameterized.TestCase):
         # one secret across purposes.
         material = _rows(official_input(200))
         self.assertNotEqual(
-            bytes(np.asarray(derive_key("one", material, 32))[0]),
-            bytes(np.asarray(derive_key("two", material, 32))[0]),
+            bytes(np.asarray(_derive_key("one", material, 32))[0]),
+            bytes(np.asarray(_derive_key("two", material, 32))[0]),
         )
 
     def test_the_context_and_the_material_are_not_interchangeable(self) -> None:
@@ -517,8 +597,8 @@ class DeriveKeyTest(parameterized.TestCase):
         # shapes objects.
         one, two = b"context one", b"context two"
         self.assertNotEqual(
-            bytes(np.asarray(derive_key(one, _rows(two), 32))[0]),
-            bytes(np.asarray(derive_key(two, _rows(one), 32))[0]),
+            bytes(np.asarray(_derive_key(one, _rows(two), 32))[0]),
+            bytes(np.asarray(_derive_key(two, _rows(one), 32))[0]),
         )
 
     @parameterized.named_parameters(
@@ -532,7 +612,7 @@ class DeriveKeyTest(parameterized.TestCase):
         # say so rather than assume it.
         context = bytes(official_input(size))
         material = official_input(200)
-        got = np.asarray(derive_key(context, _rows(material), 32))
+        got = np.asarray(_derive_key(context, _rows(material), 32))
         self.assertEqual(bytes(got[0]), ref.derive_key(context, material, 32))
 
     def test_a_str_context_is_its_utf8_bytes(self) -> None:
@@ -540,8 +620,8 @@ class DeriveKeyTest(parameterized.TestCase):
         # context rather than two.
         material = _rows(official_input(200))
         np.testing.assert_array_equal(
-            np.asarray(derive_key(CONTEXT, material, 32)),
-            np.asarray(derive_key(CONTEXT.encode(), material, 32)),
+            np.asarray(_derive_key(CONTEXT, material, 32)),
+            np.asarray(_derive_key(CONTEXT.encode(), material, 32)),
         )
 
     def test_the_material_may_be_a_tracer(self) -> None:
@@ -549,8 +629,8 @@ class DeriveKeyTest(parameterized.TestCase):
         # the material is a secret a consumer hashes inside its own jit.
         material = _rows(official_input(65))
         np.testing.assert_array_equal(
-            np.asarray(frx.jit(lambda m: derive_key(CONTEXT, m, 32))(material)),
-            np.asarray(derive_key(CONTEXT, material, 32)),
+            np.asarray(frx.jit(lambda m: _derive_key(CONTEXT, m, 32))(material)),
+            np.asarray(_derive_key(CONTEXT, material, 32)),
         )
 
 
@@ -600,7 +680,7 @@ class LoweringTest(absltest.TestCase):
         # per-row gather would return the same bytes and split the kernel. The
         # tree beneath is covered by the two cases below, so this reads at the
         # smallest input with more than one output block to spread.
-        assert_fusion_ready(lambda m: xof(m, 131), _rows(official_input(129)))
+        assert_fusion_ready(lambda m: _xof(m, 131), _rows(official_input(129)))
 
     def test_a_short_last_chunk_costs_no_compressions(self) -> None:
         # A short last chunk shares the batched chain to its own last block and
@@ -623,14 +703,14 @@ class LoweringTest(absltest.TestCase):
         # node view and the flat batch. Both are static, so both must stay
         # `slice`/`reshape` — a dynamic index would lower to a gather, compute
         # the right digest, and only split the kernel.
-        assert_fusion_ready(digest, _rows(official_input(CHUNK_LEN * 3 + 1)))
+        assert_fusion_ready(_digest, _rows(official_input(CHUNK_LEN * 3 + 1)))
 
     def test_the_body_is_fusion_ready(self) -> None:
         # The shared whitelist rather than a local blacklist: it also catches a
         # call, a scatter, or a dot, and it reads the lowered module. Three
         # blocks is the smallest input carrying a chained block, a trailing
         # partial one, and both flag placements.
-        assert_fusion_ready(digest, _rows(official_input(129)))
+        assert_fusion_ready(_digest, _rows(official_input(129)))
 
     def test_the_keyed_body_is_fusion_ready(self) -> None:
         # The key is the one operand hash mode does not carry, and it is
@@ -638,20 +718,123 @@ class LoweringTest(absltest.TestCase):
         # `conventions.md` warns lower to a gather when written as an indexed
         # read — right bytes, split kernel.
         key = fnp.asarray(np.frombuffer(KEY, dtype=np.uint8))
-        assert_fusion_ready(keyed_digest, key, _rows(official_input(129)))
+        assert_fusion_ready(_keyed_digest, key, _rows(official_input(129)))
 
     def test_the_derive_key_body_is_fusion_ready(self) -> None:
-        # Two whole hashes in one body, the first over a host constant. It is
-        # the one place a mode's key is *computed* rather than passed, so it is
-        # the one place the key could arrive as something other than a broadcast.
+        # The material pass under a derived key. It is the one place a mode's key
+        # is *computed* rather than passed, so it is the one place the key could
+        # arrive as something other than a broadcast.
+        #
+        # The context pass is resolved first rather than traced alongside it: it
+        # is a whole hash of its own and rides its own marker, so tracing the two
+        # together would put a composite in the body and this reads the body's op
+        # vocabulary. `test_derive_key_marks_the_material_pass_only` is where the
+        # regions are counted instead.
+        mode = derive_key_mode(CONTEXT)
         assert_fusion_ready(
-            lambda m: derive_key(CONTEXT, m, 32), _rows(official_input(129))
+            lambda m: _unmarked(mode, m, 32), _rows(official_input(129))
         )
 
     def test_the_digest_is_32_bytes(self) -> None:
-        out = digest(_rows(official_input(64), official_input(64)))
+        out = _digest(_rows(official_input(64), official_input(64)))
         self.assertEqual(out.dtype, fnp.uint8)
         self.assertEqual(out.shape, (2, 32))
+
+
+class MarkerTest(parameterized.TestCase):
+    """The `hash_frx.blake3` marker: that it is emitted, and what it carries.
+
+    A marker is a wire ABI shared with the Fractalyze XLA emitter, and losing it
+    is silent — an unrecognized or absent marker inlines and computes the same
+    bytes, so no value test here or downstream would notice. These read the
+    lowered module instead, which is where the two differ.
+    """
+
+    @parameterized.parameters(0, 1, BLOCK_LEN, 129, CHUNK_LEN, CHUNK_LEN * 2 + 1)
+    def test_a_hash_is_one_composite_taking_message_key_iv(self, length: int) -> None:
+        # One marked region per hash whatever the tree shape underneath — the
+        # chunks and every tree level are inside it, which is the whole point of
+        # marking the message rather than the compression — and its operands are
+        # the positional ABI the emitter reads, asserted whole rather than by
+        # finding the message somewhere in the list.
+        #
+        # Both halves are counted rather than found, because both fail by
+        # growing: a second region is a tree level that escaped the boundary, and
+        # a fourth operand is a constant that crept back into `compress` or
+        # `_counters`. The latter does not reorder the ABI so much as make it a
+        # function of the message length — at three chunks this list was 23
+        # entries long before the IV and the counters were threaded and counted.
+        marker = _composite(digest, _rows(official_input(length)))
+        self.assertEqual(marker.regions, 1)
+        self.assertEqual(
+            marker.operands,
+            [f"tensor<1x{length}xui8>", "tensor<8xui32>", "tensor<8xui32>"],
+        )
+        self.assertEqual(marker.result, f"tensor<1x{DIGEST_LEN}xui8>")
+
+    def test_the_attributes_carry_the_mode_and_the_length(self) -> None:
+        # What is static rides as an attribute rather than an operand, because
+        # the emitter needs both before it can shape a kernel. The mode flag is
+        # the one thing separating the three modes, so an emitter reading it
+        # wrongly produces well-formed bytes under the wrong domain separation —
+        # which is why each mode is pinned to its own flag here.
+        key = fnp.asarray(np.frombuffer(KEY, dtype=np.uint8))
+        message = _rows(official_input(BLOCK_LEN))
+        for label, fn, args, flags, out_len in (
+            ("hash", digest, (message,), 0, 32),
+            ("xof", lambda m: xof(m, 131), (message,), 0, 131),
+            ("keyed", keyed_digest, (key, message), KEYED_HASH, 32),
+        ):
+            with self.subTest(label):
+                attrs = _composite(fn, *args).attrs
+                self.assertIn(f"flags = {flags} : i64", attrs)
+                self.assertIn(f"out_len = {out_len} : i64", attrs)
+
+    @parameterized.parameters(0, 1, BLOCK_LEN, 129)
+    def test_the_marked_hash_equals_its_decomposition(self, length: int) -> None:
+        # The marker only tags the region: with no emitter wired it inlines, so
+        # the marked hash must byte-equal the unmarked tree. This is also what
+        # says threading the IV through as an operand left the arithmetic alone —
+        # the unmarked side takes the module default.
+        #
+        # Capped at four blocks because the marked side compiles, at the cost
+        # the note on the helpers above measures. What the cap gives up is
+        # byte-equality over a *tree*, which is why the case above reads the
+        # multi-chunk marker off the lowered module instead — there the
+        # composite's decomposition is the very code the unmarked side runs, so
+        # the two cannot disagree without the module showing it.
+        message = _rows(official_input(length))
+        marked = np.asarray(digest(message))
+        inline = np.asarray(_digest(message))
+        np.testing.assert_array_equal(marked, inline)
+
+    def test_derive_key_marks_the_material_pass_only(self) -> None:
+        # Key derivation is two whole BLAKE3 hashes (spec section 2.3), and only
+        # the one that reads the caller's material is marked: the context pass
+        # hashes a host constant the optimizer folds, and marking it would put a
+        # compile of the unrolled body at every call site carrying a fresh
+        # context length. So a derive-key call is one region, like every other
+        # digest call — `derive_key_mode` argues it at length.
+        marker = _composite(
+            lambda m: derive_key(CONTEXT, m, DIGEST_LEN), _rows(official_input(64))
+        )
+        self.assertEqual(marker.regions, 1)
+        self.assertIn(f"flags = {DERIVE_KEY_MATERIAL} : i64", marker.attrs)
+
+    def test_the_zone_traces_once_per_shape(self) -> None:
+        # `lax.composite` re-traces its decomposition on every emission, and a
+        # Merkle commit emits one per leaf and per level — so the zone is what
+        # keeps that off the first-trace floor. It only holds while the static
+        # key compares by value: `out_len` and `flags` are ints, and the key
+        # words are an operand rather than a static argument, so hashing under a
+        # fresh key must not re-trace.
+        message = _rows(official_input(BLOCK_LEN))
+        keys = [fnp.asarray(np.full(32, fill, dtype=np.uint8)) for fill in (1, 2, 3, 4)]
+        assert_single_trace(
+            self,
+            tree_hash,
+            [functools.partial(keyed_digest, key, message) for key in keys],
+        )
 
 
 class ValidationTest(absltest.TestCase):

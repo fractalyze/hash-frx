@@ -77,9 +77,14 @@ element-wise body only: no loop, reduction, gather, dynamic index, or call. That
 constraint is what shapes the code — the authoring rules it forces are in
 [`reference/conventions.md`](reference/conventions.md#a-marked-body-is-authored-to-lower-not-to-read).
 
-**Name-routed** — `zorch.poseidon`, `zorch.sparse_poseidon`, `zorch.poseidon2`,
-`zorch.sha256`, `zorch.sponge_hash`. Each goes to a dedicated emitter that owns
+**Name-routed** — `hash_frx.poseidon`, `hash_frx.sparse_poseidon`,
+`hash_frx.poseidon2`, `hash_frx.sha256`, `hash_frx.sponge_hash`,
+`hash_frx.blake3`. Each goes to a dedicated emitter that owns
 its own operand ABI and, unlike the generic path, tolerates reductions and calls.
+`hash_frx.blake3` is the one with no emitter on the other side yet
+([fractalyze/xla#336](https://github.com/fractalyze/xla/issues/336)): it is
+emitted, unrecognized, and so inlines — which is why the BLAKE3 rows report
+`has_dedicated_fusion = False` while carrying a marker.
 A permutation advertises which path it is on through `has_dedicated_fusion`, and
 hands out its operand layout through `fused_region_spec` — that pair is what lets
 a consumer wrap a whole computation as one region without naming the hash

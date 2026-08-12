@@ -47,6 +47,12 @@ _FUSION_SAFE = frozenset(
         "slice",
         "concatenate",
         "transpose",
+        # An index the kernel counts rather than a value it loads: `iota` reads
+        # no memory, so it fuses into its consumer wherever `constant` does.
+        # Admitted on that property alone — a body reaches for it under the
+        # operand-ABI rule in `docs/reference/conventions.md`, but that is not
+        # what earns an op a place here.
+        "iota",
         # Bit-oriented hashes compute in machine words rather than a field, so
         # their element-wise vocabulary is boolean and shift rather than
         # add/multiply. `select` belongs here for the same reason `add` does —
