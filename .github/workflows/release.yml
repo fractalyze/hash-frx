@@ -58,6 +58,7 @@ jobs:
     outputs:
       target: ${{ steps.resolve.outputs.target }}
       tag: ${{ steps.resolve.outputs.tag }}
+      python-version: ${{ steps.python.outputs.version }}
     steps:
       # The tagged commit, not the branch head — a Release can be cut from an
       # older tag long after main has moved on.
@@ -70,6 +71,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version-file: .python-version
+
+      # smoke-test has no checkout, so it cannot read `.python-version` itself
+      # and must be handed the value. Carrying it as a job output rather than
+      # letting that job check the file out keeps its workspace empty, which is
+      # what the job depends on — see the note on its `Setup Python`.
+      - name: Read the supported Python version
+        id: python
+        run: echo "version=$(cat .python-version)" >>"$GITHUB_OUTPUT"
 
       - name: Resolve target
         id: resolve
@@ -167,7 +176,7 @@ jobs:
 
   smoke-test:
     name: Smoke test against the public closure
-    needs: [build]
+    needs: [validate-tag, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download distributions
@@ -176,10 +185,16 @@ jobs:
           name: release-distributions
           path: dist
 
+      # The version comes from validate-tag, not from `python-version-file`:
+      # this job never checks out, so there is no `.python-version` here to read
+      # — and it must stay that way. The probe below reads its script from
+      # stdin, so the working directory leads `sys.path`; a workspace holding
+      # `hash_frx/` would satisfy its imports from the source tree and pass with
+      # a broken distribution.
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: .python-version
+          python-version: ${{ needs.validate-tag.outputs.python-version }}
 
       # No extra index, deliberately: this repo's own tests pin exact frx dev
       # builds, so they say nothing about what a `pip install hash-frx`
