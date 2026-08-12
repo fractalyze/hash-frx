@@ -65,6 +65,11 @@ _FUSION_SAFE = frozenset(
         "shift_left",
         "shift_right_logical",
         "select",
+        # `select`'s other half. A predicate is element-wise wherever the select
+        # it feeds is, and a body derives one on device whenever the mask would
+        # otherwise be a host array — which the operand-ABI rule turns into a
+        # lifted operand per materialisation site.
+        "compare",
     }
 )
 
