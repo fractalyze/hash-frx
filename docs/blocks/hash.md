@@ -59,25 +59,44 @@ additions are the ones a caller would find useful:
 `absorb(framing) -> counter-squeeze -> re-absorb` fails it: "counter-squeeze" is a
 Fiat-Shamir step, and naming it here would put proving-scheme knowledge in a
 library whose defining property is that it holds none.
-`absorb_then_squeeze(state, bytes_in, nbytes) -> (state, bytes_out)` passes it —
-it describes a Merkle–Damgård operation, and a transcript hop and a
-rejection-sampling loop can both ride it without this layer knowing which is
-calling.
+`squeeze(state, nbytes) -> (state, bytes)` passes it — it describes a sponge
+operation, and a transcript hop and a rejection-sampling loop both ride it
+without this layer knowing which is calling.
 
-The test is what decides where a fused streaming surface lives, and the current
-split follows from it rather than from where the code happened to sit: the
-streaming primitives are here, and the transcript's fused squeeze hop — the
-`zorch.sha256_squeeze` marker — stays in the consumer that knows what a
-transcript is.
+Passing the naming test is necessary and not sufficient. A fused surface is also
+drawn from the **intersection** of independent callers rather than their union,
+because one shaped against a single real caller and a predicted second fits the
+first and bends for the second. The two streaming callers differ in exactly the
+place that decides this shape: a Fiat-Shamir transcript hops
+`absorb(framing) -> squeeze -> re-absorb`, while a lattice scheme's rejection
+sampler absorbs its seed once and then squeezes until enough candidates survive —
+FIPS 204's `RejNTTPoly` and `RejBoundedPoly` never re-absorb mid-stream. An
+`absorb_then_squeeze(state, bytes_in, nbytes)` would be handed an empty
+`bytes_in` on every iteration of the shape that actually repeats, so the half
+that makes it a *hop* is dead weight in the loop. What both callers contain is
+the squeeze, so the squeeze is what this layer may fuse; the transcript's
+re-absorb tail has one caller and stays with it, in the `zorch.sha256_squeeze`
+marker owned by the consumer that knows what a transcript is.
 
-The cost of that split is real and worth stating so nobody re-derives it. Because
-the padding choice is data-dependent, both `sha256_stream_absorb` and
-`sha256_stream_finalize` compress every candidate block count and select, so an
-absorb followed by a finalize emits **3** composites and roughly 818 StableHLO
-ops of glue. A consumer streaming at volume pays that until a shared fused
-surface exists — which needs a second independent consumer to shape it, since a
-surface designed against one real caller and one predicted caller fits the first
-and bends for the second.
+The cost of an unfused streaming call is real and worth stating so nobody
+re-derives it. Because the padding choice is data-dependent, both
+`sha256_stream_absorb` and `sha256_stream_finalize` compress every candidate
+block count and select, so an absorb followed by a finalize emits **3**
+composites and roughly 818 StableHLO ops of glue. The sponge side pays the same
+way: at SHAKE128's rate, `absorb` and `finalize` are one marked Keccak-f each and
+`squeeze(168 B)` — a sampler's whole loop body — is **two**.
+
+Two independent costs hide in that count, and only one of them is a marker's to
+remove. A marker removes the launch overhead *around* the work; it does not
+remove work the schedule speculates. `squeeze(n)` emits
+`ceil((rate - 1 + n) / rate)` permutations because `offset` is traced, so a
+whole-block squeeze runs two permutations where one would do, and a kernel handed
+a traced offset still computes both candidates and selects. That half is a type's
+to remove instead: a squeezer restricted to whole rate blocks holds the offset
+statically at zero, so the output is the rate prefix and the next state is one
+permutation, with no `dynamic_slice` and no chain-select. The structural half is
+the one to measure first — a marker judged against a 2x handicap flatters
+itself.
 
 ## Two implementations of one standard
 
