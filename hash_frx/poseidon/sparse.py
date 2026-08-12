@@ -25,12 +25,13 @@ There is also a dedicated `hash_frx.sparse_poseidon` name-routed marker — mirr
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
-That path is gated behind `_DEDICATED_EMITTER_AVAILABLE`: when the pinned plugin
-ships the emitter the permutation emits the dedicated marker, otherwise it falls
-back to the generic marker (which fuses this body to one kernel just the same),
-because emitting a marker the plugin cannot recognize fails every compile with
-`custom op 'stablehlo.composite' is unknown`. Either way the dedicated path's
-attributes and reference body are exercised directly by `testing/sparse_test.py`.
+`_select_fused_region_name` gates that path on two things: the pinned plugin
+shipping the emitter (`_DEDICATED_EMITTER_AVAILABLE` — emitting a marker it cannot
+recognize fails every compile with `custom op 'stablehlo.composite' is unknown`),
+and the matrices fitting those int64 attributes. A field too wide for them, such
+as Goldilocks, takes the generic marker, which fuses this body to one kernel just
+the same. Either way the dedicated path's attributes and reference body are
+exercised directly by `testing/sparse_test.py`.
 """
 
 from __future__ import annotations
@@ -70,6 +71,11 @@ POSEIDON_SPARSE_MARKER_VERSION = 1
 # `custom op 'stablehlo.composite' is unknown`.
 _DEDICATED_EMITTER_AVAILABLE = True
 
+# Bounds of the dedicated marker's int64 matrix attributes. A field whose
+# canonical values leave this range cannot ride that contract at all — see
+# `_select_fused_region_name`.
+_I64_MIN, _I64_MAX = -(2**63), 2**63 - 1
+
 
 class SparsePoseidon:
     """An optimized-sparse Poseidon permutation built from a SparsePoseidonParams;
@@ -84,7 +90,18 @@ class SparsePoseidon:
         self._p = params
         self.width = params.width
         self.dtype = params.dtype
-        name = self._select_fused_region_name()
+        # Canonical-int views of the four matrices — the dedicated emitter carries
+        # them as int64 marker attributes and the reference body applies them via
+        # integer literals (no captured field array, which the name-routed marker
+        # would lift to a leading operand). Extracted once here (eager), as classic
+        # Poseidon does, because the marker choice below reads them too.
+        rows = (
+            params.mds_rows,
+            params.transition_matrix_rows,
+            params.partial_dot_rows,
+            params.partial_col_rows,
+        )
+        name = self._select_fused_region_name(rows)
         # A generic region carries no version: the recognizer reads only the name
         # there, so a version would claim a contract the marker does not have.
         self.fused_region_marker = (
@@ -95,24 +112,33 @@ class SparsePoseidon:
         # region one. Derived from the marker choice itself so the two can't drift
         # (mirrors Poseidon2).
         self.has_dedicated_fusion = name != FUSED_REGION_MARKER
-        # Canonical-int views of the four matrices — the dedicated emitter carries
-        # them as int64 marker attributes and the reference body applies them via
-        # integer literals (no captured field array, which the name-routed marker
-        # would lift to a leading operand). Extracted once here (eager), as classic
-        # Poseidon does; the generic path never reads them.
         if self.has_dedicated_fusion:
-            self._mds_rows = params.mds_rows
-            self._transition_rows = params.transition_matrix_rows
-            self._partial_dot_rows = params.partial_dot_rows
-            self._partial_col_rows = params.partial_col_rows
+            (
+                self._mds_rows,
+                self._transition_rows,
+                self._partial_dot_rows,
+                self._partial_col_rows,
+            ) = rows
 
-    def _select_fused_region_name(self) -> str:
-        """Route to the dedicated `SparsePoseidonFusion` when the pinned plugin
-        ships it, else the generic marker so compiles don't fail on an unknown
-        composite. Gated on `_DEDICATED_EMITTER_AVAILABLE`, not on a data property
-        (unlike Poseidon2's M4 check) — readiness is the emitter's existence, not
-        the params."""
-        if _DEDICATED_EMITTER_AVAILABLE:
+    def _select_fused_region_name(
+        self, rows: tuple[tuple[tuple[int, ...], ...], ...]
+    ) -> str:
+        """The marker `permute` emits, given the four matrices as canonical-int
+        rows: the dedicated `SparsePoseidonFusion` name when the pinned plugin
+        ships the emitter AND every entry fits its int64 attributes, else the
+        generic one.
+
+        Readiness is both halves, and they fail for different reasons. The plugin
+        may not carry the emitter at all, in which case emitting the name fails
+        every compile with `custom op 'stablehlo.composite' is unknown`. And every
+        linear layer here is a matrix of field elements (unlike Poseidon2, whose
+        one matrix attribute is the small structural M4), so a field whose
+        canonical values exceed an int64 — Goldilocks, `p = 2^64 - 2^32 + 1` — has
+        nothing those attributes can carry, and building them raises `OverflowError`
+        before any compile happens. Widening them is an emitter-side change (a u64
+        bit-cast and a version bump). Either way the generic marker fuses this body
+        to one kernel just the same."""
+        if _DEDICATED_EMITTER_AVAILABLE and all(_fits_i64(m) for m in rows):
             return POSEIDON_SPARSE_MARKER
         return FUSED_REGION_MARKER
 
@@ -258,12 +284,20 @@ def _abi_operands(perm: "SparsePoseidon", state: Array) -> tuple[Array, ...]:
     )
 
 
+def _fits_i64(rows: tuple[tuple[int, ...], ...]) -> bool:
+    """Whether every canonical entry is representable as an int64 marker attribute.
+    Checked before `_rows_to_i64` builds one, which would otherwise raise
+    `OverflowError: Python int too large to convert to C long` at construction."""
+    return all(_I64_MIN <= v <= _I64_MAX for row in rows for v in row)
+
+
 def _rows_to_i64(rows: tuple[tuple[int, ...], ...]) -> np.ndarray:
     """Canonical-int rows flattened row-major as a numpy int64 array — a numpy
     value (not a Python list) so the marker attribute lowers to a
     `dense<[..]> : tensor<Nxi64>` the recognizer parses, not an unparsed ArrayAttr.
     Mirrors `Poseidon._poseidon_marker_attrs`' `mds`; the emitter supports only
-    fields whose canonical values fit an int64 literal."""
+    fields whose canonical values fit an int64 literal, which
+    `_select_fused_region_name` has already established for a dedicated perm."""
     return np.array(rows, dtype=np.int64).flatten()
 
 

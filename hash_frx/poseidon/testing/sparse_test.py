@@ -20,6 +20,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
+from zk_dtypes import goldilocks_mont as GL  # canonical values past int64
 from zk_dtypes import koalabear_mont as G  # a distinct field, for dtype-guard tests
 from zk_dtypes import pfinfo
 
@@ -224,6 +225,73 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         assert_marker_matches_emission(
             self, _generic_perm(), fnp.arange(_WIDTH, dtype=F)
         )
+
+
+class SparsePoseidonWideFieldTest(absltest.TestCase):
+    """A field whose canonical values exceed the dedicated marker's int64 matrix
+    attributes takes the generic marker rather than crashing.
+
+    Goldilocks (`p = 2^64 - 2^32 + 1`) is that field, and no other test here uses
+    one — every other case is BabyBear or KoalaBear, both well inside int64. That
+    is exactly why the gate could be dropped in the `zorch` extraction without a
+    single in-repo test noticing: a downstream Goldilocks consumer was the
+    tripwire instead, dying on `OverflowError: Python int too large to convert to
+    C long` at construction.
+    """
+
+    def test_construction_survives_values_past_int64(self) -> None:
+        perm = SparsePoseidon(_wide_params())
+        self.assertEqual(perm.dtype, GL)
+
+    def test_routes_to_the_generic_marker(self) -> None:
+        perm = SparsePoseidon(_wide_params())
+        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
+
+    def test_permute_emits_the_generic_composite(self) -> None:
+        perm = SparsePoseidon(_wide_params())
+        txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=GL)).as_text()
+        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
+        composite_line = next(
+            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
+        )
+        self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
+
+    def test_a_field_inside_int64_still_takes_the_dedicated_marker(self) -> None:
+        # The gate narrows the dedicated path; it must not have disabled it.
+        self.assertTrue(SparsePoseidon(_params()).has_dedicated_fusion)
+
+
+def _wide_fld(rows: object) -> fnp.ndarray:
+    """Field array from canonical Python ints via an object cast. `_fld` goes
+    through int64, which cannot hold the values this case exists for."""
+    return fnp.asarray(np.array(rows, dtype=object).astype(GL))
+
+
+def _wide_params() -> SparsePoseidonParams:
+    """The width-4 config over Goldilocks, with one MDS entry past int64."""
+    kwargs = _param_kwargs()
+    big = 2**64 - 2**32  # p - 1, the largest canonical value
+    return SparsePoseidonParams(
+        **{
+            **kwargs,
+            "dtype": GL,
+            **{
+                k: _wide_fld(v)
+                for k, v in (
+                    ("initial_arc", _INITIAL_ARC),
+                    ("full_rc_pre", _FULL_RC_PRE),
+                    ("transition_rc", _TRANSITION_RC),
+                    ("partial_rc", _PARTIAL_RC),
+                    ("full_rc_post", _FULL_RC_POST),
+                    ("transition_matrix", _TRANSITION_M),
+                    ("partial_dot", _PARTIAL_DOT),
+                    ("partial_col", _PARTIAL_COL),
+                )
+            },
+            "mds": _wide_fld(((big,) + _MDS[0][1:],) + _MDS[1:]),
+        }
+    )
 
 
 def _generic_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
