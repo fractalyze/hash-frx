@@ -117,19 +117,19 @@ blake3==1.0.9 \
     --hash=sha256:f9d8b6c6af52a8ff499debf5fd15d7395e0ed837ec2a80fd828b4c6b970de3ed \
     --hash=sha256:fe3c59f8a7b5460fd374b264559c5da7af0a33657a9eca95fff6d843f02cde9e
     # via -r requirements.in
-frx==0.10.1.dev20260812040018 \
-    --hash=sha256:5ad47caf3b7d16db70b64db6b0bd432f984b0bd3fab742a051e4ae8201ff4a27
+frx==0.10.2.dev20260812130529 \
+    --hash=sha256:f996845d163b4eb06760f66b8e258bb7973e8504f59d86988b4265d5d8d6535e
     # via -r requirements.in
-frx-cuda12-pjrt==0.10.1.dev20260812040018 \
-    --hash=sha256:c8f6fb9111e17c4ca497424d8ff28fb2cdd0c36721f4019818f46bedf5d63c00
+frx-cuda12-pjrt==0.10.2.dev20260812130529 \
+    --hash=sha256:9b5413f6f41592ee49eb62551843bf19fc48822a7cc6b80f512299ec67fa7787
     # via
     #   -r requirements.in
     #   frx-cuda12-plugin
-frx-cuda12-plugin==0.10.1.dev20260812040018 \
-    --hash=sha256:f729673ca7cb9b52e265d01471843bf8e6304ab87f6c2af7e5bc3062f7ad3da6
+frx-cuda12-plugin==0.10.2.dev20260812130529 \
+    --hash=sha256:57cde803bdc6206ea013ac87140097735fd081f39321e3c12626824696fdabaf
     # via -r requirements.in
-frxlib==0.10.1.dev20260812040018 \
-    --hash=sha256:c8eb14ea2cd0809f66a118957d6c9ec61c1a00c76050a14b6df39fafa3a4f44d
+frxlib==0.10.2.dev20260812130529 \
+    --hash=sha256:9bde22240b5ceeea3193c099557a6baf4dda11f4329d5df141a8039e4aabac81
     # via
     #   -r requirements.in
     #   frx
