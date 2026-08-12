@@ -79,9 +79,16 @@ constraint is what shapes the code — the authoring rules it forces are in
 
 **Name-routed** — `hash_frx.poseidon`, `hash_frx.sparse_poseidon`,
 `hash_frx.poseidon2`, `hash_frx.sha256`, `hash_frx.sponge_hash`,
-`hash_frx.blake3`, `hash_frx.keccak_f`. Each goes to a dedicated emitter that
-owns its own operand ABI and, unlike the generic path, tolerates reductions and
-calls.
+`hash_frx.blake3`, `hash_frx.keccak_f`, `hash_frx.keccak_sponge`. Each goes to a
+dedicated emitter that owns its own operand ABI and, unlike the generic path,
+tolerates reductions and calls.
+
+Two of them wrap a whole hash rather than one primitive — `hash_frx.sponge_hash`
+over the field sponge, `hash_frx.keccak_sponge` over the byte one — and both are
+assembled by `fused_region_over`, which rebuilds the permute from the operand
+layout `fused_region_spec` hands out. That is what keeps a construction from
+naming the permutation's constants, and what makes a whole absorb one region
+instead of a marked permute per block with the glue between them left outside.
 
 Two of them are ahead of the toolchain, and they wait in different ways because
 the cost of being early is not the same for both. `hash_frx.blake3` is emitted

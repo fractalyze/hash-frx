@@ -43,6 +43,22 @@ py_test(
 )
 
 py_test(
+    name = "sponge_test",
+    # Compile-heavy for the same reason as `permutation_test`: the marked path
+    # splices 24 unrolled rounds per absorbed block, and the two-block case is
+    # deliberate — one block would not show the glue the marker exists to take.
+    size = "medium",
+    srcs = ["sponge_test.py"],
+    deps = [
+        "//hash_frx:fusion",
+        "//hash_frx/keccak",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "permutation_test",
     # Compile-heavy: 24 unrolled rounds over the lane grid.
     size = "medium",
