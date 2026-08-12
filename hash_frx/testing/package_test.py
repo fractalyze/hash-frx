@@ -13,6 +13,12 @@ class PackageTest(absltest.TestCase):
         # later. Fail here instead.
         self.assertTrue(getattr(hash_frx, "__version__", ""))
 
+    def test_version_is_a_final_release_version(self) -> None:
+        # release.yml refuses a tag that disagrees with this, so a pre-release
+        # or dev suffix reaching main makes every tag unreleasable — and makes
+        # dev-release stamp `X.Y.ZrcN.devTS`. The suffixes belong on the build.
+        self.assertRegex(hash_frx.__version__, r"^\d+(\.\d+)*$")
+
 
 if __name__ == "__main__":
     absltest.main()

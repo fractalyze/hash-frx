@@ -6,7 +6,7 @@
 #
 # Wheel only, no sdist: fractalyze/pypi's generator collects release assets
 # ending in `.whl` and ignores everything else, so an sdist would be built and
-# then never served.
+# then never served. release.yml builds both, because PyPI serves both.
 #
 # The wheel is built from main HEAD, so the frx build it runs against is whatever
 # the consuming workspace pins — `requirements.in`'s exact pins bound this repo's
@@ -65,11 +65,16 @@ jobs:
         run: pip install build
 
       - name: Stamp dev version
-        # `hash_frx/__init__.py` carries a 0.0.0 placeholder so a local or
-        # editable install reports something; the released version is stamped
-        # here and never committed.
+        # The base is READ from `hash_frx/__init__.py`, not written here: a
+        # literal would keep stamping the old base after a release bump, and
+        # PEP 440 would then sort every nightly below the release it supersedes.
         run: |
-          DEV_VERSION="0.1.0.dev${{ needs.timestamp.outputs.value }}"
+          BASE=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' hash_frx/__init__.py)
+          if [ -z "$BASE" ]; then
+            echo "no __version__ literal in hash_frx/__init__.py" >&2
+            exit 1
+          fi
+          DEV_VERSION="${BASE}.dev${{ needs.timestamp.outputs.value }}"
           sed -i "s/^__version__ = .*/__version__ = \"${DEV_VERSION}\"/" hash_frx/__init__.py
           grep -q "^__version__ = \"${DEV_VERSION}\"$" hash_frx/__init__.py
 

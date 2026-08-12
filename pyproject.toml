@@ -30,10 +30,11 @@ classifiers = [
 # so declaring them would make every consumer install a test dependency. frxlib
 # is not listed because frx already requires it.
 #
-# The floor carries the `.dev0` sentinel rather than being a plain `>=0.10.0`
-# because a consuming workspace pins an exact continuously-bumped dev build and
-# `0.10.0.devN` sorts BELOW `0.10.0` — a plain floor would reject the very pin
-# requirements.in sets.
+# The `frx` bound is a toolchain floor, and violating it is silent: below it the
+# package still installs, imports and hashes correctly while routing none of its
+# kernels, because a marker the compiler does not accept inlines back to its
+# decomposition. release.yml checks a compiled module against the public
+# dependency closure before any release ships.
 #
 # The GPU plugins (frx-cuda12-*) stay undeclared: they are an install-time
 # platform choice, offered through frx's own `cuda12` extra.
@@ -48,7 +49,14 @@ dependencies = [
     # Floor = the first wheel where closed-over composite constants stay inline
     # (fractalyze/jax#218); an older frx lifts the captured matrices to leading
     # operands and breaks every dedicated emitter ABI.
-    "frx>=0.10.1.dev20260812040018",
+    #
+    # The `!=` excludes the one version no lower bound can reach: PEP 440 sorts
+    # a final release above ALL of its own pre-releases, so `0.10.1` — which
+    # predates both that fix and the `hash_frx.*` marker rename — sorts above
+    # the dev build named as the floor. Naming a later stable instead fails the
+    # other way, since the nightly line resumes below it (`0.10.2.dev...` <
+    # `0.10.2`).
+    "frx>=0.10.1.dev20260812040018,!=0.10.1",
 ]
 
 [project.urls]
