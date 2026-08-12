@@ -77,6 +77,12 @@ BLAKE3_MARKER = "hash_frx.blake3"
 # carries one: a contract change stages through it rather than through a rename,
 # which the recognizer would not accept and which would silently lose fusion.
 BLAKE3_MARKER_VERSION = 1
+# The non-root contract (`non_root = 1`, output = the final node's chaining
+# value) rides version 2 — its own version rather than a version-1 attribute,
+# because an emitter that predates it validates version 1 and would otherwise
+# ROOT-finalize a non-root request into well-formed wrong bytes. Version 1
+# call sites are untouched, so published emitters keep recognizing them.
+BLAKE3_MARKER_VERSION_NON_ROOT = 2
 
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
@@ -757,15 +763,30 @@ def unmarked_hash(msg: ArrayLike, mode: Mode, out_len: int) -> Array:
     return root_bytes(tree_output(msg, mode), out_len)
 
 
+def unmarked_non_root_hash(msg: ArrayLike, mode: Mode) -> Array:
+    """A whole BLAKE3 tree finished WITHOUT `ROOT`, no marker: uint8 `[B, L]`
+    -> `[B, 32]`.
+
+    `unmarked_hash`'s sibling for the non-root contract: the same tree, its
+    final node finished by `chaining_value` instead of `root_bytes`. What
+    `tree_hash(non_root=True)` inlines to when no emitter is wired, exported
+    for the same suite-needs-the-unmarked-side reason as `unmarked_hash`.
+    """
+    return unpack_le(chaining_value(tree_output(msg, mode)))
+
+
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
 # emission, and a Merkle commit emits a digest per leaf and per internal level —
 # so the uncached re-trace of a 16-compression body would dominate the
 # first-trace floor (cf. `sha256.sha256_merkle_damgard`). `inline=True` splices
 # the cached jaxpr into the enclosing trace, so the emitted module — one
-# composite per hash — is unchanged. `out_len` and `flags` are static: each fixes
-# the shape of the emitted program, and each rides the marker as an attribute.
-@partial(frx.jit, inline=True, static_argnames=("out_len", "flags"))
-def tree_hash(msg: Array, key_words: Array, *, out_len: int, flags: int) -> Array:
+# composite per hash — is unchanged. `out_len`, `flags` and `non_root` are
+# static: each fixes the shape or the finalization of the emitted program, and
+# each rides the marker (`non_root` only at version 2).
+@partial(frx.jit, inline=True, static_argnames=("out_len", "flags", "non_root"))
+def tree_hash(
+    msg: Array, key_words: Array, *, out_len: int, flags: int, non_root: bool = False
+) -> Array:
     """A whole BLAKE3 hash — chunks, tree and root output — as the name-routed
     `hash_frx.blake3` composite: uint8 `[B, L]` -> uint8 `[B, out_len]`.
 
@@ -802,10 +823,19 @@ def tree_hash(msg: Array, key_words: Array, *, out_len: int, flags: int) -> Arra
     `DERIVE_KEY_MATERIAL`, never a mask. The flags a node's own position carries
     — `CHUNK_START`, `CHUNK_END`, `PARENT`, `ROOT` — belong to the hash rather
     than the caller, so the emitter derives them and they never appear here.
+    Under `non_root=True` a third attribute `non_root = 1` rides, and the
+    marker's version moves to `BLAKE3_MARKER_VERSION_NON_ROOT` — see that
+    constant for why it is a version rather than a version-1 attribute.
 
     **The result.** uint8 `[B, out_len]`: the root node's extendable output read
     from the start (spec section 2.6), which at `out_len = 32` is the standard
-    digest.
+    digest. Under `non_root=True` it is instead the final node's 32-byte
+    chaining value — the same compression without `ROOT` (spec section 2.4),
+    which is what a Merkle tree built on BLAKE3's own tree semantics (leaf =
+    `finalize_non_root`) commits to. A chaining value is one 256-bit value, not
+    a stream, so `out_len` must be 32: extending output is the `ROOT`
+    compression's mechanism, which non-root finalization by definition never
+    runs.
 
     Nothing else varies. The counter is the chunk index on a chunk's blocks and
     zero on a parent, with a zero high half (a static shape cannot reach 2^32 of
@@ -813,6 +843,29 @@ def tree_hash(msg: Array, key_words: Array, *, out_len: int, flags: int) -> Arra
     nodes from the bottom and carries an odd trailing node up unpaired, which is
     the spec's recursion for every chunk count — `tree_output` argues that.
     """
+
+    if non_root:
+        if out_len != DIGEST_LEN:
+            raise ValueError(
+                f"a chaining value is exactly {DIGEST_LEN} bytes, got out_len={out_len}"
+            )
+
+        def cv_decomposition(
+            message: Array, key: Array, iv: Array, **_attrs: object
+        ) -> Array:
+            return unmarked_non_root_hash(message, Mode(key, flags, iv))
+
+        return fused_region(
+            cv_decomposition,
+            msg,
+            key_words,
+            IV_WORDS,
+            name=BLAKE3_MARKER,
+            version=BLAKE3_MARKER_VERSION_NON_ROOT,
+            out_len=out_len,
+            flags=flags,
+            non_root=1,
+        )
 
     def decomposition(message: Array, key: Array, iv: Array, **_attrs: object) -> Array:
         return unmarked_hash(message, Mode(key, flags, iv), out_len)
@@ -829,11 +882,19 @@ def tree_hash(msg: Array, key_words: Array, *, out_len: int, flags: int) -> Arra
     )
 
 
-def _marked_hash(mode: Mode, msg: ArrayLike, out_len: int) -> Array:
+def _marked_hash(
+    mode: Mode, msg: ArrayLike, out_len: int, non_root: bool = False
+) -> Array:
     """`tree_hash` from a `Mode`: the one place a mode is taken apart for the
     marker, so which of its fields is an operand and which is an attribute is
-    stated once rather than at each of the three entry points."""
-    return tree_hash(_message(msg), mode.key_words, out_len=out_len, flags=mode.flags)
+    stated once rather than at each of the entry points."""
+    return tree_hash(
+        _message(msg),
+        mode.key_words,
+        out_len=out_len,
+        flags=mode.flags,
+        non_root=non_root,
+    )
 
 
 def digest(msg: ArrayLike) -> Array:
@@ -857,6 +918,22 @@ def xof(msg: ArrayLike, out_len: int) -> Array:
     construction rather than a shortcut — the digest is the head of the stream.
     """
     return _marked_hash(hash_mode(), msg, out_len)
+
+
+def non_root_digest(msg: ArrayLike) -> Array:
+    """The chaining value of a batch of messages: uint8 `[B, L]` -> `[B, 32]`.
+
+    The final node of `msg`'s tree finished WITHOUT `ROOT` — BLAKE3's
+    `finalize_non_root`, the value a node contributes when a tree continues
+    ABOVE it. A Merkle tree built on BLAKE3's own tree semantics (flock-
+    challenge's, `blake3::hazmat::merge_subtrees_non_root`'s) commits to leaf
+    chaining values, and this entry is that leaf hash as one marked region, so
+    an emitter can fuse a whole leaf level.
+
+    Hash mode only: the known consumers key nothing, and the seam grows a mode
+    when a consumer has to make the choice and cannot.
+    """
+    return _marked_hash(hash_mode(), msg, DIGEST_LEN, non_root=True)
 
 
 def keyed_digest(key: ArrayLike | bytes, msg: ArrayLike) -> Array:
