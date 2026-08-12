@@ -42,6 +42,7 @@ from hash_frx.blake3.blake3 import (
     keyed_digest,
     keyed_mode,
     keyed_xof,
+    non_root_digest,
     parent_output,
     root_words,
     tree_hash,
@@ -76,7 +77,7 @@ from hash_frx.blake3.testing.vectors import (
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
-from hash_frx.word import split
+from hash_frx.word import split, unpack_le
 
 _U32 = np.uint32
 
@@ -898,6 +899,69 @@ class MarkerTest(parameterized.TestCase):
             tree_hash,
             [functools.partial(keyed_digest, key, message) for key in keys],
         )
+
+
+class NonRootDigestTest(parameterized.TestCase):
+    """`non_root_digest` — the final node finished WITHOUT `ROOT`, marked.
+
+    A Merkle tree over BLAKE3's own semantics (flock-challenge's, and BLAKE3's
+    reference `merge_subtrees_non_root`) commits to leaf *chaining values*, not
+    root-finalized digests. This entry is that contract as one marked hash, so
+    an emitter can fuse a whole leaf level.
+    """
+
+    @parameterized.parameters(0, 1, BLOCK_LEN, 129)
+    def test_the_marked_cv_equals_its_decomposition(self, length: int) -> None:
+        # Same cap and same reasoning as MarkerTest's decomposition case: the
+        # marked side compiles its unrolled body, affordable under four blocks.
+        # The unmarked side is the exported primitives — `chaining_value` of the
+        # unrun tree node — which the fork fixtures already pin downstream.
+        message = _rows(official_input(length))
+        marked = np.asarray(non_root_digest(message))
+        inline = np.asarray(
+            unpack_le(chaining_value(tree_output(message, hash_mode())))
+        )
+        np.testing.assert_array_equal(marked, inline)
+
+    def test_the_cv_is_not_the_digest(self) -> None:
+        # ROOT is the only difference, and it must be a difference — equal
+        # outputs would mean the flag was dropped on both paths at once.
+        message = _rows(official_input(CHUNK_LEN))
+        self.assertFalse(
+            np.array_equal(np.asarray(non_root_digest(message)), _digest(message))
+        )
+
+    def test_the_marker_rides_version_1_with_the_non_root_attr(self) -> None:
+        # An attribute rather than a version bump: hash-frx and the emitters
+        # pin each other through the auto-bump chain, so no shipped emitter
+        # meets a marker it predates, and the version stays a rewrite-or-die
+        # gate rather than a finalization switch.
+        marker = _composite(non_root_digest, _rows(official_input(BLOCK_LEN)))
+        self.assertEqual(marker.regions, 1)
+        self.assertEqual(
+            marker.operands,
+            [f"tensor<1x{BLOCK_LEN}xui8>", "tensor<8xui32>", "tensor<8xui32>"],
+        )
+        self.assertEqual(marker.result, f"tensor<1x{DIGEST_LEN}xui8>")
+        self.assertIn("non_root = 1 : i64", marker.attrs)
+        self.assertIn(f"out_len = {DIGEST_LEN} : i64", marker.attrs)
+        self.assertIn("version = 1", marker.attrs)
+
+    def test_a_root_digest_carries_no_non_root_attr(self) -> None:
+        # The root path's wire is untouched: existing call sites emit the
+        # exact marker they always did.
+        marker = _composite(digest, _rows(official_input(BLOCK_LEN)))
+        self.assertIn("version = 1", marker.attrs)
+        self.assertNotIn("non_root", marker.attrs)
+
+    def test_rejects_an_out_len_other_than_32(self) -> None:
+        # A chaining value is one 32-byte value; extending output is the ROOT
+        # compression's mechanism, which non_root by definition never runs.
+        message = _rows(official_input(BLOCK_LEN))
+        with self.assertRaises(ValueError):
+            tree_hash(
+                message, hash_mode().key_words, out_len=64, flags=0, non_root=True
+            )
 
 
 class ValidationTest(absltest.TestCase):
