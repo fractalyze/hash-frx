@@ -14,13 +14,26 @@ is how a body with 288 call boundaries once passed a compiled-module check.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
+from typing import Any
+from unittest import mock
+
 import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
 from hash_frx.fusion import FUSED_REGION_MARKER
-from hash_frx.keccak.permutation import KeccakF1600, _permute_body, _rounds
+from hash_frx.keccak import permutation as permutation_mod
+from hash_frx.keccak.permutation import (
+    KECCAK_F_MARKER,
+    KECCAK_F_MARKER_VERSION,
+    KeccakF1600,
+    _abi_operands,
+    _permute_body,
+    _rounds,
+)
 from hash_frx.keccak.testing.reference import (
     from_state,
     keccak_f1600,
@@ -113,11 +126,12 @@ class KeccakF1600Test(absltest.TestCase):
         # `call`, `scatter`, `dot` and anything else new, and it reads the
         # LOWERED module — a compiled one has already inlined the calls that a
         # marked body may not contain.
-        assert_fusion_ready(_rounds, _device_state(_STATES["zeros"]))
+        assert_fusion_ready(_rounds, *_abi_operands(_device_state(_STATES["zeros"])))
 
     def test_the_body_traces_once_across_instances(self) -> None:
-        # The zone's cache is keyed on the aval, and `KeccakF1600` carries no
-        # parameters, so freshly built instances must share one trace.
+        # The zone's cache is keyed on (permutation, aval), and `KeccakF1600`
+        # carries no parameters beyond its marker, so freshly built instances at
+        # one emitter setting must share one trace.
         x = _device_state(_STATES["counter"])
         assert_single_trace(
             self,
@@ -138,6 +152,118 @@ class KeccakF1600Test(absltest.TestCase):
         k = KeccakF1600()
         with self.assertRaises(TypeError):
             k.permute(fnp.zeros(50, dtype=fnp.int32))
+
+
+def _composite(fn: object, *args: frx.Array) -> Any:
+    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR."""
+    eqns = [
+        e
+        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
+        if e.primitive.name == "composite"
+    ]
+    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
+    return eqns[0]
+
+
+@contextlib.contextmanager
+def _dedicated_emitter() -> Iterator[None]:
+    """Route as if the pinned plugin shipped the KeccakFusion emitter.
+
+    `_DEDICATED_EMITTER_AVAILABLE` is read in `__init__`, so the patch has to
+    wrap construction, not just the call.
+    """
+    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
+        yield
+
+
+class KeccakF1600MarkerTest(absltest.TestCase):
+    """The operand ABI a KeccakFusion emitter reads (#21)."""
+
+    def test_the_marked_region_captures_no_constants(self) -> None:
+        # The property the ABI rests on, and the one nothing else shows: an array
+        # the body materialises on the host is lifted into an unnamed operand
+        # AHEAD of the declared ones, one per site. Closing over rho's offsets
+        # put 96 of them in front of the state, so the operand list a recognizer
+        # would read was neither documented nor stable. Both routings, because
+        # the generic rewriter reads the same list.
+        state = _device_state(_STATES["counter"])
+        for label, ctx in (
+            ("generic", contextlib.nullcontext()),
+            ("dedicated", _dedicated_emitter()),
+        ):
+            with self.subTest(routing=label), ctx:
+                eqn = _composite(KeccakF1600().permute, state)
+                self.assertLen(eqn.invars, 2)
+                self.assertEqual(eqn.invars[0].aval.shape, (50,))
+                self.assertEqual(eqn.invars[1].aval.shape, (5, 5))
+
+    def test_the_dedicated_marker_carries_its_name_version_and_attrs(self) -> None:
+        with _dedicated_emitter():
+            eqn = _composite(KeccakF1600().permute, _device_state(_STATES["zeros"]))
+        self.assertEqual(eqn.params["name"], KECCAK_F_MARKER)
+        self.assertEqual(eqn.params["version"], KECCAK_F_MARKER_VERSION)
+        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(attrs, {"permutation": "keccak_f", "width": 50, "rounds": 24})
+
+    def test_the_generic_marker_is_the_default_and_carries_no_contract(self) -> None:
+        # The safe default until xla#337 lands: an unrecognized NAME would only
+        # inline, but `has_dedicated_fusion` also routes a `Sponge` over this
+        # permutation to `hash_frx.sponge_hash` with an unknown `permutation`
+        # discriminator, which a plugin without the arm rejects outright.
+        k = KeccakF1600()
+        self.assertFalse(k.has_dedicated_fusion)
+        self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
+        eqn = _composite(k.permute, _device_state(_STATES["zeros"]))
+        self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
+        self.assertEqual(eqn.params["version"], 0)
+        self.assertEqual(eqn.params["attributes"], ())
+
+    def test_both_routings_agree_with_the_reference(self) -> None:
+        # A marker chooses a kernel, never a result. Checked against the
+        # independent reference rather than against each other, so a shared
+        # mistake in the decomposition cannot pass.
+        for name, lanes_in in _STATES.items():
+            for label, ctx in (
+                ("generic", contextlib.nullcontext()),
+                ("dedicated", _dedicated_emitter()),
+            ):
+                with self.subTest(state=name, routing=label), ctx:
+                    out = frx.jit(KeccakF1600().permute)(_device_state(lanes_in))
+                    self.assertEqual(
+                        from_state([int(v) for v in np.asarray(out)]),
+                        keccak_f1600(lanes_in),
+                    )
+
+    def test_the_spec_hands_out_the_abi_only_on_the_dedicated_path(self) -> None:
+        # What a consumer assembling a whole-region composite reads. The inert
+        # stub is what keeps a non-dedicated permutation from being wrapped in
+        # one: it names no layout, so there is nothing for an emitter to read.
+        state = _device_state(_STATES["zeros"])
+        operands, _permute, attrs = KeccakF1600().fused_region_spec(state)
+        self.assertLen(operands, 1)
+        self.assertEqual(attrs, {})
+
+        with _dedicated_emitter():
+            operands, permute, attrs = KeccakF1600().fused_region_spec(state)
+        self.assertLen(operands, 2)
+        self.assertEqual(attrs["permutation"], "keccak_f")
+        # The permute the spec hands back must run off those operands and match
+        # the seam's own call — that is the whole point of publishing a layout.
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(permute)(*operands)),
+            np.asarray(frx.jit(KeccakF1600().permute)(state)),
+        )
+
+    def test_the_marker_is_part_of_the_permutation_identity(self) -> None:
+        # The parameter surface is empty, so without the marker in `__eq__` the
+        # two routings collide in `_permute_body`'s static-arg cache and the
+        # second silently reuses the first's marker.
+        generic = KeccakF1600()
+        with _dedicated_emitter():
+            dedicated = KeccakF1600()
+        self.assertNotEqual(generic, dedicated)
+        self.assertNotEqual(hash(generic), hash(dedicated))
+        self.assertEqual(generic, KeccakF1600())
 
 
 if __name__ == "__main__":
