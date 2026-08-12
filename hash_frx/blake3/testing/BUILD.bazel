@@ -13,6 +13,19 @@ py_library(
     visibility = ["//hash_frx:__subpackages__"],
 )
 
+# Whether the backend under test has the BLAKE3 emitter, which is what the two
+# suites below size their device coverage against.
+py_library(
+    name = "emitter",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "emitter.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("frx")],
+)
+
 # The BLAKE3 team's published vectors, shared by both tests below.
 py_library(
     name = "vectors",
@@ -56,6 +69,7 @@ py_test(
     size = "medium",
     srcs = ["byte_hashes_test.py"],
     deps = [
+        ":emitter",
         ":vectors",
         "//hash_frx:byte_hash",
         "//hash_frx/blake3",
@@ -70,11 +84,13 @@ py_test(
     size = "medium",
     srcs = ["blake3_test.py"],
     deps = [
+        ":emitter",
         ":reference",
         ":vectors",
         "//hash_frx/blake3",
         "//hash_frx/testing:fusion_ready",
         "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_recognized",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

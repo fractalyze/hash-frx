@@ -61,6 +61,7 @@ from hash_frx.blake3.byte_hashes import (
     HostBlake3DeriveKey,
     HostBlake3Keyed,
 )
+from hash_frx.blake3.testing.emitter import HAS_BLAKE3_EMITTER
 from hash_frx.blake3.testing.vectors import (
     ALL_LENGTHS,
     CONTEXT,
@@ -129,15 +130,18 @@ _HOST_ROWS = tuple((name, host, args) for name, _, host, args, _, _ in _ROWS)
 # The two rows of one mode, for the cases that compare them against each other.
 _PAIRS = tuple((name, device, host, args) for name, device, host, args, _, _ in _ROWS)
 
-# The device rows stop below the tree layer. A device digest now carries the
-# `hash_frx.blake3` marker, so it compiles its whole unrolled body, and that
-# compile is super-linear in the compression count: ~0.3s at one block, ~2s at
-# three, and minutes at the two chunks `CHUNK_LEN + 1` reaches. The tree is
-# covered in `blake3_test` against the decomposition the marker inlines to, which
-# is the same code without the compile. Lift this the moment the dedicated
-# emitter lands (fractalyze/xla#336) — a recognized composite is one custom
-# fusion and the body is never codegen'd.
-_DEVICE_MAX_LEN = 2 * BLOCK_LEN + 1
+# How far the device rows reach, which is a question about compile cost rather
+# than about the seam. Where the BLAKE3 emitter is present a marked digest is one
+# custom fusion and its body is never codegen'd, so the device rows run what the
+# host rows run: the published lengths through `CHUNK_LEN + 1`, the tree layer.
+#
+# Where it is absent the marker inlines and a device digest compiles its whole
+# unrolled body, at a cost super-linear in the compression count — ~0.3s at one
+# block, ~2s at three, and minutes at the two chunks `CHUNK_LEN + 1` reaches — so
+# the rows stop below the tree layer. What that gives up is byte-equality over a
+# tree on this leg; `blake3_test` covers the tree against the decomposition the
+# marker inlines to, which is the same code without the compile.
+_DEVICE_MAX_LEN = 1200 if HAS_BLAKE3_EMITTER else 2 * BLOCK_LEN + 1
 _DEVICE_LAYER_LENGTHS = tuple(
     length for length in PER_LAYER_LENGTHS if length <= _DEVICE_MAX_LEN
 )
@@ -174,10 +178,11 @@ def _unpublished_lengths(count: int, high: int, seed: int) -> tuple[int, ...]:
     return tuple(drawn)
 
 
-# Kept short on purpose: every length is a separate device compile, and the
-# property under test does not scale with the tree. The ceiling is now two blocks
-# rather than two chunks, because a marked digest compiles its unrolled body and
-# that cost climbs steeply with the block count (`_DEVICE_LAYER_LENGTHS` above).
+# Kept to six on purpose: every length is a separate device compile, and the
+# property under test does not scale with the tree. The ceiling rides
+# `_DEVICE_MAX_LEN` for the reason stated there — two chunks where the emitter
+# carries the compile, two blocks where each length would pay for its own
+# unrolled body.
 _RANDOM_LENGTHS = _unpublished_lengths(count=6, high=_DEVICE_MAX_LEN, seed=0)
 
 
