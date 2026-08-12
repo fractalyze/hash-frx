@@ -32,23 +32,23 @@ that adds native field and elliptic-curve types.
 
 ## Installation
 
-Dev wheels publish to the Fractalyze package index on every green build of
-`main`. They are not on PyPI, so the index has to be named:
+Releases are on PyPI, so nothing else has to be configured:
 
 ```sh
-pip install hash-frx \
-    --extra-index-url https://fractalyze.github.io/pypi/simple/
+pip install hash-frx
 ```
 
-Versions are timestamped `0.1.0.devYYYYMMDDHHMMSS`, so a consumer pins an exact
-build rather than a range:
+Dev builds also publish to the Fractalyze package index on every green build of
+`main`. They are timestamped `X.Y.Z.devYYYYMMDDHHMMSS` and exist so a consuming
+workspace can pin the exact build it tested against, which means naming both the
+index and the version:
 
 ```sh
 pip install hash-frx==0.1.0.dev20260730045722 \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-The wheel carries the runtime tree only — the `testing/` packages, including the
+Both carry the runtime tree only — the `testing/` packages, including the
 reference fixtures, are not package API.
 
 A Bazel consumer takes the module directly and needs no wheel:
