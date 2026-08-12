@@ -29,7 +29,7 @@ from frx import tree_util
 
 from hash_frx.keccak.byte_hashes import (
     SHA3_256_RATE,
-    SHA3_256_SUFFIX,
+    SHA3_SUFFIX,
     SHAKE128_RATE,
     SHAKE256_RATE,
 )
@@ -146,7 +146,7 @@ class ShakeStreamTest(parameterized.TestCase):
         # SHAKE256's rate the SHA-3 byte gives SHA3-256 — the standard's own
         # construction, and the reason the suffix is a parameter rather than a
         # constant. Nothing else reaches this argument.
-        state = shake_init(SHA3_256_RATE, SHA3_256_SUFFIX).absorb(_u8(_MESSAGE))
+        state = shake_init(SHA3_256_RATE, SHA3_SUFFIX).absorb(_u8(_MESSAGE))
         _, out = state.finalize().squeeze(32)
         self.assertEqual(bytes(np.asarray(out)), hashlib.sha3_256(_MESSAGE).digest())
 
