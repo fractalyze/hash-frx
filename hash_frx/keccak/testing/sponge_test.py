@@ -1,0 +1,149 @@
+# Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
+"""The Keccak sponge's whole-hash marker and the ABI a KeccakFusion emitter reads.
+
+Values live in `byte_hashes_test`, which holds the published rows to `hashlib`.
+What is checked here is the property values cannot show: that a whole padded
+absorb and squeeze is ONE marked region rather than a marked permute per block
+with the XOR glue outside, and that it says so in the layout an emitter reads.
+
+Both routings are exercised, because the marker chooses a kernel and never a
+result — so the two must agree, and they are each checked against `hashlib`
+rather than against each other, so a shared mistake cannot pass.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+from collections.abc import Iterator
+from typing import Any
+from unittest import mock
+
+import frx
+import frx.numpy as fnp
+import numpy as np
+from absl.testing import absltest
+
+from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.keccak import permutation as permutation_mod
+from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE_SUFFIX
+from hash_frx.keccak.sponge import (
+    KECCAK_SPONGE_MARKER,
+    KECCAK_SPONGE_MARKER_VERSION,
+    KeccakSponge,
+)
+
+# SHA3-256's parameters: one rate block absorbed, one squeezed.
+_SHA3_256 = KeccakSponge(rate=136, suffix=0x06, output_size=32)
+# Two absorb blocks and two squeezes, so the glue between permutes is real: at
+# rate 168 a 200-byte message pads to two blocks, and 336 bytes out is two.
+_SHAKE128_LONG = KeccakSponge(
+    rate=SHAKE128_RATE, suffix=SHAKE_SUFFIX, output_size=2 * SHAKE128_RATE
+)
+
+
+@contextlib.contextmanager
+def _dedicated_emitter() -> Iterator[None]:
+    """Route as if the pinned plugin shipped the KeccakFusion emitter."""
+    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
+        yield
+
+
+def _composites(fn: Any, *args: frx.Array) -> list[Any]:
+    """The composite eqns in `fn`'s jaxpr, read without lowering to MLIR."""
+    return [
+        e
+        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
+        if e.primitive.name == "composite"
+    ]
+
+
+def _message(batch: int, length: int) -> frx.Array:
+    rng = np.random.default_rng(0)
+    return fnp.asarray(rng.integers(0, 256, size=(batch, length), dtype=np.uint8))
+
+
+class KeccakSpongeMarkerTest(absltest.TestCase):
+    def test_the_whole_hash_is_one_region_on_the_dedicated_path(self) -> None:
+        # The point of the marker. Unmarked, a two-block absorb plus a second
+        # squeeze is three marked permutes — two absorbing, one between the
+        # squeezed blocks — with the XOR absorb glue between them left outside.
+        # That is a launch per block, and the reason an unrecognized Keccak sits
+        # in the hot path of every ML-DSA sign.
+        msg = _message(2, 200)
+        generic = _composites(_SHAKE128_LONG.hash, msg)
+        self.assertLen(generic, 3)
+        for eqn in generic:
+            self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
+
+        with _dedicated_emitter():
+            dedicated = _composites(_SHAKE128_LONG.hash, msg)
+        self.assertLen(dedicated, 1)
+        self.assertEqual(dedicated[0].params["name"], KECCAK_SPONGE_MARKER)
+        self.assertEqual(dedicated[0].params["version"], KECCAK_SPONGE_MARKER_VERSION)
+
+    def test_the_region_carries_the_permutation_and_the_sponge_shape(self) -> None:
+        # The permutation's attrs ride alongside the construction's, so the
+        # marker says which primitive runs inside it as well as what wraps it.
+        with _dedicated_emitter():
+            eqn = _composites(_SHA3_256.hash, _message(1, 64))[0]
+        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(
+            attrs,
+            {
+                "permutation": "keccak_f",
+                "width": 50,
+                "rounds": 24,
+                "rate": 136,
+                "output_size": 32,
+            },
+        )
+
+    def test_the_region_takes_the_padded_message_and_the_permutation_abi(self) -> None:
+        # Operand 0 is the padded byte matrix — rate-aligned, so the emitter
+        # never needs the domain suffix — and the rest is whatever the
+        # permutation's own ABI names. No captured constants ahead of them.
+        with _dedicated_emitter():
+            eqn = _composites(_SHA3_256.hash, _message(3, 64))[0]
+        self.assertLen(eqn.invars, 2)
+        self.assertEqual(eqn.invars[0].aval.shape, (3, 136))  # one padded block
+        self.assertEqual(eqn.invars[0].aval.dtype, fnp.uint8)
+        self.assertEqual(eqn.invars[1].aval.shape, (5, 5))
+
+    def test_both_routings_match_hashlib(self) -> None:
+        # A marker chooses a kernel, never a result. Held to `hashlib` on both
+        # sides rather than to each other.
+        cases = (
+            ("sha3_256", _SHA3_256, 64, lambda m: hashlib.sha3_256(m).digest()),
+            (
+                "shake128",
+                _SHAKE128_LONG,
+                200,
+                lambda m: hashlib.shake_128(m).digest(2 * SHAKE128_RATE),
+            ),
+        )
+        for name, sponge, length, want in cases:
+            msg = _message(2, length)
+            rows = [bytes(np.asarray(row)) for row in np.asarray(msg)]
+            for label, ctx in (
+                ("generic", contextlib.nullcontext()),
+                ("dedicated", _dedicated_emitter()),
+            ):
+                with self.subTest(case=name, routing=label), ctx:
+                    got = np.asarray(frx.jit(sponge.hash)(msg))
+                    for i, row in enumerate(rows):
+                        self.assertEqual(bytes(got[i]), want(row))
+
+    def test_the_marked_body_falls_back_to_the_reference_decomposition(self) -> None:
+        # An unrecognized marker inlines, so the body inside it has to BE the
+        # hash. Compared against the generic path's lowering, which is the same
+        # computation with the region boundary in a different place.
+        msg = _message(1, 64)
+        plain = np.asarray(frx.jit(_SHA3_256.hash)(msg))
+        with _dedicated_emitter():
+            marked = np.asarray(frx.jit(_SHA3_256.hash)(msg))
+        np.testing.assert_array_equal(plain, marked)
+
+
+if __name__ == "__main__":
+    absltest.main()

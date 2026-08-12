@@ -30,7 +30,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array, lax
 
-from hash_frx.fusion import fused_region
+from hash_frx.fusion import fused_region_over
 from hash_frx.permutation import Permutation
 
 
@@ -126,38 +126,27 @@ def _fused_hash(
     sponge_type: SpongeType,
 ) -> Array:
     """Absorb+squeeze as ONE `hash_frx.sponge_hash` region over a dedicated-fusion
-    permutation. The decomposition rebuilds `permute` from the ABI operands —
-    the emitter's operand contract names the round constants there — then runs
-    `_absorb`, so the fallback HLO matches the generic path. Caller gates on
+    permutation. `fused_region_over` rebuilds `permute` from the ABI operands —
+    the emitter's operand contract names the round constants there — so the
+    fallback HLO matches the generic path. Caller gates on
     `has_dedicated_fusion`."""
-    operands, permute_from_operands, perm_attrs = perm.fused_region_spec(input)
 
-    def sponge(inp: Array, *constants: Array, **_attrs: object) -> Array:
+    def sponge(inp: Array, permute: Callable[[Array], Array]) -> Array:
         state = fnp.zeros(perm.width, dtype=inp.dtype)
-        return _absorb(
-            inp,
-            state,
-            rate,
-            out,
-            lambda s: permute_from_operands(s, *constants),
-            sponge_type,
-        )
+        return _absorb(inp, state, rate, out, permute, sponge_type)
 
-    # Permutation attrs + this sponge's shape (`rate`/`digest_elems`) and
-    # `construction` — the string the kernel switches on (extensible to any
-    # `SpongeType`). The marker name/version are the sponge's.
-    attrs: dict[str, object] = {
-        **perm_attrs,
-        "rate": rate,
-        "digest_elems": out,
-        "construction": sponge_type.value,
-    }
-    return fused_region(
+    # This sponge's shape (`rate`/`digest_elems`) and `construction` — the string
+    # the kernel switches on (extensible to any `SpongeType`) — alongside the
+    # permutation's own attrs. The marker name/version are the sponge's.
+    return fused_region_over(
+        perm,
+        input,
         sponge,
-        *operands,
         name=SPONGE_HASH_MARKER,
         version=SPONGE_HASH_MARKER_VERSION,
-        **attrs,
+        rate=rate,
+        digest_elems=out,
+        construction=sponge_type.value,
     )
 
 

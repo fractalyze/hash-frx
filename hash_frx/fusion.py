@@ -42,10 +42,14 @@ one place every marker in this package routes through.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from frx import Array
 
 from hash_frx._composite import _Region, composite
+
+if TYPE_CHECKING:
+    from hash_frx.permutation import Permutation
 
 FUSED_REGION_MARKER = "zorch.fused_region"
 
@@ -77,3 +81,42 @@ def fused_region(
     unchanged.
     """
     return composite(decomposition, *operands, name=name, version=version, **attrs)
+
+
+def fused_region_over(
+    perm: "Permutation",
+    leading: Array,
+    body: Callable[[Array, Callable[[Array], Array]], _Region],
+    *,
+    name: str,
+    version: int,
+    **attrs: object,
+) -> _Region:
+    """Mark a whole computation over `perm.permute` as ONE region, in the
+    permutation's own fused-region ABI.
+
+    `body(leading, permute)` is the computation — a sponge's absorb and squeeze,
+    a compression tree — written against a plain `permute` callable, so it names
+    no operand layout. This rebuilds that callable from the ABI operands
+    `perm.fused_region_spec` hands out and threads them through as the region's
+    own operands, which is what keeps the constants a permutation needs out of
+    the body: an array the body materialises on the host is lifted into an
+    unnamed operand ahead of the declared ones, one per site, and a permute
+    appears once per absorbed block.
+
+    The permutation's identifying attrs ride alongside `attrs`, so the marker
+    says which primitive runs inside it as well as what the enclosing
+    construction is. `attrs` wins on a collision, the construction being the one
+    that owns the marker name.
+
+    Callers gate on `has_dedicated_fusion`: a permutation on the generic marker
+    hands out an inert spec, which names no layout for an emitter to read.
+    """
+    operands, permute_from_operands, perm_attrs = perm.fused_region_spec(leading)
+
+    def region(lead: Array, *constants: Array, **_attrs: object) -> _Region:
+        # `_attrs` is marker metadata passed through; the body does not read it.
+        return body(lead, lambda state: permute_from_operands(state, *constants))
+
+    merged: dict[str, Any] = {**perm_attrs, **attrs}
+    return fused_region(region, *operands, name=name, version=version, **merged)

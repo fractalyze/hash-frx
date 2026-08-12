@@ -35,6 +35,7 @@ reordering is needed here (`params.py`).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -44,15 +45,20 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.fusion import fused_region_over
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
 
 U32 = fnp.uint32
 
-# A readability hoist, not a cache: the trace-once property belongs entirely to
-# `permutation._permute_body`'s jit zone, which is keyed on the state aval and
-# does not care where this wrapper lives.
-_PERMUTE_BATCH = frx.vmap(KeccakF1600().permute)
+# The whole padded absorb + squeeze as one region a dedicated emitter expands.
+# Not `hash_frx.sponge_hash`: that marker's `construction` attr switches between
+# two sponges that share an input domain and an absorb, and this one shares
+# neither (bytes rather than field elements, XOR rather than overwrite, an
+# iterated squeeze rather than a truncation). Reusing it would re-merge what the
+# module docstring keeps apart.
+KECCAK_SPONGE_MARKER = "hash_frx.keccak_sponge"
+KECCAK_SPONGE_MARKER_VERSION = 1
 
 
 @lru_cache(maxsize=None)
@@ -87,6 +93,64 @@ def _xor_into_rate(state: Array, block: Array) -> Array:
     """
     n = block.shape[-1]
     return fnp.concatenate([state[:, :n] ^ block, state[:, n:]], axis=-1)
+
+
+def _absorb_squeeze(
+    padded: Array,
+    rate: int,
+    output_size: int,
+    permute: Callable[[Array], Array],
+) -> Array:
+    """FIPS 202 section 4 over an already-padded batch: XOR each rate block into
+    the state and permute, then emit the rate prefix and permute again until
+    `output_size` bytes are out.
+
+    Takes `permute` batched over the leading axis rather than reaching for the
+    permutation itself, so the same body serves the plain path and the marked
+    one — where the permute is rebuilt from the region's ABI operands.
+
+    The absorb's final permutation has already run when the squeeze starts, so
+    the first block is available before any further one. Blocks are collected as
+    elements and unpacked once rather than per block.
+    """
+    n = rate // BYTES_PER_WORD
+    state = fnp.zeros((padded.shape[0], KeccakF1600.width), dtype=U32)
+    for start in range(0, padded.shape[-1], rate):
+        block = pack_le(padded[:, start : start + rate])
+        state = permute(_xor_into_rate(state, block))
+
+    squeezes = -(-output_size // rate)
+    blocks = []
+    for i in range(squeezes):
+        blocks.append(state[:, :n])
+        if i + 1 < squeezes:
+            state = permute(state)
+    return unpack_le(fnp.concatenate(blocks, axis=-1))[:, :output_size]
+
+
+def _fused_hash(perm: KeccakF1600, padded: Array, rate: int, output_size: int) -> Array:
+    """The padded absorb and the squeeze as ONE `hash_frx.keccak_sponge` region
+    over a dedicated-fusion permutation. Caller gates on `has_dedicated_fusion`.
+
+    The padding is applied before the region rather than inside it, so the
+    emitter reads a rate-aligned byte matrix and never needs the domain suffix:
+    `pad10*1` is a function of the message length alone, which is static, so it
+    is a host constant either way and putting it inside would only widen the ABI.
+    """
+
+    def sponge(inp: Array, permute: Callable[[Array], Array]) -> Array:
+        # The seam's `permute` is one state; this sponge carries a batch axis.
+        return _absorb_squeeze(inp, rate, output_size, frx.vmap(permute))
+
+    return fused_region_over(
+        perm,
+        padded,
+        sponge,
+        name=KECCAK_SPONGE_MARKER,
+        version=KECCAK_SPONGE_MARKER_VERSION,
+        rate=rate,
+        output_size=output_size,
+    )
 
 
 @dataclass(frozen=True)
@@ -129,6 +193,10 @@ class KeccakSponge:
 
         `msg` may be a tracer: the padding is a host constant built from `L`, and
         every loop bound below is static, so nothing here reads a message byte.
+
+        A `has_dedicated_fusion` permutation lowers the whole padded absorb and
+        squeeze to one `hash_frx.keccak_sponge` region; otherwise each permute is
+        its own marked region and the XOR glue between them stays outside.
         """
         message = fnp.asarray(msg, dtype=fnp.uint8)
         if message.ndim != 2:
@@ -141,23 +209,17 @@ class KeccakSponge:
             axis=-1,
         )
 
-        n = self.rate // BYTES_PER_WORD
-        state = fnp.zeros((batch, KeccakF1600.width), dtype=U32)
-        for start in range(0, padded.shape[-1], self.rate):
-            block = pack_le(padded[:, start : start + self.rate])
-            state = _PERMUTE_BATCH(_xor_into_rate(state, block))
-
-        # FIPS 202 section 4: emit the rate prefix, permute, repeat. The final
-        # permutation of the absorb has already run, so the first block is
-        # available before any further one. Collected as elements and unpacked
-        # once rather than per block.
-        squeezes = -(-self.output_size // self.rate)
-        blocks = []
-        for i in range(squeezes):
-            blocks.append(state[:, :n])
-            if i + 1 < squeezes:
-                state = _PERMUTE_BATCH(state)
-        return unpack_le(fnp.concatenate(blocks, axis=-1))[:, : self.output_size]
+        # Built per call rather than hoisted: the permutation reads the emitter
+        # switch at construction, so a module-level instance would pin the
+        # routing at import. The trace-once property belongs entirely to
+        # `permutation._permute_body`'s jit zone, which does not care where the
+        # instance comes from.
+        perm = KeccakF1600()
+        if perm.has_dedicated_fusion:
+            return _fused_hash(perm, padded, self.rate, self.output_size)
+        return _absorb_squeeze(
+            padded, self.rate, self.output_size, frx.vmap(perm.permute)
+        )
 
 
 # Deliberately NOT wrapped in a module-level jit zone the way
