@@ -1,23 +1,30 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""The Keccak byte hashes — SHA3-256, SHAKE128, SHAKE256, Keccak-256.
+"""The Keccak byte hashes — SHA3-256, SHA3-512, SHAKE128, SHAKE256, Keccak-256.
 
 Each is one `KeccakSponge` row: a rate, a domain-separation byte, and an output
-length. FIPS 202 section 6 fixes the first two for the three it standardises;
+length. FIPS 202 section 6 fixes the first two for the four it standardises;
 the third is fixed for SHA-3 and a caller's choice for the SHAKEs.
 
 | | rate | suffix | capacity | output |
 |---|---|---|---|---|
 | `Sha3_256` | 136 B | `0x06` | 512 bits | 32 B |
+| `Sha3_512` | 72 B | `0x06` | 1024 bits | 64 B |
 | `Shake128` | 168 B | `0x1F` | 256 bits | caller's |
 | `Shake256` | 136 B | `0x1F` | 512 bits | caller's |
 | `Keccak256` | 136 B | `0x01` | 512 bits | 32 B |
 
-**Three of the four are FIPS 202; `Keccak256` is not.** It is the original
+**Four of the five are FIPS 202; `Keccak256` is not.** It is the original
 Keccak submission, whose padding NIST changed on standardisation, so it and
 `Sha3_256` differ in exactly one byte — `0x01` against `0x06` — and in nothing
 else. That is why the module is named for what its contents *are* rather than
 for one standard: a table of rows over a shared sponge, which TurboSHAKE and
 KangarooTwelve would extend the same way.
+
+**The rate falls as the security level rises**, which is the opposite of the
+intuition that a bigger digest reads more per permutation. Capacity is twice the
+digest length, and the rate is what is left of the 200-byte state — so SHA3-512
+absorbs 72 bytes a block against SHA3-256's 136 and costs closer to twice as
+many permutations per message, not the same number.
 
 **An XOF's output length is a constructor parameter, not a weakened
 `digest_size`.** `Shake256(output_size=64)` is a different hash from
@@ -54,11 +61,15 @@ if TYPE_CHECKING:
 
     from hash_frx.byte_hash import ByteHash
 
-# FIPS 202 section 6.1: SHA3-256(M) = KECCAK[512](M ‖ 01, 256), and section B.2
-# packs the `01` domain bits with the opening `1` of `pad10*1` into one byte.
+# FIPS 202 section 6.1: SHA3-256(M) = KECCAK[512](M ‖ 01, 256) and
+# SHA3-512(M) = KECCAK[1024](M ‖ 01, 512), and section B.2 packs the `01` domain
+# bits with the opening `1` of `pad10*1` into one byte. The two rows differ in
+# capacity alone, so the suffix is shared exactly as the SHAKEs' is below.
+SHA3_SUFFIX = 0x06
 SHA3_256_RATE = 136
-SHA3_256_SUFFIX = 0x06
 SHA3_256_DIGEST_SIZE = 32
+SHA3_512_RATE = 72
+SHA3_512_DIGEST_SIZE = 64
 
 # FIPS 202 section 6.2: SHAKE128(M, d) = KECCAK[256](M ‖ 1111, d), likewise
 # packed with the padding's opening bit.
@@ -110,10 +121,25 @@ class Sha3_256(_KeccakHash):
     """`ByteHash` for device SHA3-256 — the standard fixes its output at 32 B."""
 
     _rate = SHA3_256_RATE
-    _suffix = SHA3_256_SUFFIX
+    _suffix = SHA3_SUFFIX
 
     def __init__(self) -> None:
         super().__init__(SHA3_256_DIGEST_SIZE)
+
+
+class Sha3_512(_KeccakHash):
+    """`ByteHash` for device SHA3-512 — the standard fixes its output at 64 B.
+
+    ML-KEM's `G` and the SHA-3 SLH-DSA parameter sets' `H` and `T_l`. The
+    72-byte rate is the narrowest in the family, so a message spans roughly
+    twice the blocks it would under SHA3-256.
+    """
+
+    _rate = SHA3_512_RATE
+    _suffix = SHA3_SUFFIX
+
+    def __init__(self) -> None:
+        super().__init__(SHA3_512_DIGEST_SIZE)
 
 
 class Shake128(_KeccakHash):
@@ -194,6 +220,16 @@ class HostSha3_256(_HostKeccak):
         return hashlib.sha3_256(data).digest()
 
 
+class HostSha3_512(_HostKeccak):
+    """`ByteHash` for host SHA3-512 over `hashlib.sha3_512`."""
+
+    def __init__(self) -> None:
+        super().__init__(SHA3_512_DIGEST_SIZE)
+
+    def _hash_one(self, data: ReadableBuffer) -> bytes:
+        return hashlib.sha3_512(data).digest()
+
+
 class HostShake128(_HostKeccak):
     """`ByteHash` for host SHAKE128 over `hashlib.shake_128`."""
 
@@ -211,10 +247,12 @@ class HostShake256(_HostKeccak):
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md). Named individually
     # because mypy rejects re-annotating one name.
-    _bh_sha3: type[ByteHash] = Sha3_256
+    _bh_sha3_256: type[ByteHash] = Sha3_256
+    _bh_sha3_512: type[ByteHash] = Sha3_512
     _bh_shake128: type[ByteHash] = Shake128
     _bh_shake256: type[ByteHash] = Shake256
     _bh_keccak256: type[ByteHash] = Keccak256
-    _bh_host_sha3: type[ByteHash] = HostSha3_256
+    _bh_host_sha3_256: type[ByteHash] = HostSha3_256
+    _bh_host_sha3_512: type[ByteHash] = HostSha3_512
     _bh_host_shake128: type[ByteHash] = HostShake128
     _bh_host_shake256: type[ByteHash] = HostShake256
