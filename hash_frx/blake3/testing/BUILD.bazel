@@ -79,9 +79,15 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# `timeout` rather than `size`: the shape of the resources is unchanged, the
+# wall time is not. On a leg with the BLAKE3 emitter the value tables run the
+# shipped entry points, so every published length compiles a marked call —
+# measured 252s against 97s for the same module reading the decomposition, which
+# leaves no room under a medium target's 300s.
 py_test(
     name = "blake3_test",
     size = "medium",
+    timeout = "long",
     srcs = ["blake3_test.py"],
     deps = [
         ":emitter",
