@@ -8,7 +8,7 @@ compiler pattern match. The region is named `hash_frx.poseidon` (distinct from
 (`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to XLA's
 dedicated, params-driven Poseidon emitter. The body is kept straight-line:
 rounds are unrolled (fixed, small counts) and the dense MDS uses the normal-form
-helper (`apply_dense_mds`) so nothing lowers to a reduce/dot/gather that would
+helper (`apply_matrix`) so nothing lowers to a reduce/dot/gather that would
 split the kernel.
 
 Classic Poseidon (ark-sponge style): each round is `ARC -> S-box -> dense MDS`.
@@ -29,7 +29,7 @@ import numpy as np
 from frx import Array
 
 from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
-from hash_frx.poseidon.linear import apply_dense_mds
+from hash_frx.linear import apply_matrix
 from hash_frx.poseidon.params import PoseidonParams
 
 if TYPE_CHECKING:
@@ -57,12 +57,10 @@ class Poseidon:
         self.dtype = params.dtype
         # Extracted once here (eager): the MDS-to-canonical-int conversion would
         # stage into the jaxpr if done inside the traced `permute` body. The
-        # const-free (literal-MDS) linear layer reads these ints; the marker
-        # carries them (flattened row-major) as the `mds` attribute.
+        # marker carries these ints (flattened row-major) as the `mds` attribute.
         self._mds_rows = params.mds_rows
-        # Classic Poseidon always applies its dense MDS via integer literals and
-        # routes to the dedicated `hash_frx.poseidon` emitter — there is no
-        # free-form fallback (the MDS rides as a marker attribute either way).
+        # Classic Poseidon always routes to the dedicated `hash_frx.poseidon`
+        # emitter — there is no free-form fallback.
         self.fused_region_marker = (POSEIDON_MARKER, POSEIDON_MARKER_VERSION)
         # Derived from the marker rather than asserted alongside it, so the two
         # cannot drift (mirrors Poseidon2 and SparsePoseidon, whose marker is a
@@ -104,17 +102,18 @@ class Poseidon:
 # The classic Poseidon permute on `s` given round constants flattened row-major
 # (the marked region's ABI operand). Shared by the permute marker and the
 # sponge-hash marker so the two carry one round schedule. full/partial/full
-# rounds, each ARC -> S-box -> dense MDS; the MDS rides as integer literals.
+# rounds, each ARC -> S-box -> dense MDS; the MDS is a closed-over field array
+# (frx keeps composite consts inline, so it never surfaces as an operand).
 def _permute_from_rc(perm: "Poseidon", s: Array, rc_flat: Array) -> Array:
     p = perm._p
     alpha = p.alpha
     w = perm.width
     half_full = p.full_rounds // 2
     partial = p.partial_rounds
-    mds_rows = perm._mds_rows
+    mds = p.mds
 
     def full_round(st: Array, rc: Array) -> Array:
-        return apply_dense_mds(mds_rows, fnp.power(st + rc, alpha))
+        return apply_matrix(mds, fnp.power(st + rc, alpha))
 
     def partial_round(st: Array, rc: Array) -> Array:
         st = st + rc
@@ -122,7 +121,7 @@ def _permute_from_rc(perm: "Poseidon", s: Array, rc_flat: Array) -> Array:
         # concatenate, not a static-index set: the latter lowers to scatter,
         # which would split the fused kernel.
         st = fnp.concatenate([st[: w - 1], last[None]])
-        return apply_dense_mds(mds_rows, st)
+        return apply_matrix(mds, st)
 
     rc = rc_flat.reshape(2 * half_full + partial, w)
     r = 0

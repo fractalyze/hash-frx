@@ -17,9 +17,8 @@ an array, or hoist its lanes once and index the hoisted list.
 
 `unrolled_sum` is that summation primitive; `apply_matrix` is the dense
 `matrix @ state` built on it for a **field-array** matrix. The scheme-specific
-layers (`apply_dense_mds`, `apply_external_m4`, `apply_internal`,
-`apply_sparse_partial`) live in the per-permutation `linear.py` and build on
-`unrolled_sum` from here.
+layers (`apply_external_m4`, `apply_internal`, `apply_sparse_partial`) live in
+the per-permutation `linear.py` and build on `unrolled_sum` from here.
 """
 
 from __future__ import annotations
@@ -47,9 +46,9 @@ def apply_matrix(matrix: Array, state: Array) -> Array:
     Written as an unrolled `unrolled_sum` rather than `matrix @ state`/`fnp.dot`
     on purpose: the matmul/dot lowers to a reduction (the `kInput` fusion
     boundary) that splits the round body's kernel; the column-scaled sum stays
-    element-wise and fuses. Takes the matrix as a **field array** (for entries too
-    large for an int64 literal); the integer-literal siblings are each
-    permutation's `apply_dense_mds` / `apply_external_m4`.
+    element-wise and fuses. Takes the matrix as a **field array**; poseidon2's
+    `apply_external_m4` is the one integer-literal sibling (its M4 is a small
+    structural matrix, not field data).
     """
     if state.ndim != 1:
         raise ValueError(f"state must be 1-D, got shape {state.shape}")
