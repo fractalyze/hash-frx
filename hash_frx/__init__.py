@@ -6,4 +6,4 @@
 # It names the release being worked toward, not the last one shipped — see
 # .github/workflows/release.yml for why the bump follows a tag rather than
 # preceding it.
-__version__ = "0.1.0"
+__version__ = "0.2.0"
