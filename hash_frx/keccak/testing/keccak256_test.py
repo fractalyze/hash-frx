@@ -31,7 +31,7 @@ from hash_frx.keccak.byte_hashes import (
     KECCAK256_RATE,
     KECCAK256_SUFFIX,
     SHA3_256_RATE,
-    SHA3_256_SUFFIX,
+    SHA3_SUFFIX,
     Keccak256,
     Sha3_256,
 )
@@ -91,7 +91,7 @@ class Keccak256Test(parameterized.TestCase):
         # the suffix or the rate is wrong, and a divergence assertion passes on a
         # mistyped rate. This fails at import-time constants instead.
         self.assertEqual(KECCAK256_RATE, SHA3_256_RATE)
-        self.assertNotEqual(KECCAK256_SUFFIX, SHA3_256_SUFFIX)
+        self.assertNotEqual(KECCAK256_SUFFIX, SHA3_SUFFIX)
 
     def test_digest_accepts_a_tracer(self) -> None:
         # The seam property a consumer hashing inside its own `@jit` depends on.

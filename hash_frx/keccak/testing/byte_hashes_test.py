@@ -1,12 +1,12 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""SHA3-256, SHAKE128 and SHAKE256 — byte-match against `hashlib`.
+"""SHA3-256, SHA3-512, SHAKE128 and SHAKE256 — byte-match against `hashlib`.
 
 Agnostic golden, the same one `sha256_test` uses: `hashlib` implements FIPS 202
 without sharing a line with this tree, so agreement is agreement with the
 standard rather than with a second copy of one reading of it. The Keccak-f[1600]
 oracle under `reference_test` is anchored the same way and for the same reason.
 
-The three functions ride one case table so that every sweep runs on all of them.
+The four functions ride one case table so that every sweep runs on all of them.
 Written as a test per function instead, a sweep ends up covering whichever one it
 was written against — the lengths straddling 168 were added for SHAKE128's rate
 and would otherwise never have run on SHAKE128.
@@ -16,6 +16,10 @@ wrong rather than for coverage: a message that ends exactly on a rate boundary
 (so padding takes a whole extra block), one that ends one byte short of it (so
 the domain suffix and the `10*1` closing bit land on the same byte), and outputs
 that cross a rate boundary (so the squeeze has to permute again).
+
+Every rate in the family needs its own three lengths, because a boundary is a
+property of the rate and not of the function. SHA3-512's 72 is the narrowest,
+and the only rate under which the 136- and 168-byte lengths land mid-block.
 """
 
 from __future__ import annotations
@@ -31,13 +35,16 @@ from absl.testing import absltest, parameterized
 from hash_frx.byte_hash import ByteHash
 from hash_frx.keccak.byte_hashes import (
     SHA3_256_RATE,
+    SHA3_512_RATE,
     SHAKE128_RATE,
     SHAKE256_RATE,
     HostSha3_256,
+    HostSha3_512,
     HostShake128,
     HostShake256,
     Keccak256,
     Sha3_256,
+    Sha3_512,
     Shake128,
     Shake256,
 )
@@ -45,8 +52,9 @@ from hash_frx.keccak.sponge import KeccakSponge
 
 # Absorb boundaries for a 136-byte rate: empty, tiny, one short of a block (the
 # single-byte pad), exactly a block (a whole extra padding block), one past it,
-# and multi-block. 167/168/169 do the same for SHAKE128's 168-byte rate.
-_LENGTHS = (0, 1, 135, 136, 137, 167, 168, 169, 300)
+# and multi-block. 167/168/169 do the same for SHAKE128's 168-byte rate, and
+# 71/72/73 for SHA3-512's 72-byte one.
+_LENGTHS = (0, 1, 71, 72, 73, 135, 136, 137, 167, 168, 169, 300)
 
 # Output sizes for the XOFs: under a rate, exactly a rate, and over it (which
 # forces a second squeeze block), plus a length that is not a lane multiple.
@@ -54,14 +62,23 @@ _SHAKE_OUTPUTS = (1, 32, 131, 136, 137, 168, 200, 400)
 
 # One row per FIPS 202 function: (name, device factory, host factory, hashlib
 # reference). Both factories take the output length, so a fixed-output function
-# ignores it and every sweep can drive all three the same way.
-_CASES = (
+# ignores it and every sweep can drive all four the same way.
+_SHA3_CASES = (
     (
         "sha3_256",
         lambda _out: Sha3_256(),
         lambda _out: HostSha3_256(),
         lambda msg, _out: hashlib.sha3_256(msg).digest(),
     ),
+    (
+        "sha3_512",
+        lambda _out: Sha3_512(),
+        lambda _out: HostSha3_512(),
+        lambda msg, _out: hashlib.sha3_512(msg).digest(),
+    ),
+)
+# The XOFs alone, for the sweep that varies output length — SHA-3's is fixed.
+_XOF_CASES = (
     (
         "shake128",
         Shake128,
@@ -75,8 +92,9 @@ _CASES = (
         lambda msg, out: hashlib.shake_256(msg).digest(out),
     ),
 )
-# The XOFs alone, for the sweep that varies output length — SHA3-256's is fixed.
-_XOF_CASES = _CASES[1:]
+# Split by whether the output length is the caller's rather than sliced out of
+# one table: a slice silently picks the wrong rows the moment one is inserted.
+_CASES = _SHA3_CASES + _XOF_CASES
 
 _Case = tuple[str, Callable[[int], ByteHash], Callable[[int], ByteHash], Callable]
 
@@ -132,6 +150,17 @@ class Fips202Test(parameterized.TestCase):
             bytes(np.asarray(Shake256(32).digest(msg))[0]),
         )
 
+    def test_the_two_sha3s_differ_where_they_overlap(self) -> None:
+        # The same pair for SHA-3, where the suffix is shared and the rate is the
+        # only difference: truncating SHA3-512 to 32 bytes must not give
+        # SHA3-256. Compared on the prefix because the digests differ in length,
+        # which is what makes a rate mix-up otherwise invisible here.
+        msg = _message(200)
+        self.assertNotEqual(
+            bytes(np.asarray(Sha3_256().digest(msg))[0]),
+            bytes(np.asarray(Sha3_512().digest(msg))[0][:32]),
+        )
+
 
 class TracedDigestTest(parameterized.TestCase):
     """The property the seam actually promises for a device hash: a traced message.
@@ -165,10 +194,12 @@ class SeamConformanceTest(absltest.TestCase):
     def test_every_implementation_satisfies_the_byte_hash_protocol(self) -> None:
         for h in (
             Sha3_256(),
+            Sha3_512(),
             Shake128(32),
             Shake256(32),
             Keccak256(),
             HostSha3_256(),
+            HostSha3_512(),
             HostShake128(32),
             HostShake256(32),
         ):
@@ -181,7 +212,14 @@ class SeamConformanceTest(absltest.TestCase):
 
     def test_digest_size_matches_what_digest_returns(self) -> None:
         msg = _message(64)
-        for h in (Sha3_256(), Shake128(48), Shake256(48), HostShake256(48)):
+        for h in (
+            Sha3_256(),
+            Sha3_512(),
+            Shake128(48),
+            Shake256(48),
+            HostSha3_512(),
+            HostShake256(48),
+        ):
             with self.subTest(hash=type(h).__name__):
                 out = np.asarray(h.digest(msg))
                 self.assertEqual(out.shape, (1, h.digest_size))
@@ -198,6 +236,13 @@ class SeamConformanceTest(absltest.TestCase):
         # compare equal, or a consumer's pytree aux would confuse them.
         self.assertNotEqual(Shake256(32), Shake128(32))
         self.assertNotEqual(Shake256(32), HostShake256(32))
+        # The two SHA-3 rows share a suffix and differ only in rate and length,
+        # so they are the pair most likely to be conflated by a `__eq__` written
+        # over `digest_size` without the type.
+        self.assertEqual(Sha3_512(), Sha3_512())
+        self.assertEqual(hash(Sha3_512()), hash(Sha3_512()))
+        self.assertNotEqual(Sha3_512(), Sha3_256())
+        self.assertNotEqual(Sha3_512(), Shake256(64))
 
 
 class KeccakSpongeTest(parameterized.TestCase):
@@ -228,6 +273,7 @@ class KeccakSpongeTest(parameterized.TestCase):
         # FIPS 202 section 6: rate = (1600 - capacity) / 8 bytes. Stated as an
         # assertion rather than a comment so a mistyped constant fails here.
         self.assertEqual(SHA3_256_RATE, (1600 - 512) // 8)
+        self.assertEqual(SHA3_512_RATE, (1600 - 1024) // 8)
         self.assertEqual(SHAKE128_RATE, (1600 - 256) // 8)
         self.assertEqual(SHAKE256_RATE, (1600 - 512) // 8)
 
