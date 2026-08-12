@@ -31,10 +31,18 @@ one `digest(msg)` — so a consumer reaching a `ByteHash` generically gets which
 reading the row it was handed carries.
 
 **`has_dedicated_fusion` is `False`, and the return type is what matters here.**
-No BLAKE3 emitter exists, so `digest` carries no hash-dedicated marker. It is
-still a device function that takes a tracer and returns an `Array`, which is what
-lets a consumer hash inside its own `@jit` — the flag and that property came
-apart at Keccak, and [`byte_hash.py`](../byte_hash.py) is where the rule lives.
+`digest` does carry a hash-dedicated marker — every row routes through
+[`blake3.tree_hash`](blake3.py), the name-routed `hash_frx.blake3` composite — but
+no XLA emitter recognizes it yet, so the composite inlines to its decomposition
+instead of becoming one kernel. The flag claims the kernel rather than the
+marker, so it stays `False` until that emitter lands. Keccak's rows read `False`
+too but for a different reason — they carry only the generic marker, where these
+carry a dedicated one nothing recognizes — and the seam cannot currently tell the
+two apart, which is a question for `byte_hash.py` rather than for this file.
+It is still a device function that takes a tracer
+and returns an `Array`, which is what lets a consumer hash inside its own `@jit`
+— the flag and that property came apart at Keccak, and
+[`byte_hash.py`](../byte_hash.py) is where the rule lives.
 
 **Each row has a host sibling** — `HostBlake3`, `HostBlake3Keyed`,
 `HostBlake3DeriveKey` — over the BLAKE3 team's own Rust binding, mirroring

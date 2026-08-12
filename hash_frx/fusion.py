@@ -19,6 +19,13 @@ primitive. This one keeps `zorch.` because it is generic rather than owned:
 `zorch`'s sumcheck, constraint-eval and jagged regions emit it alongside the
 hashes here, so neither prefix describes it.
 
+The operand list is as much a wire ABI as the name, and it is not only what is
+passed here: `lax.composite` lifts every array the decomposition materialises on
+the host into an operand *ahead* of these, one per call site. So a marked body
+threads its constants as operands or counts them on device (`iota`) — the rule,
+its two remedies, and what it cost to learn are in
+`docs/reference/conventions.md`.
+
 The decomposition must be straight-line element-wise — no loops, reductions, or
 gathers — so the region lowers to one kernel: a round sequence is unrolled into
 the body (fixed, small counts) and the linear layers use the normal-form helpers

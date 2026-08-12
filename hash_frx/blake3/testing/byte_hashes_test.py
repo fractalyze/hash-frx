@@ -52,6 +52,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
+from hash_frx.blake3.blake3 import BLOCK_LEN
 from hash_frx.blake3.byte_hashes import (
     Blake3,
     Blake3DeriveKey,
@@ -128,11 +129,26 @@ _HOST_ROWS = tuple((name, host, args) for name, _, host, args, _, _ in _ROWS)
 # The two rows of one mode, for the cases that compare them against each other.
 _PAIRS = tuple((name, device, host, args) for name, device, host, args, _, _ in _ROWS)
 
+# The device rows stop below the tree layer. A device digest now carries the
+# `hash_frx.blake3` marker, so it compiles its whole unrolled body, and that
+# compile is super-linear in the compression count: ~0.3s at one block, ~2s at
+# three, and minutes at the two chunks `CHUNK_LEN + 1` reaches. The tree is
+# covered in `blake3_test` against the decomposition the marker inlines to, which
+# is the same code without the compile. Lift this the moment the dedicated
+# emitter lands (fractalyze/xla#336) — a recognized composite is one custom
+# fusion and the body is never codegen'd.
+_DEVICE_MAX_LEN = 2 * BLOCK_LEN + 1
+_DEVICE_LAYER_LENGTHS = tuple(
+    length for length in PER_LAYER_LENGTHS if length <= _DEVICE_MAX_LEN
+)
+
 _PER_LAYER = tuple(
     (f"{substrate}_{name}_{length}", cls, args, length, expected)
     for name, device, host, args, table, _ in _ROWS
-    for substrate, cls in zip(_SUBSTRATES, (device, host))
-    for length, expected in rows(table, PER_LAYER_LENGTHS)
+    for substrate, cls, lengths in zip(
+        _SUBSTRATES, (device, host), (_DEVICE_LAYER_LENGTHS, PER_LAYER_LENGTHS)
+    )
+    for length, expected in rows(table, lengths)
 )
 
 # Every published length in every mode, for the host rows alone.
@@ -158,9 +174,11 @@ def _unpublished_lengths(count: int, high: int, seed: int) -> tuple[int, ...]:
     return tuple(drawn)
 
 
-# Kept short and under two chunks on purpose: every length is a separate device
-# compile, and the property under test does not scale with the tree.
-_RANDOM_LENGTHS = _unpublished_lengths(count=6, high=1200, seed=0)
+# Kept short on purpose: every length is a separate device compile, and the
+# property under test does not scale with the tree. The ceiling is now two blocks
+# rather than two chunks, because a marked digest compiles its unrolled body and
+# that cost climbs steeply with the block count (`_DEVICE_LAYER_LENGTHS` above).
+_RANDOM_LENGTHS = _unpublished_lengths(count=6, high=_DEVICE_MAX_LEN, seed=0)
 
 
 class ForwardedVectorTest(parameterized.TestCase):
@@ -260,7 +278,12 @@ class SeamConformanceTest(parameterized.TestCase):
         # The batch is a device array for both substrates, which also pins that
         # a host row takes one: a consumer holding device bytes should not have
         # to convert them to reach the host path.
-        msg = _rows(official_input(200), official_input(200))
+        #
+        # One block, because the claim is the *shape* of the result and a longer
+        # message proves it no harder — while costing a device row four
+        # compression bodies to compile instead of one, twice over for the two
+        # output lengths (`_DEVICE_LAYER_LENGTHS` above measures the curve).
+        msg = _rows(official_input(BLOCK_LEN), official_input(BLOCK_LEN))
         for size in (32, 131):
             with self.subTest(output_size=size):
                 out = np.asarray(cls(*args, size).digest(msg))

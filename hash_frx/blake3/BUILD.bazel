@@ -12,6 +12,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
         "//hash_frx:word",
         requirement("blake3"),
         requirement("frx"),

@@ -28,9 +28,18 @@ Python reviewer would prefer for a lowering that stays one kernel.
   internal `jit` — `lax.select`, not `fnp.where`. The wrapper lowers to a call
   inside the body, which the single-kernel rewriter rejects. A nested `@jit` is
   the same failure, so a marked body sits under exactly one `@jit` boundary.
-- **Round constants ride as explicit operands.** A constant merely closed over by
-  the decomposition can be lifted out of the composite, which breaks the
-  emitter's operand ABI.
+- **No array the decomposition materialises on the host survives as a
+  non-operand.** `lax.composite` lifts every such array into a composite operand
+  placed *ahead* of the declared ones, one copy per call site and with no
+  trace-time deduplication — so the emitter's operand ABI silently becomes a
+  function of the input shape. It is not only round constants: an IV, an index or
+  counter table, a padding tail, a rotation-offset grid all lift the same way.
+  Two remedies, and every marked body needs one of them per constant:
+  **thread it as an explicit operand** (`sha256.compress`'s round-constant table,
+  `blake3.Mode.iv`), or **compute it on device** — `fnp.arange`/`iota` is an
+  index the kernel counts rather than a value the program carries
+  (`blake3._counters`). Measured, before either was applied to BLAKE3: 3 operands
+  at a 64-byte message and 23 at a 2049-byte one.
 
 None of this is enforced by the type system, and none of it changes an output
 byte. [Testing](#testing) is where the enforcement is.

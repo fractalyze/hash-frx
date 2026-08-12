@@ -47,8 +47,10 @@ holds for the same reason.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from functools import partial
 
+import frx
 import frx.numpy as fnp
 import numpy as np
 from frx import Array
@@ -59,15 +61,22 @@ from hash_frx.blake3.compress import (
     CHUNK_START,
     DERIVE_KEY_CONTEXT,
     DERIVE_KEY_MATERIAL,
-    IV,
+    IV_WORDS,
     KEYED_HASH,
     PARENT,
     ROOT,
     compress,
 )
-from hash_frx.word import pack_le, split, unpack_le
+from hash_frx.fusion import fused_region
+from hash_frx.word import pack_le, unpack_le
 
 U32 = fnp.uint32
+
+BLAKE3_MARKER = "hash_frx.blake3"
+# Marker revision riding as `composite.version`, the way `hash_frx.sha256`
+# carries one: a contract change stages through it rather than through a rename,
+# which the recognizer would not accept and which would silently lose fusion.
+BLAKE3_MARKER_VERSION = 1
 
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
@@ -104,6 +113,14 @@ class Mode:
     Nothing else about the hash — the chunk size, the tree shape, the round
     function, the root — reads either field.
 
+    `iv` is the third field and the one the spec does *not* vary: every mode
+    opens every compression's third state row from the same table. It rides here
+    because the record is what already travels to each compression, and because
+    the value has to be threaded rather than built — a marked region passes its
+    own operand (see `compress`), and a hop that forgot to forward it would grow
+    the marker's operand list rather than fail. Threaded on the record, there is
+    no hop to forget.
+
     **One key serves the whole batch.** It is a parameter of the hash, the way
     an output length is, rather than something a message carries: `[8]` words
     broadcast across the rows rather than `[B, 8]` tiled along them. A caller
@@ -121,6 +138,9 @@ class Mode:
 
     key_words: Array  # uint32 [8]
     flags: int
+    # `default_factory` rather than a plain default: a dataclass refuses an
+    # unhashable default, and an `Array` is one.
+    iv: Array = field(default_factory=lambda: IV_WORDS)  # uint32 [8]
 
     def __post_init__(self) -> None:
         # Both fields fail silently unchecked, which is why this is here rather
@@ -137,6 +157,10 @@ class Mode:
             raise ValueError(f"key_words must be [8], got {self.key_words.shape}")
         if self.key_words.dtype != U32:
             raise TypeError(f"key_words must be uint32, got {self.key_words.dtype}")
+        if self.iv.shape != (8,):
+            raise ValueError(f"iv must be [8], got {self.iv.shape}")
+        if self.iv.dtype != U32:
+            raise TypeError(f"iv must be uint32, got {self.iv.dtype}")
         # Flags never error anywhere: a wrong mode flag rides through every
         # compression and produces well-formed bytes under the wrong domain
         # separation. Spec section 2.3 names exactly these four, and a caller
@@ -161,7 +185,7 @@ def _key_words(mode: Mode, batch: int) -> Array:
 
 @dataclass(frozen=True)
 class Output:
-    """A node's final compression, assembled but not run — the five operands.
+    """A node's final compression, assembled but not run — its six operands.
 
     Batched over a leading `[B, ...]` axis like `compress` itself. The flags are
     the node's own (`CHUNK_END` for a chunk); what the finishing call adds to
@@ -171,6 +195,10 @@ class Output:
     the key words rather than a child's output — it is not the node's own
     chaining value, which is what `chaining_value` computes *from* this. The
     reference implementation draws the same distinction with the same two names.
+
+    `iv` is the node's mode's, carried here for the reason `Mode` carries it:
+    whoever finishes the node has an `Output` and not the mode it came from, so
+    without it the value would have to be passed alongside at every such call.
     """
 
     input_chaining_value: Array  # uint32 [B, 8]
@@ -178,6 +206,7 @@ class Output:
     counter: Array  # uint32 [B, 2]
     block_len: Array  # uint32 [B]
     flags: Array  # uint32 [B]
+    iv: Array  # uint32 [8]
 
 
 def _chain(cv: Array, words: Array, counter: Array, first: int, mode: Mode) -> Array:
@@ -202,6 +231,7 @@ def _chain(cv: Array, words: Array, counter: Array, first: int, mode: Mode) -> A
             counter,
             full_block,
             fnp.full((batch,), flags, dtype=U32),
+            mode.iv,
         )[:, :8]
     return cv
 
@@ -235,6 +265,7 @@ def _chunk_from(
             mode.flags | CHUNK_END | (CHUNK_START if last == 0 else 0),
             dtype=U32,
         ),
+        iv=mode.iv,
     )
 
 
@@ -253,6 +284,9 @@ def _stacked(*outputs: Output) -> Output:
         counter=fnp.concatenate([o.counter for o in outputs], axis=0),
         block_len=fnp.concatenate([o.block_len for o in outputs], axis=0),
         flags=fnp.concatenate([o.flags for o in outputs], axis=0),
+        # Not concatenated: it is unbatched, and the rows of one call are one
+        # mode's nodes, so every input carries the same table.
+        iv=outputs[0].iv,
     )
 
 
@@ -276,6 +310,7 @@ def _output_blocks(output: Output, count: int) -> Output:
         counter=_counters(output.block.shape[0], 0, count),
         block_len=fnp.repeat(output.block_len, count, axis=0),
         flags=fnp.repeat(output.flags, count, axis=0),
+        iv=output.iv,
     )
 
 
@@ -321,6 +356,7 @@ def chaining_value(output: Output) -> Array:
         output.counter,
         output.block_len,
         output.flags,
+        output.iv,
     )[:, :8]
 
 
@@ -356,6 +392,7 @@ def parent_output(left: Array, right: Array, mode: Mode) -> Output:
         counter=fnp.zeros((batch, 2), dtype=U32),
         block_len=fnp.full((batch,), BLOCK_LEN, dtype=U32),
         flags=fnp.full((batch,), mode.flags | PARENT, dtype=U32),
+        iv=mode.iv,
     )
 
 
@@ -372,6 +409,7 @@ def root_words(output: Output) -> Array:
         output.counter,
         output.block_len,
         output.flags | U32(ROOT),
+        output.iv,
     )
 
 
@@ -420,9 +458,9 @@ def _block_words(msg: Array) -> Array:
 def _counters(batch: int, first: int, count: int) -> Array:
     """Counter values `first .. first + count - 1`, repeated per message.
 
-    uint32 `[batch * count, 2]` as (low, high). The split is done on the host,
-    where the index is a Python int, so no 64-bit value is ever materialised —
-    the reason `compress` takes the counter in halves at all.
+    uint32 `[batch * count, 2]` as (low, high) — the halves `compress` takes,
+    for the reason `keccak/lane.py` sets out: a 64-bit lane is not safely
+    available here.
 
     What the index counts is the caller's: a chunk's position in the message
     for `_chunk_chaining_values`, an output block's position in the stream for
@@ -432,12 +470,35 @@ def _counters(batch: int, first: int, count: int) -> Array:
     its blocks alike, so expanding the sequence on the host bakes `batch`
     identical copies of it into the program — a megabyte of constant for 128
     bytes of value at four thousand messages and sixteen output blocks. Held
-    shaped, the program carries the sequence once whatever the batch is. The
-    host keeps only what it must, which is the 64-bit split.
+    shaped, the program carries the sequence once whatever the batch is.
+
+    **The sequence is counted on the device, not written on the host.** An
+    `arange` is an index computation rather than a value the program carries, so
+    there is no constant here for a `lax.composite` to lift into the marker's
+    operand list — the rule and its two remedies are in
+    `docs/reference/conventions.md`. Written as a host table instead, this alone
+    would make the ABI's leading operands a function of the tree shape: three
+    such tables at three chunks, one at one.
+
+    The high half is zero, and exactly rather than approximately: `first + count`
+    is a static shape's worth of chunks or output blocks, so reaching 2^32 of
+    either would need a message no program can shape. The bound is asserted
+    rather than assumed, because it is the one thing standing between this and a
+    silently truncated counter.
     """
-    halves = np.array([split(i) for i in range(first, first + count)], dtype=np.uint32)
-    spread = fnp.broadcast_to(fnp.asarray(halves), (batch, count, 2))
-    return spread.reshape(batch * count, 2)
+    if (first + count - 1) >> 32:
+        raise ValueError(
+            f"counter {first + count - 1} exceeds the 32-bit low half; the high "
+            "half is only zero because a static shape cannot reach it"
+        )
+    pair = fnp.stack(
+        [
+            fnp.arange(first, first + count, dtype=U32),
+            fnp.zeros((count,), dtype=U32),
+        ],
+        axis=1,
+    )  # [count, 2]
+    return fnp.broadcast_to(pair, (batch, count, 2)).reshape(batch * count, 2)
 
 
 def _chunk_chaining_values(message: Array, nchunks: int, mode: Mode) -> Array:
@@ -531,9 +592,7 @@ def tree_output(msg: ArrayLike, mode: Mode) -> Output:
     leaves a chunk's last one pending: the root is where `ROOT` and the
     extendable output live, and neither belongs to the tree that produced it.
     """
-    message = fnp.asarray(msg, dtype=fnp.uint8)
-    if message.ndim != 2:
-        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
+    message = _message(msg)
     batch, length = message.shape
 
     nchunks = _units(length, CHUNK_LEN)
@@ -583,7 +642,7 @@ def hash_mode() -> Mode:
     Spec section 2.3. The mode every consumer that just wants "the BLAKE3 of
     this" is asking for, and the one the published `hash` column pins.
     """
-    return Mode(fnp.asarray(IV, dtype=U32), 0)
+    return Mode(IV_WORDS, 0)
 
 
 def keyed_mode(key: ArrayLike | bytes) -> Mode:
@@ -645,6 +704,14 @@ def derive_key_mode(context: str | bytes) -> Mode:
     the first call happens under a trace, the cached `key_words` is a tracer
     that leaks out of it.
 
+    **The context pass does not ride the marker, and is the one hash here that
+    does not.** A marked call goes through `tree_hash`'s jit zone, so it compiles
+    the whole unrolled body — which is affordable at a domain separator's one
+    block, but it is paid at *every* `derive_key` call site with a fresh context
+    length, and it buys nothing: the pass hashes a host constant, and the
+    optimizer folds it away (the measurement below). Marked, it would also make
+    `derive_key` two composites where the contract counts one per digest.
+
     The output words are taken as words rather than through bytes: a root's
     first eight words *are* its 32-byte digest little-endian, which is exactly
     the packing a key is read with.
@@ -657,6 +724,116 @@ def derive_key_mode(context: str | bytes) -> Mode:
     context_pass = replace(hash_mode(), flags=DERIVE_KEY_CONTEXT)
     words = root_words(tree_output(data.reshape(1, -1), context_pass))
     return Mode(words[0, :8], DERIVE_KEY_MATERIAL)
+
+
+def _message(msg: ArrayLike) -> Array:
+    """A message as the uint8 `[B, L]` batch every mode hashes.
+
+    The rank is checked here rather than left to `tree_output` so a caller
+    holding the wrong one is told so eagerly, rather than from inside the trace
+    of the marked region.
+    """
+    message = fnp.asarray(msg, dtype=fnp.uint8)
+    if message.ndim != 2:
+        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
+    return message
+
+
+def unmarked_hash(msg: ArrayLike, mode: Mode, out_len: int) -> Array:
+    """A whole BLAKE3 hash with no marker on it: uint8 `[B, L]` -> `[B, out_len]`.
+
+    The tree and its root output, which is the entire hash — every mode, every
+    length. `tree_hash` is this under the `hash_frx.blake3` composite, and an
+    unrecognized composite inlines to exactly this, so the two are one
+    implementation rather than two spellings that could drift.
+
+    Exported because the suite needs the unmarked side by name: a marked call
+    compiles its whole unrolled body, which is affordable at a block and not at a
+    chunk (`blake3_test` measures it), so the value tables read the hash here
+    while the marker is asserted on the lowered module. Byte-exactness against
+    the published vectors therefore still pins one implementation, not a test
+    double — `docs/reference/conventions.md` forbids the latter, and rightly.
+    """
+    return root_bytes(tree_output(msg, mode), out_len)
+
+
+# Module-level jit zone: `lax.composite` re-traces its decomposition on every
+# emission, and a Merkle commit emits a digest per leaf and per internal level —
+# so the uncached re-trace of a 16-compression body would dominate the
+# first-trace floor (cf. `sha256.sha256_merkle_damgard`). `inline=True` splices
+# the cached jaxpr into the enclosing trace, so the emitted module — one
+# composite per hash — is unchanged. `out_len` and `flags` are static: each fixes
+# the shape of the emitted program, and each rides the marker as an attribute.
+@partial(frx.jit, inline=True, static_argnames=("out_len", "flags"))
+def tree_hash(msg: Array, key_words: Array, *, out_len: int, flags: int) -> Array:
+    """A whole BLAKE3 hash — chunks, tree and root output — as the name-routed
+    `hash_frx.blake3` composite: uint8 `[B, L]` -> uint8 `[B, out_len]`.
+
+    All three modes route through here, because all three are this one
+    construction under a different key and flag (spec section 2.3), so a
+    recognizing emitter implements the hash once rather than once per mode.
+    BLAKE3 is a tree of chained compressions rather than a straight-line body, so
+    it takes a name-routed marker (exempt from the generic single-kernel rule,
+    the way `hash_frx.poseidon2` and `hash_frx.sha256` are); with no emitter
+    wired the composite inlines its decomposition and the bytes are unchanged.
+
+    **The operand ABI**, positional, and the whole of what an emitter reads:
+
+    0. `msg`       — uint8 `[B, L]`, `B` equal-length messages. `L` is static, so
+                     the chunk count, the tree shape, the block count and every
+                     block length are shape constants rather than data a kernel
+                     reads. The trailing block of a chunk is zero-padded to 64
+                     bytes and its true byte count reaches the compression as
+                     `block_len` (spec section 2.4).
+    1. `key_words` — uint32 `[8]`, little-endian: what every chunk and every
+                     parent opens from in place of a child's chaining value. The
+                     IV in hash mode, the caller's 32 bytes under `KEYED_HASH`,
+                     the context pass's digest under `DERIVE_KEY_MATERIAL`. One
+                     key serves the whole batch, broadcast across the rows.
+    2. `iv`        — uint32 `[8]`, the spec IV (section 2.2, Table 1), whose
+                     first four words open every compression's third state row in
+                     every mode. An operand rather than a constant the body
+                     builds, because a `lax.composite` lifts such a constant into
+                     an operand *ahead* of the explicit ones, one per call site —
+                     which would make the ABI a function of the message length.
+
+    **The attributes.** `out_len`, the output byte count (32 for a digest), and
+    `flags`, the mode flag: one of `0`, `KEYED_HASH`, `DERIVE_KEY_CONTEXT`,
+    `DERIVE_KEY_MATERIAL`, never a mask. The flags a node's own position carries
+    — `CHUNK_START`, `CHUNK_END`, `PARENT`, `ROOT` — belong to the hash rather
+    than the caller, so the emitter derives them and they never appear here.
+
+    **The result.** uint8 `[B, out_len]`: the root node's extendable output read
+    from the start (spec section 2.6), which at `out_len = 32` is the standard
+    digest.
+
+    Nothing else varies. The counter is the chunk index on a chunk's blocks and
+    zero on a parent, with a zero high half (a static shape cannot reach 2^32 of
+    either); on the root it is the output-block index. The tree pairs adjacent
+    nodes from the bottom and carries an odd trailing node up unpaired, which is
+    the spec's recursion for every chunk count — `tree_output` argues that.
+    """
+
+    def decomposition(message: Array, key: Array, iv: Array, **_attrs: object) -> Array:
+        return unmarked_hash(message, Mode(key, flags, iv), out_len)
+
+    return fused_region(
+        decomposition,
+        msg,
+        key_words,
+        IV_WORDS,
+        name=BLAKE3_MARKER,
+        version=BLAKE3_MARKER_VERSION,
+        out_len=out_len,
+        flags=flags,
+    )
+
+
+def _marked_hash(mode: Mode, msg: ArrayLike, out_len: int) -> Array:
+    """`tree_hash` from a `Mode`: the one place a mode is taken apart for the
+    marker, so which of its fields is an operand and which is an attribute is
+    stated once rather than at each of the three entry points."""
+    return tree_hash(_message(msg), mode.key_words, out_len=out_len, flags=mode.flags)
 
 
 def digest(msg: ArrayLike) -> Array:
@@ -679,7 +856,7 @@ def xof(msg: ArrayLike, out_len: int) -> Array:
     output length. `digest` is this at 32, which is the standard's own
     construction rather than a shortcut — the digest is the head of the stream.
     """
-    return root_bytes(tree_output(msg, hash_mode()), out_len)
+    return _marked_hash(hash_mode(), msg, out_len)
 
 
 def keyed_digest(key: ArrayLike | bytes, msg: ArrayLike) -> Array:
@@ -700,7 +877,7 @@ def keyed_xof(key: ArrayLike | bytes, msg: ArrayLike, out_len: int) -> Array:
     the mode reaches the node, and reading it further is the root's own
     compression repeated (spec section 2.6).
     """
-    return root_bytes(tree_output(msg, keyed_mode(key)), out_len)
+    return _marked_hash(keyed_mode(key), msg, out_len)
 
 
 def derive_key(
@@ -725,4 +902,4 @@ def derive_key(
     `keyed_digest`/`keyed_xof` are pairs only so that each mode has one spelling
     of "32 bytes", and this mode's is the default.
     """
-    return root_bytes(tree_output(key_material, derive_key_mode(context)), out_len)
+    return _marked_hash(derive_key_mode(context), key_material, out_len)
