@@ -51,11 +51,7 @@ from frx import Array
 
 from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
 from hash_frx.linear import apply_matrix
-from hash_frx.poseidon.linear import (
-    apply_dense_mds,
-    apply_sparse_partial,
-    apply_sparse_partial_ints,
-)
+from hash_frx.poseidon.linear import apply_sparse_partial
 from hash_frx.poseidon.params import SparsePoseidonParams
 
 if TYPE_CHECKING:
@@ -112,9 +108,7 @@ class SparsePoseidon:
         self.width = params.width
         self.dtype = params.dtype
         # Canonical-int views of the four matrices — the dedicated emitter carries
-        # them as int64 marker attributes and the reference body applies them via
-        # integer literals (no captured field array, which the name-routed marker
-        # would lift to a leading operand). Extracted once here (eager), as classic
+        # them as int64 marker attributes. Extracted once here (eager), as classic
         # Poseidon does, and BEFORE marker selection: whether the entries are
         # attribute-representable is part of the routing decision.
         rows = (
@@ -199,7 +193,7 @@ class SparsePoseidon:
         self, leading: Array
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
         """The SparsePoseidonFusion ABI: operands `(leading, *additive round
-        constants)`, the int-literal-matrix permute, and attrs whose four matrices
+        constants)`, the operand-fed permute, and attrs whose four matrices
         (`mds` / `transition_matrix` / `partial_dot` / `partial_col`) name the
         linear layers. Dedicated path only; otherwise an inert stub (non-dedicated,
         so consumers never route a whole-region composite through it)."""
@@ -215,9 +209,8 @@ class SparsePoseidon:
 
 def _permute_from_params(perm: "SparsePoseidon", s: Array) -> Array:
     """The optimized-sparse permute on a single `(width,)` state. Round constants
-    ride as closed-over field arrays (added elementwise); the matrices apply via
-    the field-array normal-form helpers. On the generic marker a closed-over
-    constant lifts to an operand harmlessly."""
+    and matrices ride as closed-over field arrays, staying inline in the marked
+    body; the matrices apply via the field-array normal-form helpers."""
     p = perm._p
     alpha = p.alpha
     half = p.half_full_rounds
@@ -258,10 +251,10 @@ def _permute_from_operands(
 ) -> Array:
     """The SparsePoseidonFusion ABI reference body: the same schedule as
     `_permute_from_params`, but the additive round constants arrive as explicit
-    operands (so `frx.lax.composite` can't lift them and break the ABI) and the
-    four matrices apply via integer literals from `perm._*_rows` (so no field array
-    is captured — the sparse structure rides as int64 marker attributes instead).
-    `full_rc_pre` / `full_rc_post` arrive flattened row-major."""
+    operands. The four matrices are closed-over field arrays: frx keeps
+    composite consts inline in the decomposition, so they never surface as
+    operands, and the sparse structure the emitter reads rides as int64 marker
+    attributes. `full_rc_pre` / `full_rc_post` arrive flattened row-major."""
     p = perm._p
     alpha = p.alpha
     w = perm.width
@@ -269,23 +262,20 @@ def _permute_from_operands(
     pre = full_rc_pre.reshape(half - 1, w)
     post = full_rc_post.reshape(half - 1, w)
 
-    # S-box THEN add the round constant, then the int-literal linear layer.
-    def full_round(state: Array, rc: Array, rows: tuple[tuple[int, ...], ...]) -> Array:
-        return apply_dense_mds(rows, fnp.power(state, alpha) + rc)
+    def full_round(state: Array, rc: Array, matrix: Array) -> Array:
+        return apply_matrix(matrix, fnp.power(state, alpha) + rc)
 
     s = s + initial_arc
     for r in range(half - 1):
-        s = full_round(s, pre[r], perm._mds_rows)
+        s = full_round(s, pre[r], p.mds)
     # Transition full round: the linear layer is P, not M.
-    s = full_round(s, transition_rc, perm._transition_rows)
+    s = full_round(s, transition_rc, p.transition_matrix)
     for r in range(p.n_partial_rounds):
         a = fnp.power(s[0], alpha) + partial_rc[r]
-        s = apply_sparse_partial_ints(
-            perm._partial_dot_rows[r], perm._partial_col_rows[r], a, s[1:]
-        )
+        s = apply_sparse_partial(p.partial_dot[r], p.partial_col[r], a, s[1:])
     for r in range(half - 1):
-        s = full_round(s, post[r], perm._mds_rows)
-    s = apply_dense_mds(perm._mds_rows, fnp.power(s, alpha))
+        s = full_round(s, post[r], p.mds)
+    s = apply_matrix(p.mds, fnp.power(s, alpha))
     return s
 
 
@@ -377,8 +367,8 @@ def _permute_body(perm: SparsePoseidon, state: Array) -> Array:
         full_rc_post: Array,
         **_attrs: object,
     ) -> Array:
-        # `_attrs` is marker metadata (the shape ints + matrices); the body
-        # ignores it and applies the matrices via `perm._*_rows` int literals.
+        # `_attrs` is marker metadata only — the matrices the body applies come
+        # from the params, not from these attributes.
         return _permute_from_operands(
             perm, s, initial_arc, full_rc_pre, transition_rc, partial_rc, full_rc_post
         )

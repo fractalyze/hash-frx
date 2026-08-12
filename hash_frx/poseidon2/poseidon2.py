@@ -150,13 +150,10 @@ def _permutation_body(
     alpha = p.alpha
     w, e_rounds, i_rounds = perm.width, p.external_rounds, p.internal_rounds
 
-    # The external MDS must not be a closed-over array on the named-emitter
-    # path: frx.lax.composite lifts closed-over consts to leading operands, so
-    # the matrix would leak in as a 6th operand and break the Poseidon2Fusion
-    # 5-operand ABI. An M4-block-structured matrix applies via integer literals
-    # (the 4×4 M4, no array capture) and rides as a marker attribute; a free-form
-    # matrix takes the generic LoopFusion fallback, which lowers the real body, so
-    # the closed array is harmless there.
+    # The Poseidon2Fusion emitter understands only an M4-block-structured
+    # external layer, and reads it from the `external_m4` marker attribute — so
+    # an M4-structured matrix applies via its 4×4 int form and a free-form
+    # matrix takes the generic LoopFusion fallback, which lowers the real body.
     if perm._is_m4_structured:
         m4 = perm._external_m4
         assert m4 is not None  # _is_m4_structured ⇒ M4 was extracted
@@ -174,9 +171,9 @@ def _permutation_body(
     def external_round(state: Array, rc: Array) -> Array:
         return apply_external(fnp.power(state + rc, alpha))
 
-    # +rc(lane0) -> sbox(lane0) -> diffusion. Rebuild the J scale in-trace from its
-    # host-side value: a closed-over array lifts back into the operand list, which
-    # is what #440 moved it out of. Identity (the default) skips the multiply.
+    # +rc(lane0) -> sbox(lane0) -> diffusion. The J scale rebuilds from its
+    # canonical (attribute) value so the identity default skips the multiply at
+    # trace time.
     j_scale_canonical = _internal_j_scale_attr(perm)
     off_diag = (
         None

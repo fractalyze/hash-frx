@@ -126,9 +126,9 @@ def _fused_hash(
     sponge_type: SpongeType,
 ) -> Array:
     """Absorb+squeeze as ONE `hash_frx.sponge_hash` region over a dedicated-fusion
-    permutation. The decomposition rebuilds a const-free `permute` from the ABI
-    operands (a `lax.composite` lifts closed-over consts and breaks the ABI), then
-    runs `_absorb`, so the fallback HLO matches the generic path. Caller gates on
+    permutation. The decomposition rebuilds `permute` from the ABI operands —
+    the emitter's operand contract names the round constants there — then runs
+    `_absorb`, so the fallback HLO matches the generic path. Caller gates on
     `has_dedicated_fusion`."""
     operands, permute_from_operands, perm_attrs = perm.fused_region_spec(input)
 

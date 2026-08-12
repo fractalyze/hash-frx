@@ -20,7 +20,7 @@ from hash_frx.poseidon2.poseidon2 import Poseidon2
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 
 # This parameterization's marker metadata as StableHLO prints it (dict keys
-# alphabetical) — shared by the emission contract test and the vmap/auto-lift
+# alphabetical) — shared by the emission contract test and the vmap marker
 # survival test so the expected text lives once. `external_m4` is the base M4
 # (Plonky3's circ(2,3,1,1)) flattened row-major, which the emitter applies per
 # 4-block.

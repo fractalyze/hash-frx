@@ -23,12 +23,12 @@ def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
     """External layer `(I + J_blocks) ⊗ M4`: per-4-block M4, plus M4-image column
     sums across blocks — `M[i][j] = M4[i%4][j%4] * (2 if same 4-block)`.
 
-    `m4` is the 4×4 base matrix as canonical Python ints, so lanes scale by integer
-    literals and no field array is captured — required inside a name-routed
-    `fused_region` (a closed-over array lifts to a leading operand and breaks the
-    emitter ABI). The base M4 is not fixed: Plonky3's `circ(2,3,1,1)` and the
-    HorizenLabs reference matrix are two valid choices, the caller's to pick. The
-    2×-diagonal-block form matches references for width >= 8.
+    `m4` is the 4×4 base matrix as canonical Python ints — the same form the
+    marker's `external_m4` attribute carries, and small structural values, so
+    lanes scale by integer literals. The base M4 is not fixed: Plonky3's
+    `circ(2,3,1,1)` and the HorizenLabs reference matrix are two valid choices,
+    the caller's to pick. The 2×-diagonal-block form matches references for
+    width >= 8.
     """
     w = state.shape[0]
     if state.ndim != 1 or w == 0 or w % 4 != 0:

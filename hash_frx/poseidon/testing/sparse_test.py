@@ -287,8 +287,8 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # When the emitter is available the permute marks its region
         # "hash_frx.sparse_poseidon" so XLA routes it to SparsePoseidonFusion. The
         # ABI operands are exactly [state, initial_arc, full_rc_pre, transition_rc,
-        # partial_rc, full_rc_post] = 6; a closed-over matrix would be lifted to a
-        # leading operand (frx.lax.composite prepends consts) and break that ABI.
+        # partial_rc, full_rc_post] = 6; the closed-over matrices must stay inline
+        # in the decomposition (frx#218), never surface as leading operands.
         perm = SparsePoseidon(_params())
         self.assertTrue(perm.has_dedicated_fusion)
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
@@ -336,7 +336,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         self.assertIn("partial_col = dense<[2, 3, 5, 1, 4, 2]> : tensor<6xi64>", txt)
 
     def test_reference_body_byte_matches(self) -> None:
-        # The composite's decomposition (`_permute_from_operands`, int-literal
+        # The composite's decomposition (`_permute_from_operands`, closed-over
         # matrices + operand constants) is the semantics the emitter must match, so
         # it must byte-match the same pure-Python reference the generic body does.
         # Exercised directly (eager) so this pins the reference body independently of
@@ -367,10 +367,10 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
 
 class SparsePoseidonWideFieldTest(absltest.TestCase):
     """Goldilocks (`p = 2^64 - 2^32 + 1`): canonical values past `2^63 - 1` ride
-    the dedicated marker's attributes as a u64 bit-cast, and the reference
-    body's constants assemble via `_scale` instead of staging as int literals.
-    Byte-matched on the dedicated path (compiled and eager), the generic path,
-    and the encoding round-trip."""
+    the dedicated marker's attributes as a u64 bit-cast; the reference body's
+    matrices are closed-over field arrays, wide entries included. Byte-matched
+    on the dedicated path (compiled and eager), the generic path, and the
+    encoding round-trip."""
 
     def test_wide_matrix_takes_dedicated_marker(self) -> None:
         # The >= 2^63 entry encodes as the negative i64 carrying identical bits
@@ -405,11 +405,10 @@ class SparsePoseidonWideFieldTest(absltest.TestCase):
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
 
     def test_wide_dedicated_permute_lowers(self) -> None:
-        # Lowering (not just attribute inspection): the wide reference body must
-        # TRACE — a bare Python-int literal past the staging cap raises
-        # OverflowError at trace time, which attribute-level checks never see —
-        # and the 6-operand ABI must survive `_scale`'s in-field constant
-        # assembly (nothing lifted).
+        # Lowering (not just attribute inspection): the 6-operand ABI must
+        # survive the closed-over wide matrices — on an frx without the
+        # inline-consts fix (frx#218) they lift to leading operands, which this
+        # count catches.
         perm = SparsePoseidon(_wide_field_params())
         state = _wide_fld(tuple(range(_WIDTH)))
         txt = frx.jit(perm.permute).lower(state).as_text()
@@ -451,8 +450,8 @@ class SparsePoseidonWideFieldTest(absltest.TestCase):
         self._assert_byte_matches(SparsePoseidon(_wide_field_params()).permute)
 
     def test_wide_reference_body_byte_matches(self) -> None:
-        # The decomposition itself, eager, so `_scale`'s Horner assembly is
-        # pinned independently of how the backend treats the marker: a limb
+        # The decomposition itself, eager, so the wide-matrix arithmetic is
+        # pinned independently of how the backend treats the marker: a
         # regression here would otherwise hide behind a routed emitter whose
         # attrs stayed correct.
         perm = SparsePoseidon(_wide_field_params())
