@@ -41,6 +41,7 @@ from hash_frx.blake3.blake3 import (
     hash_mode,
     keyed_digest,
     keyed_mode,
+    keyed_xof,
     parent_output,
     root_words,
     tree_hash,
@@ -55,6 +56,7 @@ from hash_frx.blake3.compress import (
     KEYED_HASH,
 )
 from hash_frx.blake3.testing import reference as ref
+from hash_frx.blake3.testing.emitter import HAS_BLAKE3_EMITTER
 from hash_frx.blake3.testing.vectors import (
     ALL_LENGTHS,
     CONTEXT,
@@ -73,48 +75,63 @@ from hash_frx.blake3.testing.vectors import (
 )
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 from hash_frx.word import split
 
 _U32 = np.uint32
 
 
 # `blake3.unmarked_hash` under each mode — the same implementation the shipped
-# entry points run, without the marker around it, which is what the tables below
-# read in place of `digest`/`xof`/`keyed_digest`/`derive_key`.
+# entry points run, without the marker around it. Read directly where a case
+# wants the body rather than the composite, and stood in for the shipped names by
+# the wrappers below on a leg that cannot afford to compile it.
 #
-# **Why not the shipped names.** A marked call compiles the whole unrolled body,
-# and that compile is super-linear in the compression count: 0.83s at two blocks,
-# 4.17s at four, 25.72s at eight, and at one chunk it did not finish in eleven
-# minutes (46 GB resident). The wall is XLA's codegen of the unrolled hash rather
-# than the marker — at one block a marked call is 0.30s against 0.27s for a plain
-# `frx.jit` of the same body — so the marker did not introduce it, it only put it
-# on every call. The dedicated emitter removes it outright: a recognized
-# composite is one custom fusion and the body is never codegen'd
-# (fractalyze/xla#336), and these helpers go away with it.
+# **Which side the value tables read.** Where the BLAKE3 emitter is present a
+# recognized composite is one custom fusion and its body is never codegen'd, so
+# the tables run `digest`/`xof`/`keyed_digest`/`derive_key` — the entry points a
+# consumer calls, marker and all. Where it is absent the marker inlines and every
+# call compiles the whole unrolled body, at a cost super-linear in the
+# compression count: 0.83s at two blocks, 4.17s at four, 25.72s at eight, and at
+# one chunk it did not finish in eleven minutes (46 GB resident). The wall is
+# XLA's codegen of the unrolled hash rather than the marker — at one block a
+# marked call is 0.30s against 0.27s for a plain `frx.jit` of the same body — so
+# the marker did not introduce it, it only put it on every call. There the tables
+# read the decomposition, and what they give up is the marker standing between
+# them and the same arithmetic.
 #
-# **What still pins the shipped path**: `MarkerTest`, which lowers rather than
-# runs and so is free at any length, plus the compiled cases at ≤ 4 blocks.
+# **What pins the shipped path on either leg**: `MarkerTest`, which reads the
+# lowered module rather than running it, plus the compiled cases at <= 4 blocks.
 def _unmarked(mode: Mode, msg: object, out_len: int = DIGEST_LEN) -> frx.Array:
     return unmarked_hash(msg, mode, out_len)
 
 
 def _xof(msg: object, out_len: int) -> frx.Array:
+    if HAS_BLAKE3_EMITTER:
+        return xof(msg, out_len)
     return _unmarked(hash_mode(), msg, out_len)
 
 
 def _digest(msg: object) -> frx.Array:
+    if HAS_BLAKE3_EMITTER:
+        return digest(msg)
     return _unmarked(hash_mode(), msg)
 
 
 def _keyed_xof(key: object, msg: object, out_len: int) -> frx.Array:
+    if HAS_BLAKE3_EMITTER:
+        return keyed_xof(key, msg, out_len)
     return _unmarked(keyed_mode(key), msg, out_len)
 
 
 def _keyed_digest(key: object, msg: object) -> frx.Array:
+    if HAS_BLAKE3_EMITTER:
+        return keyed_digest(key, msg)
     return _unmarked(keyed_mode(key), msg)
 
 
 def _derive_key(context: str | bytes, material: object, out_len: int) -> frx.Array:
+    if HAS_BLAKE3_EMITTER:
+        return derive_key(context, material, out_len)
     return _unmarked(derive_key_mode(context), material, out_len)
 
 
@@ -635,6 +652,17 @@ class DeriveKeyTest(parameterized.TestCase):
 
 
 class LoweringTest(absltest.TestCase):
+    """What the hash lowers to: how many compressions it emits, and the op
+    vocabulary of the body emitting them.
+
+    The fusion-ready cases read `_unmarked` directly rather than going through
+    the mode wrappers above. They assert what the *body* lowers to, and where a
+    marker is recognized the wrapper returns a call whose body never appears in
+    the compiled module — the assertion would then be reading the emitter's
+    output rather than this repo's code, which is what
+    `test_the_toolchain_recognizes_the_marker` is for.
+    """
+
     def test_output_length_costs_no_compressions(self) -> None:
         # The output blocks are the rows of ONE batched call — each reads the
         # same root node and differs only in its counter — so the program does
@@ -680,7 +708,9 @@ class LoweringTest(absltest.TestCase):
         # per-row gather would return the same bytes and split the kernel. The
         # tree beneath is covered by the two cases below, so this reads at the
         # smallest input with more than one output block to spread.
-        assert_fusion_ready(lambda m: _xof(m, 131), _rows(official_input(129)))
+        assert_fusion_ready(
+            lambda m: _unmarked(hash_mode(), m, 131), _rows(official_input(129))
+        )
 
     def test_a_short_last_chunk_costs_no_compressions(self) -> None:
         # A short last chunk shares the batched chain to its own last block and
@@ -703,14 +733,19 @@ class LoweringTest(absltest.TestCase):
         # node view and the flat batch. Both are static, so both must stay
         # `slice`/`reshape` — a dynamic index would lower to a gather, compute
         # the right digest, and only split the kernel.
-        assert_fusion_ready(_digest, _rows(official_input(CHUNK_LEN * 3 + 1)))
+        assert_fusion_ready(
+            lambda m: _unmarked(hash_mode(), m),
+            _rows(official_input(CHUNK_LEN * 3 + 1)),
+        )
 
     def test_the_body_is_fusion_ready(self) -> None:
         # The shared whitelist rather than a local blacklist: it also catches a
         # call, a scatter, or a dot, and it reads the lowered module. Three
         # blocks is the smallest input carrying a chained block, a trailing
         # partial one, and both flag placements.
-        assert_fusion_ready(_digest, _rows(official_input(129)))
+        assert_fusion_ready(
+            lambda m: _unmarked(hash_mode(), m), _rows(official_input(129))
+        )
 
     def test_the_keyed_body_is_fusion_ready(self) -> None:
         # The key is the one operand hash mode does not carry, and it is
@@ -718,7 +753,9 @@ class LoweringTest(absltest.TestCase):
         # `conventions.md` warns lower to a gather when written as an indexed
         # read — right bytes, split kernel.
         key = fnp.asarray(np.frombuffer(KEY, dtype=np.uint8))
-        assert_fusion_ready(_keyed_digest, key, _rows(official_input(129)))
+        assert_fusion_ready(
+            lambda k, m: _unmarked(keyed_mode(k), m), key, _rows(official_input(129))
+        )
 
     def test_the_derive_key_body_is_fusion_ready(self) -> None:
         # The material pass under a derived key. It is the one place a mode's key
@@ -739,6 +776,15 @@ class LoweringTest(absltest.TestCase):
         out = _digest(_rows(official_input(64), official_input(64)))
         self.assertEqual(out.dtype, fnp.uint8)
         self.assertEqual(out.shape, (2, 32))
+
+
+# The lengths the decomposition case runs. Its marked side compiles, so without
+# an emitter it stops at four blocks — the cost the note on the helpers above
+# measures — and with one the compile is flat and it reaches a multi-chunk tree.
+# Byte-equality over a tree is the single thing the shorter list gives up.
+_DECOMPOSITION_LENGTHS = (0, 1, BLOCK_LEN, 129) + (
+    (CHUNK_LEN, CHUNK_LEN * 2 + 1) if HAS_BLAKE3_EMITTER else ()
+)
 
 
 class MarkerTest(parameterized.TestCase):
@@ -790,23 +836,40 @@ class MarkerTest(parameterized.TestCase):
                 self.assertIn(f"flags = {flags} : i64", attrs)
                 self.assertIn(f"out_len = {out_len} : i64", attrs)
 
-    @parameterized.parameters(0, 1, BLOCK_LEN, 129)
+    @parameterized.parameters(*_DECOMPOSITION_LENGTHS)
     def test_the_marked_hash_equals_its_decomposition(self, length: int) -> None:
-        # The marker only tags the region: with no emitter wired it inlines, so
-        # the marked hash must byte-equal the unmarked tree. This is also what
-        # says threading the IV through as an operand left the arithmetic alone —
-        # the unmarked side takes the module default.
+        # Whatever the marker becomes — inlined body or custom fusion — it must
+        # compute what the unmarked tree computes. This is also what says
+        # threading the IV through as an operand left the arithmetic alone: the
+        # unmarked side takes the module default.
         #
-        # Capped at four blocks because the marked side compiles, at the cost
-        # the note on the helpers above measures. What the cap gives up is
-        # byte-equality over a *tree*, which is why the case above reads the
-        # multi-chunk marker off the lowered module instead — there the
-        # composite's decomposition is the very code the unmarked side runs, so
-        # the two cannot disagree without the module showing it.
+        # The lengths reach a multi-chunk tree only where the emitter carries the
+        # compile; see `_DECOMPOSITION_LENGTHS`. Where they stop at four blocks
+        # what is given up is byte-equality over a *tree*, which is why the case
+        # above reads the multi-chunk marker off the lowered module instead —
+        # there the composite's decomposition is the very code the unmarked side
+        # runs, so the two cannot disagree without the module showing it.
         message = _rows(official_input(length))
         marked = np.asarray(digest(message))
-        inline = np.asarray(_digest(message))
+        inline = np.asarray(_unmarked(hash_mode(), message))
         np.testing.assert_array_equal(marked, inline)
+
+    @absltest.skipIf(
+        not HAS_BLAKE3_EMITTER,
+        "no BLAKE3 emitter on this backend: an unrecognized marker inlines "
+        "rather than becoming a custom fusion",
+    )
+    def test_the_toolchain_recognizes_the_marker(self) -> None:
+        # The cases above prove this repo *emits* the name. Whether the pinned
+        # toolchain routes it to an emitter is a different property, and one the
+        # bytes cannot show: an unrecognized name is not an error, it inlines and
+        # computes the same digest. Only the compiled module separates the two.
+        #
+        # This is also what the caps keyed to `HAS_BLAKE3_EMITTER` assume. If the
+        # emitter is gone from a toolchain bump, this fails on the leg that just
+        # widened its coverage, rather than that leg quietly paying minutes of
+        # codegen per case.
+        assert_marker_recognized(self, "blake3", digest, _rows(official_input(129)))
 
     def test_derive_key_marks_the_material_pass_only(self) -> None:
         # Key derivation is two whole BLAKE3 hashes (spec section 2.3), and only
