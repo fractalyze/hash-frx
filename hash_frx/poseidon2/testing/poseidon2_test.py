@@ -65,11 +65,8 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         self.assertIn(f'"{POSEIDON2_MARKER}"', composite_line)
         self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, composite_line)
         self.assertIn(f"version = {POSEIDON2_MARKER_VERSION}", composite_line)
-        # Exactly the 5 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
-        # diag]. The internal J scale rides as the `internal_j_scale` attribute,
-        # not a 6th operand. A closed-over external matrix would be
-        # lifted to a leading 6th operand (frx.lax.composite prepends consts) and
-        # break the Poseidon2Fusion operand ABI — the e2e GPU failure this guards.
+        # Exactly the 5 ABI operands: the J scale rides as an attribute and any
+        # closed-over constant must stay inline (frx#218), never a 6th operand.
         operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 5, composite_line)
 
@@ -83,9 +80,8 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         )
 
     def test_non_identity_j_scale_stays_five_operands_canonical(self) -> None:
-        # A non-identity J scale must ride as the CANONICAL attribute value and
-        # still emit exactly 5 operands (materialized in-trace, never lifted to a
-        # 6th operand). koalabear16_scaled_perm's scale is R⁻¹: canonical
+        # A non-identity J scale must ride as the CANONICAL attribute value.
+        # koalabear16_scaled_perm's scale is R⁻¹: canonical
         # 1057030144, Montgomery STORAGE 1 — so the attribute must read 1057030144,
         # not the storage 1 a raw-bits/canonical mixup would emit.
         p = koalabear16_scaled_perm()

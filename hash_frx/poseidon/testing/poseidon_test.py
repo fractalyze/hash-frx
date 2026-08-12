@@ -171,9 +171,8 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         self.assertIn(f'"{POSEIDON_MARKER}"', composite_line)
         self.assertIn(EXPECTED_ATTRS, composite_line)
         self.assertIn(f"version = {POSEIDON_MARKER_VERSION}", composite_line)
-        # Exactly the 2 ABI operands [state, round_constants flattened]. A
-        # closed-over MDS would be lifted to a leading operand (frx.lax.composite
-        # prepends consts) and break the 2-operand Poseidon emitter ABI.
+        # Exactly the 2 ABI operands: the closed-over MDS must stay inline in
+        # the decomposition (frx#218), never a leading operand.
         operands = composite_line.split(f'"{POSEIDON_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 2, composite_line)
 

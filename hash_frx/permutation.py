@@ -76,7 +76,7 @@ class Permutation(Protocol):
         ``(operands, permute_from_operands, attrs)``:
 
         - ``operands`` = ``(leading, *constants)``; the round constants ride as
-          explicit operands so a `lax.composite` can't lift them and break the ABI.
+          explicit operands because the emitter's ABI names them there.
         - ``permute_from_operands(state, *constants)`` = the const-free permute the
           `fused_region` runs.
         - ``attrs`` = identifying `composite.attributes` (a ``permutation``

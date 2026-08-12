@@ -123,10 +123,8 @@ class PoseidonParams:
     @property
     def mds_rows(self) -> tuple[tuple[int, ...], ...]:
         """The `width × width` MDS as canonical ints (rows of ints) — the form
-        the body applies via integer literals (no captured field array, which a
-        name-routed `fused_region` would lift to a leading operand) and the
-        dedicated emitter carries as a marker attribute (flattened row-major at
-        the call-site). Canonical ints come from a numpy object cast, which
+        the dedicated emitter carries as a marker attribute (flattened row-major
+        at the call-site). Canonical ints come from a numpy object cast, which
         Montgomery-decodes without needing frx x64."""
         w = self.width
         canon = np.asarray(self.mds).astype(object)
@@ -278,11 +276,9 @@ class SparsePoseidonParams:
 
     # Canonical-int views of the four matrices — the form the dedicated
     # `hash_frx.sparse_poseidon` emitter carries as marker attributes (flattened
-    # row-major) and the reference body applies via integer literals (no captured
-    # field array, which a name-routed `fused_region` would lift to a leading
-    # operand). Canonical ints come from a numpy object cast, which Montgomery-
-    # decodes without needing frx x64. As with `PoseidonParams.mds`, the emitter
-    # only supports fields whose canonical values fit an int64 literal.
+    # row-major). Canonical ints come from a numpy object cast, which Montgomery-
+    # decodes without needing frx x64. The attribute encoding caps the field at a
+    # u64 (see `_select_fused_region_name`).
     @property
     def mds_rows(self) -> tuple[tuple[int, ...], ...]:
         """The dense MDS `M` as canonical ints, applied every full round + final."""

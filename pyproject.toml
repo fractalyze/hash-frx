@@ -45,7 +45,10 @@ classifiers = [
 dependencies = [
     "numpy",
     "blake3",
-    "frx>=0.10.0.dev0",
+    # Floor = the first wheel where closed-over composite constants stay inline
+    # (fractalyze/jax#218); an older frx lifts the captured matrices to leading
+    # operands and breaks every dedicated emitter ABI.
+    "frx>=0.10.1.dev20260812040018",
 ]
 
 [project.urls]

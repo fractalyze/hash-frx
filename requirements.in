@@ -12,10 +12,8 @@
 # the binary-field dtypes (tower t0..t7 + flat GHASH) in the frontend, which
 # requires zk_dtypes >= 0.0.10.
 #
-# The frx build is pinned to the one `zorch` pins. The symmetric layer is being
-# extracted from there, so a ported hash must be byte-comparable against its
-# origin — a simultaneous toolchain bump would make any mismatch ambiguous
-# between the port and the bump.
+# The frx pin must satisfy the `frx>=` floor in pyproject.toml (see the
+# rationale there).
 #
 # `blake3` is the BLAKE3 team's own Rust binding, and the one runtime dependency
 # here that is not frx or numpy. It backs the `HostBlake3*` rows, which need a
@@ -29,8 +27,8 @@
 absl-py
 numpy
 blake3
-frx==0.10.1.dev20260811213301
-frxlib==0.10.1.dev20260811213301
-frx-cuda12-pjrt==0.10.1.dev20260811213301
-frx-cuda12-plugin==0.10.1.dev20260811213301
+frx==0.10.1.dev20260812040018
+frxlib==0.10.1.dev20260812040018
+frx-cuda12-pjrt==0.10.1.dev20260812040018
+frx-cuda12-plugin==0.10.1.dev20260812040018
 zk-dtypes==0.0.10
