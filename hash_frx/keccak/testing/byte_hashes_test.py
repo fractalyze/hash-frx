@@ -205,10 +205,30 @@ class SeamConformanceTest(absltest.TestCase):
         ):
             with self.subTest(hash=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
-                # Pinned rather than merely type-checked: `False` on the device
-                # implementations too is the substantive claim this module's
-                # docstring makes, and only an assertion keeps it honest.
-                self.assertFalse(h.has_dedicated_fusion)
+
+    def test_only_the_device_rows_report_a_dedicated_fusion(self) -> None:
+        # Pinned rather than left to the docstring: the device rows lower the
+        # whole padded absorb and squeeze to one `hash_frx.keccak_sponge` kernel,
+        # and a host row never lowers at all. The flag going quietly False on a
+        # device row is what a pin below the `frx>=` floor looks like from here —
+        # right bytes, no kernel — so nothing else in the suite would notice.
+        for device in (
+            Sha3_256(),
+            Sha3_512(),
+            Shake128(32),
+            Shake256(32),
+            Keccak256(),
+        ):
+            with self.subTest(device=type(device).__name__):
+                self.assertTrue(device.has_dedicated_fusion)
+        for host in (
+            HostSha3_256(),
+            HostSha3_512(),
+            HostShake128(32),
+            HostShake256(32),
+        ):
+            with self.subTest(host=type(host).__name__):
+                self.assertFalse(host.has_dedicated_fusion)
 
     def test_digest_size_matches_what_digest_returns(self) -> None:
         msg = _message(64)

@@ -22,11 +22,17 @@ kernel.
 
 `permute` marks itself with `hash_frx.keccak_f` where the pinned plugin ships
 that emitter and the generic `zorch.fused_region` where it does not — the
-`_DEDICATED_EMITTER_AVAILABLE` switch below, which also says why the fallback is
-the safe default rather than the optimistic one. `has_dedicated_fusion` reports
-which of the two ran; False means *generic marker*, not *no marker*, since the
-contract's guarantee that a permutation call is one device unit does not wait for
-a dedicated emitter.
+`_DEDICATED_EMITTER_AVAILABLE` switch below. `has_dedicated_fusion` reports which
+of the two ran, and the two are not a fast and a slow kernel: **only the
+dedicated marker is one device unit.**
+
+A bare `zorch.fused_region` carries no live-width operand, and the rewriter
+declines those on purpose — routing one to the generic loop fusion would build an
+indexed per-element subgraph that re-executes shared producers per output
+element, which is exponential in body depth. So it inlines instead, and ordinary
+fusion materializes the intermediates: a single permutation lands as ~70 fusions
+rather than one. The fusion contract is met by a *recognized* marker, never by
+the fallback, which is why the switch has to track the pin.
 """
 
 from __future__ import annotations
@@ -64,15 +70,22 @@ KECCAK_F_MARKER = "hash_frx.keccak_f"
 # rename (`hash_frx.fusion`).
 KECCAK_F_MARKER_VERSION = 1
 
-# Whether the pinned Fractalyze XLA plugin ships the dedicated KeccakFusion
-# emitter (xla#337). Two separate things turn on this flag, and the second is why
-# it cannot be optimistic: emitting an unrecognized *name* is byte-neutral (the
-# composite inlines and the fusion is silently lost), but `has_dedicated_fusion`
-# also routes a `Sponge` over this permutation to `hash_frx.sponge_hash` carrying
-# `permutation="keccak_f"`, which a plugin without the arm rejects outright as an
-# unknown permutation — a hard compile failure, not a fallback. Flipped together
-# with the pin, like `poseidon.sparse._DEDICATED_EMITTER_AVAILABLE`.
-_DEDICATED_EMITTER_AVAILABLE = False
+# Whether the pinned Fractalyze XLA plugin ships the dedicated Keccak emitters.
+# Two separate things turn on this flag, and the second is why it must track the
+# pin rather than being left optimistic: emitting an unrecognized *name* is
+# byte-neutral (the composite inlines and the fusion is silently lost), but
+# `has_dedicated_fusion` also routes a `Sponge` over this permutation to
+# `hash_frx.sponge_hash` carrying `permutation="keccak_f"`, which a plugin without
+# the arm rejects outright as an unknown permutation — a hard compile failure, not
+# a fallback. Nothing here builds that `Sponge` (the byte hashes go through
+# `KeccakSponge` and its own marker), so today only the first applies; the second
+# is what makes the flag a pin question rather than a preference.
+#
+# Flipped together with the `frx>=` floor in `pyproject.toml`, like
+# `poseidon.sparse._DEDICATED_EMITTER_AVAILABLE`. Below that floor the marker is
+# emitted, ignored, and computes the right bytes with none of the kernels — which
+# no test in this repo can see, because byte equality holds either way.
+_DEDICATED_EMITTER_AVAILABLE = True
 
 
 def _unpack(state: Array) -> Lane:

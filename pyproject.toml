@@ -46,17 +46,27 @@ classifiers = [
 dependencies = [
     "numpy",
     "blake3",
-    # Floor = the first wheel where closed-over composite constants stay inline
-    # (fractalyze/jax#218); an older frx lifts the captured matrices to leading
-    # operands and breaks every dedicated emitter ABI.
+    # Floor = the first wheel where routing to the dedicated Keccak emitters is
+    # SAFE, which is later than the one where those emitters first appeared. The
+    # earlier wheel fused a producer into the permutation's custom fusion and
+    # dropped it from the kernel, so an incremental SHAKE either aborted or
+    # returned a wrong digest with no error (fractalyze/xla#517). A floor at the
+    # emitter wheel would therefore be worse than no flip at all.
+    #
+    # Two failure modes ride on this line and neither is testable from here:
+    # below the floor the marker is emitted, goes unrecognized, inlines, and
+    # computes the right bytes with none of the kernels; at the emitter wheel it
+    # is recognized and miscompiles. Byte equality sees neither. The floor also
+    # subsumes the earlier one (closed-over composite constants staying inline
+    # rather than lifted to leading operands, which every dedicated emitter ABI
+    # depends on).
     #
     # The `!=` excludes the one version no lower bound can reach: PEP 440 sorts
-    # a final release above ALL of its own pre-releases, so `0.10.1` — which
-    # predates both that fix and the `hash_frx.*` marker rename — sorts above
-    # the dev build named as the floor. Naming a later stable instead fails the
-    # other way, since the nightly line resumes below it (`0.10.2.dev...` <
-    # `0.10.2`).
-    "frx>=0.10.1.dev20260812040018,!=0.10.1",
+    # a final release above ALL of its own pre-releases, so `0.10.2` — released
+    # before any of this — sorts above the dev build named as the floor and
+    # would otherwise satisfy it. Naming a later stable instead fails the other
+    # way, since the nightly line resumes below it (`0.10.3.dev...` < `0.10.3`).
+    "frx>=0.10.2.dev20260813110121,!=0.10.2",
 ]
 
 [project.urls]

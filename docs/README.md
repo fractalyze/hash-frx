@@ -96,13 +96,13 @@ whether or not the pinned plugin recognizes it: an unrecognized *name* only
 inlines, so being early costs the fusion and nothing else, and the BLAKE3 rows
 report `has_dedicated_fusion = False` while carrying a marker
 ([#119](https://github.com/fractalyze/hash-frx/issues/119) lifts the test caps
-that buys). `hash_frx.keccak_f` is emitted only where the plugin ships its
-emitter ([fractalyze/xla#337](https://github.com/fractalyze/xla/issues/337)),
-because a permutation's marker also decides whether a `Sponge` over it wraps its
-whole hash as `hash_frx.sponge_hash` — and that marker carries a `permutation`
-discriminator a plugin without the arm rejects outright, which is a failed
-compile rather than a lost kernel. So Keccak-f routes to the generic marker until
-the pin moves, and the switch flips with it.
+that buys). `hash_frx.keccak_f` is emitted only where the plugin ships its emitter, and the
+pinned one does — so Keccak-f routes to the dedicated marker, and the `frx>=`
+floor in `pyproject.toml` is what holds that true. The switch has to track the
+pin rather than be left optimistic, because a permutation's marker also decides
+whether a `Sponge` over it wraps its whole hash as `hash_frx.sponge_hash` — and
+that marker carries a `permutation` discriminator a plugin without the arm
+rejects outright, which is a failed compile rather than a lost kernel.
 
 A permutation advertises which path it is on through `has_dedicated_fusion`, and
 hands out its operand layout through `fused_region_spec` — that pair is what lets
