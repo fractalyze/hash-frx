@@ -35,13 +35,19 @@ the length a parameter is the family-wide rule, stated once in
 [`docs/reference/conventions.md`](../../docs/reference/conventions.md); it is
 also why the SHAKEs take no default where BLAKE3's rows do.
 
-**`has_dedicated_fusion` is `False` on every hash here, device and host alike**, because
-Keccak carries only the generic region marker until an emitter exists (#21). So
-the flag does not separate substrate here the way it does for SHA-256,
-and the return type is what does: a device hash returns an `Array` and accepts a
-tracer, a host one returns `np.ndarray` and never can. That is a seam question
-rather than a fact about these hashes, and it is stated where the rule lives —
-[`byte_hash.py`](../byte_hash.py) and `docs/blocks/hash.md`.
+**`has_dedicated_fusion` is `True` on the device rows and `False` on the host
+ones**, because the whole padded absorb and squeeze lowers to one
+`hash_frx.keccak_sponge` kernel where the pinned plugin ships that emitter — the
+switch is `keccak.permutation._DEDICATED_EMITTER_AVAILABLE`, which the device
+rows read through `KeccakSponge`.
+
+The flag is nonetheless the wrong thing to separate substrate by, here as
+elsewhere: it answers "does this lower to a dedicated kernel", which a pin can
+change, and the return type is what actually divides the two — a device hash
+returns an `Array` and accepts a tracer, a host one returns `np.ndarray` and
+never can. That is a seam question rather than a fact about these hashes, and it
+is stated where the rule lives — [`byte_hash.py`](../byte_hash.py) and
+`docs/blocks/hash.md`.
 """
 
 from __future__ import annotations
@@ -54,6 +60,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import host_digest
+from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.keccak.sponge import KeccakSponge
 
 if TYPE_CHECKING:
@@ -97,13 +104,19 @@ class _KeccakHash:
 
     _rate: int
     _suffix: int
-    has_dedicated_fusion = False
 
     def __init__(self, output_size: int) -> None:
         self.digest_size = output_size
         self._sponge = KeccakSponge(
             rate=self._rate, suffix=self._suffix, output_size=output_size
         )
+        # Derived rather than declared, so it cannot disagree with the routing
+        # `KeccakSponge.hash` actually takes — the same arrangement
+        # `poseidon2.Poseidon2` uses. Per instance rather than on the class,
+        # because the emitter switch is a property of the pin and a value read at
+        # import would pin the answer before anything could vary it. The seam
+        # types it as a plain attribute, so this cannot be a read-only property.
+        self.has_dedicated_fusion = KeccakF1600().has_dedicated_fusion
 
     def digest(self, msg: ArrayLike) -> Array:
         return self._sponge.hash(msg)

@@ -44,8 +44,19 @@ _SHAKE128_LONG = KeccakSponge(
 
 @contextlib.contextmanager
 def _dedicated_emitter() -> Iterator[None]:
-    """Route as if the pinned plugin shipped the KeccakFusion emitter."""
+    """Route as if the pinned plugin shipped the Keccak emitters — the default."""
     with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
+        yield
+
+
+@contextlib.contextmanager
+def _generic_emitter() -> Iterator[None]:
+    """Route as if it lacked them, so each permute is its own generic region.
+
+    The default is the dedicated routing now, so a "generic" arm has to patch
+    for it rather than simply not patching.
+    """
+    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
         yield
 
 
@@ -71,7 +82,8 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # That is a launch per block, and the reason an unrecognized Keccak sits
         # in the hot path of every ML-DSA sign.
         msg = _message(2, 200)
-        generic = _composites(_SHAKE128_LONG.hash, msg)
+        with _generic_emitter():
+            generic = _composites(_SHAKE128_LONG.hash, msg)
         self.assertLen(generic, 3)
         for eqn in generic:
             self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
@@ -126,7 +138,7 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
             msg = _message(2, length)
             rows = [bytes(np.asarray(row)) for row in np.asarray(msg)]
             for label, ctx in (
-                ("generic", contextlib.nullcontext()),
+                ("generic", _generic_emitter()),
                 ("dedicated", _dedicated_emitter()),
             ):
                 with self.subTest(case=name, routing=label), ctx:
@@ -139,7 +151,8 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # hash. Compared against the generic path's lowering, which is the same
         # computation with the region boundary in a different place.
         msg = _message(1, 64)
-        plain = np.asarray(frx.jit(_SHA3_256.hash)(msg))
+        with _generic_emitter():
+            plain = np.asarray(frx.jit(_SHA3_256.hash)(msg))
         with _dedicated_emitter():
             marked = np.asarray(frx.jit(_SHA3_256.hash)(msg))
         np.testing.assert_array_equal(plain, marked)

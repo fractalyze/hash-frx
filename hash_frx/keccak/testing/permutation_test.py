@@ -109,10 +109,12 @@ class KeccakF1600Test(absltest.TestCase):
     def test_permute_emits_one_fused_region(self) -> None:
         # The contract's unit. Without the marker the body still computes the
         # right bytes, so nothing but the lowered module shows the unit is gone.
+        # Named for whichever routing is pinned — one region either way; which
+        # marker carries it is `KeccakF1600MarkerTest`'s subject.
         k = KeccakF1600()
         text = frx.jit(k.permute).lower(_device_state(_STATES["zeros"])).as_text()
         self.assertEqual(text.count("stablehlo.composite"), 1)
-        self.assertIn(f'"{FUSED_REGION_MARKER}"', text)
+        self.assertIn(f'"{k.fused_region_marker[0]}"', text)
 
     def test_seam_marker_matches_the_emission(self) -> None:
         assert_marker_matches_emission(
@@ -167,12 +169,27 @@ def _composite(fn: object, *args: frx.Array) -> Any:
 
 @contextlib.contextmanager
 def _dedicated_emitter() -> Iterator[None]:
-    """Route as if the pinned plugin shipped the KeccakFusion emitter.
+    """Route as if the pinned plugin shipped the Keccak emitters — the default.
 
     `_DEDICATED_EMITTER_AVAILABLE` is read in `__init__`, so the patch has to
-    wrap construction, not just the call.
+    wrap construction, not just the call. Kept explicit even though it now
+    matches the default: a test that names the routing it exercises still says
+    so when the pin moves again.
     """
     with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
+        yield
+
+
+@contextlib.contextmanager
+def _generic_emitter() -> Iterator[None]:
+    """Route as if the pinned plugin lacked them, falling back to the generic
+    region marker.
+
+    This is what a `contextlib.nullcontext()` used to mean here and no longer
+    does — the default is the dedicated routing now, so a "generic" arm has to
+    patch for it or it silently runs the dedicated one twice.
+    """
+    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
         yield
 
 
@@ -188,7 +205,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # the generic rewriter reads the same list.
         state = _device_state(_STATES["counter"])
         for label, ctx in (
-            ("generic", contextlib.nullcontext()),
+            ("generic", _generic_emitter()),
             ("dedicated", _dedicated_emitter()),
         ):
             with self.subTest(routing=label), ctx:
@@ -205,15 +222,27 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
         self.assertEqual(attrs, {"permutation": "keccak_f", "width": 50, "rounds": 24})
 
-    def test_the_generic_marker_is_the_default_and_carries_no_contract(self) -> None:
-        # The safe default until xla#337 lands: an unrecognized NAME would only
-        # inline, but `has_dedicated_fusion` also routes a `Sponge` over this
-        # permutation to `hash_frx.sponge_hash` with an unknown `permutation`
-        # discriminator, which a plugin without the arm rejects outright.
+    def test_the_dedicated_marker_is_the_default(self) -> None:
+        # The pinned plugin ships the emitters, so this is what a consumer gets
+        # without asking. Pinned as its own test because every other assertion
+        # here names its routing explicitly and would still pass if the default
+        # silently went back to generic — which costs the kernel and nothing else.
         k = KeccakF1600()
-        self.assertFalse(k.has_dedicated_fusion)
-        self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
-        eqn = _composite(k.permute, _device_state(_STATES["zeros"]))
+        self.assertTrue(k.has_dedicated_fusion)
+        self.assertEqual(
+            k.fused_region_marker, (KECCAK_F_MARKER, KECCAK_F_MARKER_VERSION)
+        )
+
+    def test_the_generic_marker_carries_no_contract(self) -> None:
+        # The fallback where a plugin lacks the emitter. It is not a slower
+        # kernel but no kernel: the rewriter declines a bare fused_region with no
+        # live-width operand, so it inlines. Carrying no version and no attrs is
+        # what says the marker claims nothing an emitter could read.
+        with _generic_emitter():
+            k = KeccakF1600()
+            self.assertFalse(k.has_dedicated_fusion)
+            self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
+            eqn = _composite(k.permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
         self.assertEqual(eqn.params["version"], 0)
         self.assertEqual(eqn.params["attributes"], ())
@@ -224,7 +253,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # mistake in the decomposition cannot pass.
         for name, lanes_in in _STATES.items():
             for label, ctx in (
-                ("generic", contextlib.nullcontext()),
+                ("generic", _generic_emitter()),
                 ("dedicated", _dedicated_emitter()),
             ):
                 with self.subTest(state=name, routing=label), ctx:
@@ -239,7 +268,8 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # stub is what keeps a non-dedicated permutation from being wrapped in
         # one: it names no layout, so there is nothing for an emitter to read.
         state = _device_state(_STATES["zeros"])
-        operands, _permute, attrs = KeccakF1600().fused_region_spec(state)
+        with _generic_emitter():
+            operands, _permute, attrs = KeccakF1600().fused_region_spec(state)
         self.assertLen(operands, 1)
         self.assertEqual(attrs, {})
 
@@ -258,12 +288,13 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # The parameter surface is empty, so without the marker in `__eq__` the
         # two routings collide in `_permute_body`'s static-arg cache and the
         # second silently reuses the first's marker.
-        generic = KeccakF1600()
+        with _generic_emitter():
+            generic = KeccakF1600()
         with _dedicated_emitter():
             dedicated = KeccakF1600()
         self.assertNotEqual(generic, dedicated)
         self.assertNotEqual(hash(generic), hash(dedicated))
-        self.assertEqual(generic, KeccakF1600())
+        self.assertEqual(dedicated, KeccakF1600())
 
 
 if __name__ == "__main__":

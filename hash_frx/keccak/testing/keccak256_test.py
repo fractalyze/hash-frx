@@ -112,7 +112,10 @@ class SeamConformanceTest(absltest.TestCase):
             with self.subTest(hash=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
                 self.assertEqual(h.digest_size, 32)
-                self.assertFalse(h.has_dedicated_fusion)
+        # Keccak-256 differs from SHA3-256 in one padding byte and nothing else,
+        # so it rides the same sponge marker; the host row never lowers.
+        self.assertTrue(Keccak256().has_dedicated_fusion)
+        self.assertFalse(HostKeccak256().has_dedicated_fusion)
 
     def test_value_identity_keeps_the_seam_re_trace_safe(self) -> None:
         self.assertEqual(Keccak256(), Keccak256())

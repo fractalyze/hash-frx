@@ -106,17 +106,21 @@ marker, the other loops `hashlib` on the host. `has_dedicated_fusion` is what a
 consumer branches on, exactly as on the permutation side — the substrate is a
 value the hash carries, never a class name a caller has to test.
 
-**That holds for SHA-256 and does not yet hold in general.** The flag says a
-digest lowers to a hash-*dedicated* marker, which for SHA-256 coincides with
-"runs on the device". Keccak's `ByteHash`es
-([`keccak/byte_hashes.py`](../../hash_frx/keccak/byte_hashes.py)) are the case where the
-two come apart: they run on the device and accept a tracer, but carry only the
-generic region marker until a Keccak emitter exists, so every one of them —
-device and host alike — reports `False`. A consumer branching on the flag alone will size a nonce window
-for the host path against a device hash. The seam anticipated this and named the
-remedy — a second field for "the digest returns an `Array`" — which is a decision
-owed to the next consumer that has to make the choice, not to the hash that
-exposed it.
+**That holds for SHA-256 and does not hold in general.** The flag says a digest
+lowers to a hash-*dedicated* marker, which for SHA-256 coincides with "runs on
+the device". BLAKE3's `ByteHash`es
+([`blake3/byte_hashes.py`](../../hash_frx/blake3/byte_hashes.py)) are the case
+where the two come apart: they run on the device and accept a tracer, yet carry a
+marker the pinned plugin does not route, so every one of them reports `False`. A
+consumer branching on the flag alone will size a nonce window for the host path
+against a device hash. The seam anticipated this and named the remedy — a second
+field for "the digest returns an `Array`" — which is a decision owed to the next
+consumer that has to make the choice, not to the hash that exposed it.
+
+Keccak used to be that example and is no longer one: its rows report `True`
+because the pinned plugin routes `hash_frx.keccak_sponge`. Which hash sits in the
+gap is a property of the pin, not of the design — so the gap is what the seam has
+to answer for, not the hash currently in it.
 
 Both stay, and the reason is not only speed. A byte transcript is host-shaped by
 construction — a `bytes` buffer with host framing — so a device hash forces a

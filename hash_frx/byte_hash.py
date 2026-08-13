@@ -70,17 +70,20 @@ class ByteHash(Protocol):
         to get a traceable path. An implementation returning `np.ndarray` is a
         host call and never can: it has to read the bytes.
 
-        `has_dedicated_fusion` separated exactly those two until Keccak, but it
+        `has_dedicated_fusion` looks like it separates exactly those two, but it
         is a proxy rather than the same question — it says the digest lowers to
-        one dedicated kernel, and a device hash written without a marker is
-        traceable with the flag `False`.
+        one dedicated kernel, and a device hash whose marker the pinned plugin
+        does not route is traceable with the flag `False`.
 
-        **Keccak's `ByteHash`es are that case** (`keccak/byte_hashes.py`): they run
-        on the device and take a tracer, yet report `False` because no Keccak
-        emitter exists yet. So the flag no longer answers "may I hash inside my
-        own `@jit`" — only the return type does. The seam grows a field for that
-        when a consumer has to make the choice and cannot; a hash that merely
-        exposes the gap is not yet that consumer.
+        **BLAKE3's `ByteHash`es are that case** (`blake3/byte_hashes.py`): they
+        run on the device and take a tracer, yet report `False`. So the flag does
+        not answer "may I hash inside my own `@jit`" — only the return type does.
+        The seam grows a field for that when a consumer has to make the choice
+        and cannot; a hash that merely exposes the gap is not yet that consumer.
+
+        Which hash sits in the gap moves with the pin — Keccak was there until
+        its emitter shipped — so the reason this is a return-type question rather
+        than a flag question does not move with it.
         """
         ...
 
