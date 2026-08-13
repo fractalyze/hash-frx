@@ -78,6 +78,23 @@ BLAKE3_MARKER = "hash_frx.blake3"
 # which the recognizer would not accept and which would silently lose fusion.
 BLAKE3_MARKER_VERSION = 1
 
+# A Merkle parent is a different construction, so it takes a name of its own
+# rather than an attribute on the one above.
+#
+# The pull to reuse `hash_frx.blake3` is real — the operands have the same
+# shapes, and `non_root` is precedent for selecting a variant by attribute. It
+# is wrong, and silently: a recognizer matches by NAME, so a shipped emitter
+# that predates the attribute recognizes the marker anyway, ignores what it
+# does not know, and runs the message-hash construction on a pair of chaining
+# values. Measured on frx 0.10.2.dev20260813075049 — a parent marked that way
+# returned the 64-byte message hash rather than the parent compression, with
+# the right decomposition sitting unused in the module. An unrecognized NAME
+# has no such failure: the composite inlines and the bytes stay right while
+# only fusion is lost (see `fusion.py`), so a new name degrades safely where a
+# new attribute degrades wrongly.
+BLAKE3_PARENT_MARKER = "hash_frx.blake3_parent"
+BLAKE3_PARENT_MARKER_VERSION = 1
+
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
 DIGEST_LEN = 32
@@ -757,6 +774,28 @@ def unmarked_hash(msg: ArrayLike, mode: Mode, out_len: int) -> Array:
     return root_bytes(tree_output(msg, mode), out_len)
 
 
+def _pair_bytes(pairs: ArrayLike) -> Array:
+    """A parent's two children as the uint8 `[B, 2*32]` batch it compresses:
+    left ‖ right chaining values, 32 bytes each.
+
+    Checked here for the reason `_message` checks a message — a caller holding
+    the wrong width otherwise reads a reshape error against an intermediate it
+    never wrote, and a `[B, 63]` operand would reshape-fail while a `[B, 128]`
+    one would silently hash the wrong pair.
+    """
+    block = fnp.asarray(pairs, dtype=fnp.uint8)
+    if block.ndim != 2:
+        raise ValueError(
+            f"pairs must be 2-D uint8 [B, {2 * DIGEST_LEN}], got ndim={block.ndim}"
+        )
+    if block.shape[1] != 2 * DIGEST_LEN:
+        raise ValueError(
+            f"pairs must be two {DIGEST_LEN}-byte chaining values end to end, "
+            f"got {block.shape[1]} bytes"
+        )
+    return block
+
+
 def unmarked_non_root_hash(msg: ArrayLike, mode: Mode) -> Array:
     """A whole BLAKE3 tree finished WITHOUT `ROOT`, no marker: uint8 `[B, L]`
     -> `[B, 32]`.
@@ -767,6 +806,26 @@ def unmarked_non_root_hash(msg: ArrayLike, mode: Mode) -> Array:
     for the same suite-needs-the-unmarked-side reason as `unmarked_hash`.
     """
     return unpack_le(chaining_value(tree_output(msg, mode)))
+
+
+def unmarked_parent_hash(pairs: ArrayLike, mode: Mode) -> Array:
+    """One non-root PARENT compression, no marker: uint8 `[B, 64]` -> `[B, 32]`.
+
+    `unmarked_non_root_hash`'s sibling one level up: where that finishes the
+    final node of a *message*'s tree, this compresses a pair of chaining values
+    the way every internal level of a Merkle tree over BLAKE3's own semantics
+    does. Exported by name for the same reason its siblings are — the suite
+    reads the unmarked side while the marker is asserted on the lowered module.
+
+    Not expressible as a hash of the 64 bytes: a message of that length sets
+    `CHUNK_START|CHUNK_END` and a real counter, where a parent sets `PARENT`
+    with a zero counter and opens from the key words (spec section 2.5). The
+    two produce different bytes from the same input, which is why the message
+    entry cannot be pointed at a parent level.
+    """
+    block = _pair_bytes(pairs)
+    words = pack_le(block.reshape(block.shape[0], 2, DIGEST_LEN))
+    return unpack_le(chaining_value(parent_output(words[:, 0], words[:, 1], mode)))
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
@@ -874,6 +933,58 @@ def tree_hash(
     )
 
 
+@partial(frx.jit, inline=True, static_argnames=("flags",))
+def parent_hash(pairs: Array, key_words: Array, *, flags: int) -> Array:
+    """One non-root `PARENT` compression as the `hash_frx.blake3_parent`
+    composite: uint8 `[B, 64]` -> uint8 `[B, 32]`.
+
+    A Merkle tree built on BLAKE3's tree semantics hashes its leaves through
+    `tree_hash(non_root=True)` and then compresses pairs up the levels through
+    here, so an emitter that recognizes both fuses a whole level either side of
+    the leaf boundary. Its own marker rather than an attribute on that one, for
+    the reason `BLAKE3_PARENT_MARKER` states. The jit zone is here for
+    `tree_hash`'s reason: a commit emits one of these per internal node, and an
+    uncached re-trace per emission would dominate the first-trace floor.
+
+    **The operand ABI**, positional, and the whole of what an emitter reads:
+
+    0. `pairs`     — uint8 `[B, 64]`, `B` parent nodes, each the left child's
+                     32-byte chaining value followed by the right child's
+    1. `key_words` — uint32 `[8]`, what a parent opens from in place of a
+                     child's chaining value. Same operand, same meaning, and
+                     same broadcast across the batch as on a message hash.
+    2. `iv`        — uint32 `[8]`, the spec IV, an operand for the reason
+                     `tree_hash` states.
+
+    **The attributes.** `non_root = 1` selects the finalization, which is
+    `chaining_value` rather than `root_bytes` — carried rather than implied
+    because the root of a Merkle tree is the same construction finished WITH
+    `ROOT`, which no consumer needs yet but which this marker would express by
+    dropping the attribute. `out_len` is 32 and `flags` is the mode, read
+    exactly as on a message hash so an emitter shares one attribute reader. The
+    positional flags a node's own role carries — `PARENT` here — stay the
+    emitter's to derive, so `flags` remains a mode and never a mask.
+
+    **The result.** uint8 `[B, 32]`: the parent's chaining value, what it
+    contributes to the level above.
+    """
+
+    def decomposition(block: Array, key: Array, iv: Array, **_attrs: object) -> Array:
+        return unmarked_parent_hash(block, Mode(key, flags, iv))
+
+    return fused_region(
+        decomposition,
+        pairs,
+        key_words,
+        IV_WORDS,
+        name=BLAKE3_PARENT_MARKER,
+        version=BLAKE3_PARENT_MARKER_VERSION,
+        out_len=DIGEST_LEN,
+        flags=flags,
+        non_root=1,
+    )
+
+
 def _marked_hash(
     mode: Mode, msg: ArrayLike, out_len: int, non_root: bool = False
 ) -> Array:
@@ -926,6 +1037,23 @@ def non_root_digest(msg: ArrayLike) -> Array:
     when a consumer has to make the choice and cannot.
     """
     return _marked_hash(hash_mode(), msg, DIGEST_LEN, non_root=True)
+
+
+def parent_digest(pairs: ArrayLike) -> Array:
+    """A Merkle parent's chaining value: uint8 `[B, 64]` -> `[B, 32]`.
+
+    `non_root_digest`'s partner one level up. That entry hashes the leaves of a
+    Merkle tree built on BLAKE3's own semantics; this compresses each pair of
+    child chaining values into the node above it, which is BLAKE3's
+    `merge_subtrees_non_root` — so a whole parent level is one marked region
+    rather than a traced compression per node.
+
+    Hash mode only, for `non_root_digest`'s reason: the known consumers key
+    nothing, and the seam grows a mode when a consumer has to make the choice
+    and cannot.
+    """
+    mode = hash_mode()
+    return parent_hash(_pair_bytes(pairs), mode.key_words, flags=mode.flags)
 
 
 def keyed_digest(key: ArrayLike | bytes, msg: ArrayLike) -> Array:

@@ -29,6 +29,7 @@ from absl.testing import absltest, parameterized
 
 from hash_frx.blake3.blake3 import (
     BLAKE3_MARKER,
+    BLAKE3_PARENT_MARKER,
     BLOCK_LEN,
     CHUNK_LEN,
     DIGEST_LEN,
@@ -43,11 +44,13 @@ from hash_frx.blake3.blake3 import (
     keyed_mode,
     keyed_xof,
     non_root_digest,
+    parent_digest,
     parent_output,
     root_words,
     tree_hash,
     tree_output,
     unmarked_hash,
+    unmarked_parent_hash,
     xof,
 )
 from hash_frx.blake3.compress import (
@@ -190,20 +193,22 @@ class _Composite(NamedTuple):
     regions: int
 
 
-def _composite(fn: object, *args: frx.Array) -> _Composite:
-    """The `hash_frx.blake3` marker a lowered `fn` carries: the first one's
-    operand types, result type and attribute text, plus how many there are.
+def _composite(fn: object, *args: frx.Array, marker: str = BLAKE3_MARKER) -> _Composite:
+    """The `marker` composite a lowered `fn` carries: the first one's operand
+    types, result type and attribute text, plus how many there are.
 
     Read off the lowered MLIR rather than the jaxpr, because the module is the
     artifact the XLA emitter reads — operand order included, which is the half of
     the ABI a name and a version do not carry.
+
+    The name is matched with its quotes, so `hash_frx.blake3` does not also
+    match `hash_frx.blake3_parent` — the two are separate markers precisely so
+    that a recognizer of one cannot claim the other.
     """
     text = frx.jit(fn).lower(*args).as_text()
-    lines = [
-        ln for ln in text.splitlines() if f'stablehlo.composite "{BLAKE3_MARKER}"' in ln
-    ]
+    lines = [ln for ln in text.splitlines() if f'stablehlo.composite "{marker}"' in ln]
     if not lines:
-        raise AssertionError(f"no {BLAKE3_MARKER} composite in the lowered module")
+        raise AssertionError(f"no {marker} composite in the lowered module")
     # The trailing `{attrs} : (operands) -> result`; the greedy first group runs
     # to the last `} : (`, which is the signature's own rather than one nested
     # inside `composite_attributes`.
@@ -962,6 +967,124 @@ class NonRootDigestTest(parameterized.TestCase):
             tree_hash(
                 message, hash_mode().key_words, out_len=64, flags=0, non_root=True
             )
+
+
+class ParentDigestTest(absltest.TestCase):
+    """`parent_digest` — one non-root PARENT compression as a marked region.
+
+    A Merkle tree over BLAKE3's own semantics hashes its leaves with
+    `non_root_digest` and then compresses *pairs of chaining values* up the
+    levels. Both halves need a marker of their own: a parent is not the hash of
+    a 64-byte message, so the leaf entry cannot be pointed at it, and without a
+    second marker every level above the leaves runs the traced compressions
+    de-fused.
+    """
+
+    def _children(self, seed: int) -> tuple[frx.Array, frx.Array]:
+        rng = np.random.default_rng(seed)
+        return (
+            fnp.asarray(rng.integers(0, 2**32, size=(2, 8), dtype=_U32)),
+            fnp.asarray(rng.integers(0, 2**32, size=(2, 8), dtype=_U32)),
+        )
+
+    def _pairs(self, seed: int) -> frx.Array:
+        left, right = self._children(seed)
+        return fnp.concatenate([unpack_le(left), unpack_le(right)], axis=1)
+
+    def test_the_marked_parent_equals_its_decomposition(self) -> None:
+        # One compression either way — the marked side is cheap to compile here,
+        # unlike a message hash, because a parent is a single block by
+        # definition however deep the tree above it goes.
+        pairs = self._pairs(31)
+        np.testing.assert_array_equal(
+            np.asarray(parent_digest(pairs)),
+            np.asarray(unmarked_parent_hash(pairs, hash_mode())),
+        )
+
+    def test_it_is_the_spec_parent(self) -> None:
+        # The same four fixed operands `ParentNodeTest` pins on the primitive —
+        # key words in, counter zero, a full block, PARENT — read through the
+        # marked entry, so the entry cannot drift from the compression it wraps.
+        left, right = self._children(32)
+        got = np.asarray(parent_digest(self._pairs(32)))
+        want = ref.compress(
+            list(ref.IV),
+            [int(w) for w in np.asarray(left)[0]]
+            + [int(w) for w in np.asarray(right)[0]],
+            0,
+            BLOCK_LEN,
+            ref.PARENT,
+        )[:8]
+        self.assertEqual(
+            bytes(got[0]), b"".join(int(w).to_bytes(4, "little") for w in want)
+        )
+
+    def test_a_parent_is_not_the_hash_of_its_64_bytes(self) -> None:
+        # Why this entry exists at all. Pointing `non_root_digest` at the pair
+        # would fuse and produce well-formed wrong bytes: a message sets
+        # CHUNK_START|CHUNK_END and a real counter where a parent sets PARENT,
+        # a zero counter, and opens from the key words.
+        pairs = self._pairs(33)
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(parent_digest(pairs)), np.asarray(non_root_digest(pairs))
+            )
+        )
+
+    def test_the_children_are_ordered(self) -> None:
+        # Swapping them still produces a well-formed chaining value, so nothing
+        # about the shape catches an inverted pair.
+        left, right = self._children(34)
+        swapped = fnp.concatenate([unpack_le(right), unpack_le(left)], axis=1)
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(parent_digest(self._pairs(34))),
+                np.asarray(parent_digest(swapped)),
+            )
+        )
+
+    def test_it_emits_its_own_marker_at_version_1(self) -> None:
+        marker = _composite(parent_digest, self._pairs(35), marker=BLAKE3_PARENT_MARKER)
+        self.assertEqual(marker.regions, 1)
+        self.assertEqual(
+            marker.operands,
+            [f"tensor<2x{2 * DIGEST_LEN}xui8>", "tensor<8xui32>", "tensor<8xui32>"],
+        )
+        self.assertEqual(marker.result, f"tensor<2x{DIGEST_LEN}xui8>")
+        self.assertIn("non_root = 1 : i64", marker.attrs)
+        self.assertIn(f"out_len = {DIGEST_LEN} : i64", marker.attrs)
+        self.assertIn("version = 1", marker.attrs)
+
+    def test_it_does_not_ride_the_message_marker(self) -> None:
+        # The load-bearing case, and the reason this is a name rather than an
+        # attribute. A recognizer matches by name and ignores attributes it does
+        # not know, so a parent riding `hash_frx.blake3` would be claimed by any
+        # shipped message emitter and silently hashed as a 64-byte message —
+        # observed doing exactly that on frx 0.10.2.dev20260813075049. Under its
+        # own name an emitter that has not learned it simply inlines the
+        # decomposition, which is slow and right rather than fast and wrong.
+        text = frx.jit(parent_digest).lower(self._pairs(36)).as_text()
+        self.assertNotIn(f'stablehlo.composite "{BLAKE3_MARKER}"', text)
+
+    def test_a_message_hash_does_not_emit_the_parent_marker(self) -> None:
+        # The message path's wire is untouched: existing call sites emit the
+        # exact marker they always did.
+        text = (
+            frx.jit(non_root_digest).lower(_rows(official_input(BLOCK_LEN))).as_text()
+        )
+        self.assertNotIn(BLAKE3_PARENT_MARKER, text)
+        self.assertIn(f'stablehlo.composite "{BLAKE3_MARKER}"', text)
+
+    def test_rejects_a_pair_that_is_not_two_chaining_values(self) -> None:
+        # The operand is two 32-byte children end to end and nothing else. A
+        # wrong width would otherwise reach `pack_le` and be reported against a
+        # reshape the caller never wrote.
+        for name, bad in (
+            ("width", fnp.zeros((2, 63), dtype=fnp.uint8)),
+            ("rank", fnp.zeros(2 * DIGEST_LEN, dtype=fnp.uint8)),
+        ):
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                parent_digest(bad)
 
 
 class ValidationTest(absltest.TestCase):
