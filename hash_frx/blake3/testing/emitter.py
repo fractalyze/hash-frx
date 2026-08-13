@@ -14,14 +14,21 @@ it — a shorter differential sweep, seam rows that stop below the tree layer,
 value tables that read the unmarked decomposition instead of the shipped entry
 points. Each site states what it gives up. This is the one place the condition
 is spelled, so a leg gaining an emitter lifts every one of them at once.
+
+Both legs now have one, so on `cpu` and `gpu` nothing is capped and the tables
+read the shipped entry points. The list is explicit rather than `!= "unknown"`
+because a leg is capped until an emitter is *written* for it: a backend absent
+here — Metal today — still inlines the marker and still pays the cliff.
 """
 
 from __future__ import annotations
 
 import frx
 
-# The Fractalyze XLA emitter (fractalyze/xla#336) registers its recognizer and
-# rewriter on the GPU compiler alone, so `gpu` is the whole of it today. A CPU
-# emitter is the tracked sibling of that work; when it lands this reads True on
-# both legs and every cap keyed to it goes away.
-HAS_BLAKE3_EMITTER = frx.default_backend() == "gpu"
+# The Fractalyze XLA emitters: fractalyze/xla#499 registers the recognizer and
+# rewriter on the GPU compiler, fractalyze/xla#507 on the CPU one. On CPU every
+# entry point — `digest` at one block, one chunk and three chunks, `xof` at 64
+# and 131 bytes, both keyed modes, `derive_key`, `non_root_digest` and
+# `parent_digest` — compiles to exactly one custom fusion in ~1s, where the
+# inline form had not finished in 150s.
+HAS_BLAKE3_EMITTER = frx.default_backend() in ("cpu", "gpu")

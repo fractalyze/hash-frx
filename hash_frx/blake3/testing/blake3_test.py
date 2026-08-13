@@ -93,17 +93,22 @@ _U32 = np.uint32
 # **Which side the value tables read.** Where the BLAKE3 emitter is present a
 # recognized composite is one custom fusion and its body is never codegen'd, so
 # the tables run `digest`/`xof`/`keyed_digest`/`derive_key` — the entry points a
-# consumer calls, marker and all. Where it is absent the marker inlines and every
-# call compiles the whole unrolled body, at a cost super-linear in the
-# compression count: 0.83s at two blocks, 4.17s at four, 25.72s at eight, and at
-# one chunk it did not finish in eleven minutes (46 GB resident). The wall is
-# XLA's codegen of the unrolled hash rather than the marker — at one block a
-# marked call is 0.30s against 0.27s for a plain `frx.jit` of the same body — so
-# the marker did not introduce it, it only put it on every call. There the tables
-# read the decomposition, and what they give up is the marker standing between
-# them and the same arithmetic.
+# consumer calls, marker and all. Both shipped legs have an emitter, so that is
+# what runs everywhere today and the wrappers below forward straight through.
 #
-# **What pins the shipped path on either leg**: `MarkerTest`, which reads the
+# The other branch is what a leg without one costs, and is why the wrappers stay
+# rather than being inlined away: the marker inlines and every call compiles the
+# whole unrolled body, at a cost super-linear in the compression count — 0.83s at
+# two blocks, 4.17s at four, 25.72s at eight, and at one chunk it did not finish
+# in eleven minutes (46 GB resident). The wall is XLA's codegen of the unrolled
+# hash rather than the marker — at one block a marked call is 0.30s against 0.27s
+# for a plain `frx.jit` of the same body — so the marker did not introduce it, it
+# only put it on every call. A backend that gains a BLAKE3 arm gets the tables
+# for free by joining `HAS_BLAKE3_EMITTER`; one that has not still runs, reading
+# the decomposition and giving up only the marker standing between it and the
+# same arithmetic.
+#
+# **What pins the shipped path regardless**: `MarkerTest`, which reads the
 # lowered module rather than running it, plus the compiled cases at <= 4 blocks.
 def _unmarked(mode: Mode, msg: object, out_len: int = DIGEST_LEN) -> frx.Array:
     return unmarked_hash(msg, mode, out_len)
