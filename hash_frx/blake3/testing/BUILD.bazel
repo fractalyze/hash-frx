@@ -85,6 +85,20 @@ py_test(
 # measured 252s against 97s for the same module reading the decomposition, which
 # leaves no room under a medium target's 300s.
 py_test(
+    name = "streaming_test",
+    # Compile-heavy: every distinct piece length in the split matrix is its own
+    # trace, and each carries the compression body under a loop.
+    size = "medium",
+    srcs = ["streaming_test.py"],
+    deps = [
+        "//hash_frx/blake3",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "blake3_test",
     size = "medium",
     timeout = "long",
