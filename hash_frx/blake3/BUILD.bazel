@@ -8,6 +8,7 @@ py_library(
         "blake3.py",
         "byte_hashes.py",
         "compress.py",
+        "streaming.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
