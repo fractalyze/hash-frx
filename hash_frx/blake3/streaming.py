@@ -45,8 +45,16 @@ needs.
 which is exactly what a resumable state does not hold, so it cannot serve this
 path. What a resumable state does repeat is the compression, the way a sponge
 repeats its permutation and a streaming SHAKE rides that marker on every block.
-So `_compress1` carries `hash_frx.blake3_compress` and every hop — absorb,
-finalize, parent merge — rides it. The two traced counts above stay outside it.
+So `_compress1` carries `hash_frx.blake3_compress`, and the three hops that
+finish one node ride it: the absorb path's block, the subtree merge, and
+finalize's stack fold. The two traced counts above stay outside it.
+
+The root read does not. `blake3.root_bytes` repeats one node's compression at an
+output-block counter running 0, 1, 2 …, which is a batch of rows rather than a
+node — the one place BLAKE3's own `[B, ...]` primitive is already the right
+shape, and re-spelling it here would fork the extendable-output logic that lives
+with the tree. One unmarked compression per finalize, against one per absorbed
+block and one per merge.
 """
 
 from __future__ import annotations
@@ -60,13 +68,15 @@ from frx import Array, lax
 from frx.tree_util import register_dataclass
 
 from hash_frx.blake3 import blake3
-from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, IV_WORDS, compress
+from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, PARENT, compress
 from hash_frx.fusion import fused_region
 from hash_frx.word import pack_le
 
 U32 = fnp.uint32
 
 BLOCK_LEN = blake3.BLOCK_LEN  # 64
+# A chaining value is the low half of a compression's sixteen output words.
+CV_WORDS = 8
 BLOCKS_PER_CHUNK = blake3.CHUNK_LEN // BLOCK_LEN  # 16
 # The reference's bound: a 2^64-chunk input needs 54 levels of subtree stack.
 MAX_STACK = 54
@@ -107,33 +117,23 @@ def _compress1(
 
     `iv` is passed rather than defaulted: `compress`'s ABI note says a caller
     under a marked region hands in the region's operand, since a captured
-    constant would be lifted ahead of the explicit ones.
+    constant would be lifted ahead of the explicit ones. `compress` is the
+    decomposition directly — it already takes the region's operands in the
+    region's order, and a wrapper closure would be re-traced per call site.
     """
-
-    def decomposition(
-        cv: Array,
-        block_words: Array,
-        counter: Array,
-        block_len: Array,
-        flags: Array,
-        iv: Array,
-        **_attrs: object,
-    ) -> Array:
-        return compress(cv, block_words, counter, block_len, flags, iv)
-
     # The region's ABI is the batched one — `[1, ...]` here — not this call
     # site's unbatched row. An emitter for it is a row kernel like every other
     # BLAKE3 arm, so a degenerate leading axis costs nothing and keeps one
     # kernel able to serve a batched caller; the alternative would be a
     # rank-1-and-scalar special case that only a stream can use.
     return fused_region(
-        decomposition,
+        compress,
         cv[None, :],
         block_words[None, :],
         counter[None, :],
         block_len[None],
         flags[None],
-        IV_WORDS,
+        _MODE.iv,
         name=blake3.BLAKE3_COMPRESS_MARKER,
         version=blake3.BLAKE3_COMPRESS_MARKER_VERSION,
     )[0]
@@ -189,9 +189,18 @@ def _push_chunk_cv(state: Blake3Stream, cv: Array) -> Blake3Stream:
         cv_, slen, shift = carry
         slen = slen - U32(1)
         left = lax.dynamic_index_in_dim(state.cv_stack, slen, axis=0, keepdims=False)
-        merged = blake3.chaining_value(
-            blake3.parent_output(left[None, :], cv_[None, :], _MODE)
-        )[0]
+        # `parent_output` assembled and `chaining_value` run, spelled through
+        # the marked compression instead: a parent opens from the key words,
+        # its counter is zero however deep the tree is, its block is the two
+        # children end to end, and PARENT rides over the mode (spec 2.5). The
+        # same operands, so the bytes are `parent_output`'s by construction.
+        merged = _compress1(
+            _KEY_WORDS,
+            fnp.concatenate([left, cv_]),
+            fnp.zeros((2,), U32),
+            U32(BLOCK_LEN),
+            _MODE_FLAGS | U32(PARENT),
+        )[:CV_WORDS]
         return merged, slen, shift + U32(1)
 
     # The reference tests bit 0 of the completed-chunk count first, then shifts;
@@ -346,7 +355,7 @@ class Blake3Stream:
             icv, blk, ctr, blen, flags, slen = state
             slen = slen - U32(1)
             left = lax.dynamic_index_in_dim(self.cv_stack, slen, axis=0, keepdims=False)
-            cv = blake3.chaining_value(_output(icv, blk, ctr, blen, flags))[0]
+            cv = _compress1(icv, blk, ctr, blen, flags)[:CV_WORDS]
             parent = blake3.parent_output(left[None, :], cv[None, :], _MODE)
             return (
                 parent.input_chaining_value[0],
