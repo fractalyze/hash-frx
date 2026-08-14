@@ -95,6 +95,18 @@ BLAKE3_MARKER_VERSION = 1
 BLAKE3_PARENT_MARKER = "hash_frx.blake3_parent"
 BLAKE3_PARENT_MARKER_VERSION = 1
 
+# The compression on its own, for the one consumer the two markers above cannot
+# reach: a resumable state. `hash_frx.blake3` spans chunks, tree and root
+# output, so a stream — which holds a chunk CV, a subtree stack, a counter and a
+# partial block, and is mid-tree by definition — can never be a call of it.
+# SHA-256 needs no equivalent because its whole resumable state is one chaining
+# value, which `hash_frx.sha256` already takes as an operand; a sponge needs
+# none because its state *is* the permutation's, so streaming rides
+# `hash_frx.keccak_f`. BLAKE3 is the only row here whose existing marker
+# granularity a streaming consumer cannot hit, which is what this closes.
+BLAKE3_COMPRESS_MARKER = "hash_frx.blake3_compress"
+BLAKE3_COMPRESS_MARKER_VERSION = 1
+
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
 DIGEST_LEN = 32

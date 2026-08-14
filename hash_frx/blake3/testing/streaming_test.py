@@ -26,7 +26,12 @@ import frx
 import numpy as np
 from absl.testing import absltest
 
-from hash_frx.blake3.blake3 import BLOCK_LEN, CHUNK_LEN, DIGEST_LEN
+from hash_frx.blake3.blake3 import (
+    BLAKE3_COMPRESS_MARKER,
+    BLOCK_LEN,
+    CHUNK_LEN,
+    DIGEST_LEN,
+)
 from hash_frx.blake3.byte_hashes import HostBlake3
 from hash_frx.blake3.streaming import Blake3Stream, blake3_stream_init
 
@@ -167,6 +172,20 @@ class PytreeThreadingTest(absltest.TestCase):
         self.assertEqual(
             bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), _host(msg).hex()
         )
+
+    def test_every_hop_emits_the_compression_marker(self) -> None:
+        # The whole point of the marker is that a resumable state cannot reach
+        # `hash_frx.blake3`, so each hop must carry its own region. Absorbing a
+        # full block forces one compression; finalize adds its own. Without this
+        # the marker can be renamed or dropped and only a GPU profile notices.
+        block = frx.device_put(_u8(b"x" * BLOCK_LEN))
+
+        def absorb_then_finalize(part: frx.Array) -> frx.Array:
+            return blake3_stream_init().absorb(part).finalize(DIGEST_LEN)
+
+        text = frx.jit(absorb_then_finalize).lower(block).as_text()
+        self.assertIn(f'"{BLAKE3_COMPRESS_MARKER}"', text)
+        self.assertNotIn('"hash_frx.blake3"', text)
 
 
 if __name__ == "__main__":
