@@ -119,26 +119,24 @@ def _compress1(
         iv: Array,
         **_attrs: object,
     ) -> Array:
-        return compress(
-            cv[None, :],
-            block_words[None, :],
-            counter[None, :],
-            block_len[None],
-            flags[None],
-            iv,
-        )[0]
+        return compress(cv, block_words, counter, block_len, flags, iv)
 
+    # The region's ABI is the batched one — `[1, ...]` here — not this call
+    # site's unbatched row. An emitter for it is a row kernel like every other
+    # BLAKE3 arm, so a degenerate leading axis costs nothing and keeps one
+    # kernel able to serve a batched caller; the alternative would be a
+    # rank-1-and-scalar special case that only a stream can use.
     return fused_region(
         decomposition,
-        cv,
-        block_words,
-        counter,
-        block_len,
-        flags,
+        cv[None, :],
+        block_words[None, :],
+        counter[None, :],
+        block_len[None],
+        flags[None],
         IV_WORDS,
         name=blake3.BLAKE3_COMPRESS_MARKER,
         version=blake3.BLAKE3_COMPRESS_MARKER_VERSION,
-    )
+    )[0]
 
 
 def _counter_inc(counter: Array) -> Array:
