@@ -33,6 +33,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.byte_hash import ByteHash
+from hash_frx.keccak import permutation as permutation_mod
 from hash_frx.keccak.byte_hashes import (
     SHA3_256_RATE,
     SHA3_512_RATE,
@@ -207,11 +208,19 @@ class SeamConformanceTest(absltest.TestCase):
                 self.assertIsInstance(h, ByteHash)
 
     def test_only_the_device_rows_report_a_dedicated_fusion(self) -> None:
-        # Pinned rather than left to the docstring: the device rows lower the
-        # whole padded absorb and squeeze to one `hash_frx.keccak_sponge` kernel,
-        # and a host row never lowers at all. The flag going quietly False on a
-        # device row is what a pin below the `frx>=` floor looks like from here —
-        # right bytes, no kernel — so nothing else in the suite would notice.
+        # Pinned rather than left to the docstring: a device row lowers the whole
+        # padded absorb and squeeze to one `hash_frx.keccak_sponge` kernel
+        # wherever that emitter can be reached, and a host row never lowers at
+        # all.
+        #
+        # The device side is compared against the shipped condition rather than
+        # against True because the emitters are GPU-only, so False is the correct
+        # answer on the CPU leg. What that costs is the case's old ability to
+        # catch a pin that dropped below the `frx>=` floor — right bytes, no
+        # kernel, nothing else in the suite noticing. That half now lives in
+        # `permutation_test.EmitterGateTest`, which asserts the pin as its
+        # premise and then holds the backend to it.
+        expected = permutation_mod._routes_to_dedicated_emitter()
         for device in (
             Sha3_256(),
             Sha3_512(),
@@ -220,7 +229,7 @@ class SeamConformanceTest(absltest.TestCase):
             Keccak256(),
         ):
             with self.subTest(device=type(device).__name__):
-                self.assertTrue(device.has_dedicated_fusion)
+                self.assertEqual(device.has_dedicated_fusion, expected)
         for host in (
             HostSha3_256(),
             HostSha3_512(),
