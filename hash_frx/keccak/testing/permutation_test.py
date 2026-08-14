@@ -42,7 +42,13 @@ from hash_frx.keccak.testing.reference import (
 from hash_frx.permutation import Permutation
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import assert_marker_recognized
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
+
+# Whether this leg can actually reach the Keccak emitters. Read off the shipped
+# condition rather than restated, so a backend gaining an arm lifts the cases
+# below with it and the two cannot drift.
+_HAS_KECCAK_EMITTER = permutation_mod._routes_to_dedicated_emitter()
 
 _ALL_ONES = 0xFFFFFFFFFFFFFFFF
 
@@ -168,29 +174,32 @@ def _composite(fn: object, *args: frx.Array) -> Any:
 
 
 @contextlib.contextmanager
-def _dedicated_emitter() -> Iterator[None]:
-    """Route as if the pinned plugin shipped the Keccak emitters — the default.
+def _routing(dedicated: bool) -> Iterator[None]:
+    """Pin which marker `KeccakF1600` picks, whatever this leg would pick.
 
-    `_DEDICATED_EMITTER_AVAILABLE` is read in `__init__`, so the patch has to
-    wrap construction, not just the call. Kept explicit even though it now
-    matches the default: a test that names the routing it exercises still says
-    so when the pin moves again.
+    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`,
+    because the pin is only half of it — the emitters are GPU-only, so on the CPU
+    leg patching the pin alone leaves both arms on the generic marker and the
+    dedicated assertions below become vacuous. These cases are all read off the
+    jaxpr or the lowered module, so neither arm needs the emitter to exist.
+
+    The decision is read in `__init__`, so this has to wrap construction rather
+    than just the call.
     """
-    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
+    with mock.patch.object(
+        permutation_mod, "_routes_to_dedicated_emitter", lambda: dedicated
+    ):
         yield
 
 
-@contextlib.contextmanager
-def _generic_emitter() -> Iterator[None]:
-    """Route as if the pinned plugin lacked them, falling back to the generic
-    region marker.
+def _dedicated_emitter() -> contextlib.AbstractContextManager[None]:
+    """Route as if the emitters were reachable — this leg's default on GPU."""
+    return _routing(True)
 
-    This is what a `contextlib.nullcontext()` used to mean here and no longer
-    does — the default is the dedicated routing now, so a "generic" arm has to
-    patch for it or it silently runs the dedicated one twice.
-    """
-    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
-        yield
+
+def _generic_emitter() -> contextlib.AbstractContextManager[None]:
+    """Route as if they were not — this leg's default on CPU."""
+    return _routing(False)
 
 
 class KeccakF1600MarkerTest(absltest.TestCase):
@@ -222,16 +231,18 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
         self.assertEqual(attrs, {"permutation": "keccak_f", "width": 50, "rounds": 24})
 
-    def test_the_dedicated_marker_is_the_default(self) -> None:
-        # The pinned plugin ships the emitters, so this is what a consumer gets
-        # without asking. Pinned as its own test because every other assertion
-        # here names its routing explicitly and would still pass if the default
-        # silently went back to generic — which costs the kernel and nothing else.
+    def test_the_default_marker_is_the_best_this_leg_can_reach(self) -> None:
+        # What a consumer gets without asking. Pinned as its own test because
+        # every other assertion here names its routing explicitly and would still
+        # pass if the default silently changed — which costs the kernel on a leg
+        # that had one, and costs the trace on a leg that never did.
         k = KeccakF1600()
-        self.assertTrue(k.has_dedicated_fusion)
-        self.assertEqual(
-            k.fused_region_marker, (KECCAK_F_MARKER, KECCAK_F_MARKER_VERSION)
-        )
+        if _HAS_KECCAK_EMITTER:
+            self.assertEqual(
+                k.fused_region_marker, (KECCAK_F_MARKER, KECCAK_F_MARKER_VERSION)
+            )
+        else:
+            self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
 
     def test_the_generic_marker_carries_no_contract(self) -> None:
         # The fallback where a plugin lacks the emitter. It is not a slower
@@ -294,7 +305,76 @@ class KeccakF1600MarkerTest(absltest.TestCase):
             dedicated = KeccakF1600()
         self.assertNotEqual(generic, dedicated)
         self.assertNotEqual(hash(generic), hash(dedicated))
-        self.assertEqual(dedicated, KeccakF1600())
+        # Which of the two an unpatched construction equals is this leg's
+        # question, not a constant — the emitters are GPU-only.
+        expected = dedicated if _HAS_KECCAK_EMITTER else generic
+        self.assertEqual(expected, KeccakF1600())
+
+
+class EmitterGateTest(absltest.TestCase):
+    """The routing is a conjunction: the pin AND a backend that has the arm.
+
+    This is the regression this class exists for. Reading the pin alone routed
+    every backend to a GPU-only emitter, and nothing caught it: the marker is
+    emitted, the rewriter declines it, the composite inlines, and the bytes are
+    identical. The cost lands in trace time, which no value test samples.
+    """
+
+    def test_the_routing_follows_the_backend_and_not_only_the_pin(self) -> None:
+        # Fails if the gate ever collapses back to the pin: on a leg without an
+        # arm the pin is True and the routing must still be generic.
+        self.assertTrue(
+            permutation_mod._DEDICATED_EMITTER_AVAILABLE,
+            "premise: this asserts the backend half is what decides, so the pin "
+            "half has to be True for the case to mean anything",
+        )
+        self.assertEqual(KeccakF1600().has_dedicated_fusion, _HAS_KECCAK_EMITTER)
+
+    def test_a_backend_without_an_arm_takes_the_generic_marker(self) -> None:
+        with mock.patch.object(permutation_mod, "_EMITTER_BACKENDS", ("nonesuch",)):
+            perm = KeccakF1600()
+        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
+
+    def test_the_pin_still_vetoes_a_backend_that_has_the_arm(self) -> None:
+        with (
+            mock.patch.object(
+                permutation_mod, "_EMITTER_BACKENDS", (frx.default_backend(),)
+            ),
+            mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False),
+        ):
+            perm = KeccakF1600()
+        self.assertFalse(perm.has_dedicated_fusion)
+
+    def test_both_halves_true_is_what_routes_dedicated(self) -> None:
+        with mock.patch.object(
+            permutation_mod, "_EMITTER_BACKENDS", (frx.default_backend(),)
+        ):
+            perm = KeccakF1600()
+        self.assertTrue(perm.has_dedicated_fusion)
+        self.assertEqual(
+            perm.fused_region_marker, (KECCAK_F_MARKER, KECCAK_F_MARKER_VERSION)
+        )
+
+
+class MarkerRecognizedTest(absltest.TestCase):
+    """`keccak_f` reaches the emitter, read off the COMPILED module.
+
+    Every other lowering case here reads the jaxpr or the lowered module, which
+    proves this repo wrote the marker and nothing about whether the toolchain
+    accepts it. That gap is how a GPU-only emitter went unnoticed on the CPU leg,
+    so the compiled check is the one that closes it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        if not _HAS_KECCAK_EMITTER:
+            self.skipTest(f"no Keccak emitter on {frx.default_backend()}")
+
+    def test_the_permutation_compiles_to_a_keccak_f_custom_fusion(self) -> None:
+        assert_marker_recognized(
+            self, "keccak_f", KeccakF1600().permute, _device_state(_STATES["counter"])
+        )
 
 
 if __name__ == "__main__":

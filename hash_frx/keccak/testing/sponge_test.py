@@ -32,6 +32,11 @@ from hash_frx.keccak.sponge import (
     KECCAK_SPONGE_MARKER_VERSION,
     KeccakSponge,
 )
+from hash_frx.testing.marker_recognized import assert_marker_recognized
+
+# Read off the shipped condition rather than restated, so a backend gaining an
+# arm lifts the cases below with it and the two cannot drift.
+_HAS_KECCAK_EMITTER = permutation_mod._routes_to_dedicated_emitter()
 
 # SHA3-256's parameters: one rate block absorbed, one squeezed.
 _SHA3_256 = KeccakSponge(rate=136, suffix=0x06, output_size=32)
@@ -43,21 +48,28 @@ _SHAKE128_LONG = KeccakSponge(
 
 
 @contextlib.contextmanager
-def _dedicated_emitter() -> Iterator[None]:
-    """Route as if the pinned plugin shipped the Keccak emitters — the default."""
-    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
-        yield
+def _routing(dedicated: bool) -> Iterator[None]:
+    """Pin which marker the permutation picks, whatever this leg would pick.
 
-
-@contextlib.contextmanager
-def _generic_emitter() -> Iterator[None]:
-    """Route as if it lacked them, so each permute is its own generic region.
-
-    The default is the dedicated routing now, so a "generic" arm has to patch
-    for it rather than simply not patching.
+    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`: the
+    emitters are GPU-only, so on the CPU leg patching the pin alone leaves both
+    arms generic and the whole-hash assertions below stop testing anything. Every
+    case here reads the jaxpr, so neither arm needs the emitter to exist.
     """
-    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
+    with mock.patch.object(
+        permutation_mod, "_routes_to_dedicated_emitter", lambda: dedicated
+    ):
         yield
+
+
+def _dedicated_emitter() -> contextlib.AbstractContextManager[None]:
+    """Route as if the emitters were reachable, so the whole hash is one region."""
+    return _routing(True)
+
+
+def _generic_emitter() -> contextlib.AbstractContextManager[None]:
+    """Route as if they were not, so each permute is its own generic region."""
+    return _routing(False)
 
 
 def _composites(fn: Any, *args: frx.Array) -> list[Any]:
@@ -156,6 +168,55 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         with _dedicated_emitter():
             marked = np.asarray(frx.jit(_SHA3_256.hash)(msg))
         np.testing.assert_array_equal(plain, marked)
+
+
+class WholeHashRoutingTest(absltest.TestCase):
+    """What the backend gate is actually protecting.
+
+    `hash` routes to the whole-chain `keccak_sponge` region only when the
+    permutation reports `has_dedicated_fusion`, and that region is the expensive
+    thing to trace: it unrolls the entire padded absorb and squeeze into one
+    composite. Where the emitter exists that buys one kernel; where it does not
+    it buys nothing and the trace is spent anyway.
+    """
+
+    def test_a_leg_without_an_arm_does_not_build_the_whole_hash_region(self) -> None:
+        msg = _message(1, 200)
+        with mock.patch.object(permutation_mod, "_EMITTER_BACKENDS", ("nonesuch",)):
+            names = [e.params["name"] for e in _composites(_SHAKE128_LONG.hash, msg)]
+        self.assertNotIn(KECCAK_SPONGE_MARKER, names)
+        self.assertEqual(set(names), {FUSED_REGION_MARKER})
+
+    def test_this_leg_builds_the_region_exactly_when_it_can_honour_it(self) -> None:
+        msg = _message(1, 200)
+        names = [e.params["name"] for e in _composites(_SHAKE128_LONG.hash, msg)]
+        if _HAS_KECCAK_EMITTER:
+            self.assertEqual(names, [KECCAK_SPONGE_MARKER])
+        else:
+            self.assertEqual(set(names), {FUSED_REGION_MARKER})
+
+
+class MarkerRecognizedTest(absltest.TestCase):
+    """`keccak_sponge` reaches the emitter, read off the COMPILED module.
+
+    The whole-hash marker had no recognition case at all, which is why nothing
+    noticed it was being emitted onto a backend that declines it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        if not _HAS_KECCAK_EMITTER:
+            self.skipTest(f"no Keccak emitter on {frx.default_backend()}")
+
+    def test_a_whole_hash_compiles_to_a_keccak_sponge_custom_fusion(self) -> None:
+        assert_marker_recognized(self, "keccak_sponge", _SHA3_256.hash, _message(1, 64))
+
+    def test_a_multi_block_hash_is_still_one_custom_fusion(self) -> None:
+        # Two absorb blocks and two squeezes — the case where the glue between
+        # permutes would otherwise sit outside the region.
+        assert_marker_recognized(
+            self, "keccak_sponge", _SHAKE128_LONG.hash, _message(1, 200)
+        )
 
 
 if __name__ == "__main__":

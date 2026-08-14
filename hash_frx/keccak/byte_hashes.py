@@ -35,19 +35,21 @@ the length a parameter is the family-wide rule, stated once in
 [`docs/reference/conventions.md`](../../docs/reference/conventions.md); it is
 also why the SHAKEs take no default where BLAKE3's rows do.
 
-**`has_dedicated_fusion` is `True` on the device rows and `False` on the host
-ones**, because the whole padded absorb and squeeze lowers to one
-`hash_frx.keccak_sponge` kernel where the pinned plugin ships that emitter — the
-switch is `keccak.permutation._DEDICATED_EMITTER_AVAILABLE`, which the device
-rows read through `KeccakSponge`.
+**`has_dedicated_fusion` is `False` on the host rows, and on the device rows it
+is whatever the running backend can reach**, because the whole padded absorb and
+squeeze lowers to one `hash_frx.keccak_sponge` kernel only where that emitter
+exists. The switch is `keccak.permutation._routes_to_dedicated_emitter`, which
+the device rows read through `KeccakSponge`; it asks both whether the pinned
+plugin carries the emitters and whether this backend has them, the Keccak arms
+being GPU-only.
 
 The flag is nonetheless the wrong thing to separate substrate by, here as
-elsewhere: it answers "does this lower to a dedicated kernel", which a pin can
-change, and the return type is what actually divides the two — a device hash
-returns an `Array` and accepts a tracer, a host one returns `np.ndarray` and
-never can. That is a seam question rather than a fact about these hashes, and it
-is stated where the rule lives — [`byte_hash.py`](../byte_hash.py) and
-`docs/blocks/hash.md`.
+elsewhere: it answers "does this lower to a dedicated kernel", which a pin or a
+backend can change, and the return type is what actually divides the two — a
+device hash returns an `Array` and accepts a tracer, a host one returns
+`np.ndarray` and never can. That is a seam question rather than a fact about
+these hashes, and it is stated where the rule lives —
+[`byte_hash.py`](../byte_hash.py) and `docs/blocks/hash.md`.
 """
 
 from __future__ import annotations

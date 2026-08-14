@@ -20,11 +20,12 @@ become constant arrays rather than branches, and pi is a static reorder built
 from slices — a runtime lane permutation would lower to a gather and split the
 kernel.
 
-`permute` marks itself with `hash_frx.keccak_f` where the pinned plugin ships
-that emitter and the generic `zorch.fused_region` where it does not — the
-`_DEDICATED_EMITTER_AVAILABLE` switch below. `has_dedicated_fusion` reports which
-of the two ran, and the two are not a fast and a slow kernel: **only the
-dedicated marker is one device unit.**
+`permute` marks itself with `hash_frx.keccak_f` where that emitter can actually
+be reached and the generic `zorch.fused_region` where it cannot — which takes
+both `_DEDICATED_EMITTER_AVAILABLE` (does the pinned plugin carry it) and
+`_EMITTER_BACKENDS` (does this backend), since the Keccak emitters are GPU-only.
+`has_dedicated_fusion` reports which of the two ran, and the two are not a fast
+and a slow kernel: **only the dedicated marker is one device unit.**
 
 A bare `zorch.fused_region` carries no live-width operand, and the rewriter
 declines those on purpose — routing one to the generic loop fusion would build an
@@ -83,9 +84,43 @@ KECCAK_F_MARKER_VERSION = 1
 #
 # Flipped together with the `frx>=` floor in `pyproject.toml`, like
 # `poseidon.sparse._DEDICATED_EMITTER_AVAILABLE`. Below that floor the marker is
-# emitted, ignored, and computes the right bytes with none of the kernels — which
-# no test in this repo can see, because byte equality holds either way.
+# emitted, ignored, and computes the right bytes with none of the kernels, so no
+# value test can see it violated — only `MarkerRecognizedTest`, which reads the
+# compiled module, and only on a leg that has the emitter to begin with.
 _DEDICATED_EMITTER_AVAILABLE = True
+
+# Which backends have those emitters, which is a *different* question from the
+# pin and has to be asked alongside it. `gpu_compiler.cc` sets
+# `allow_keccak_f_fusion` and `allow_keccak_sponge_fusion`; the CPU compiler sets
+# neither and says why where it builds the options — "the zerocheck-URM,
+# constraint-pressure-group and Keccak emitters are GPU-only, so they stay false
+# and their markers inline here." There is no `keccak.cc` under
+# `xla/backends/cpu/codegen/emitters/` to set them from.
+#
+# Routing to a dedicated emitter that the backend does not have is not merely
+# neutral, which is why this cannot be left optimistic the way an unrecognized
+# name can. The whole-hash `KeccakSponge` marker traces the entire padded absorb
+# and squeeze chain into one composite; where it is honoured that is the win, and
+# where it is not it is pure cost. Measured on `enc-frx`'s ML-KEM-512 `decaps` at
+# `B = 32`: 6.84s of tracing against 0.40s for the per-permutation routing, for a
+# module that optimizes to the same 7645 loop fusions either way.
+#
+# A list rather than `!= "unknown"`, and for the same reason
+# `blake3.testing.emitter` keeps one: a backend is on the generic path until an
+# emitter is *written* for it, so a leg that gains an arm joins this tuple and
+# nothing else here moves.
+_EMITTER_BACKENDS = ("gpu",)
+
+
+def _routes_to_dedicated_emitter() -> bool:
+    """Whether the pin *and* the backend both carry the Keccak emitters.
+
+    Read per construction rather than at import, so importing this module does
+    not initialize a backend, and so a test can pin either answer. The backend
+    lookup behind `frx.default_backend()` is memoized, so this stays cheap on the
+    per-call construction the byte hashes do.
+    """
+    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
 
 
 def _unpack(state: Array) -> Lane:
@@ -275,7 +310,9 @@ class KeccakF1600:
         # Read per instance rather than pinned on the class so the emitter flag
         # is a value the permutation carries, and a test can construct both
         # routings in one process.
-        name = KECCAK_F_MARKER if _DEDICATED_EMITTER_AVAILABLE else FUSED_REGION_MARKER
+        name = (
+            KECCAK_F_MARKER if _routes_to_dedicated_emitter() else FUSED_REGION_MARKER
+        )
         # A generic region carries no version: the recognizer reads only the name
         # there, so a version would claim a contract the marker does not have.
         self.fused_region_marker = (
