@@ -40,13 +40,13 @@ so the select would pay 54 compressions for one. Either way the stack's shape
 does not move — only `stack_len` does, which is what the state's invariance
 needs.
 
-**Nothing here is a marked region, and that is structural rather than an
-omission.** The `hash_frx.blake3` composite spans a whole hash — chunks, tree
-and root output — which is exactly what a resumable state does not hold. The
-compressions therefore run as plain `compress` calls, where a streaming SHAKE
-rides the marker on every block because *its* marked region is the permutation,
-which a sponge repeats. A consumer streaming at volume pays that, the way
-`docs/blocks/hash.md` records the streaming SHA-256 pair paying its own.
+**The marked region here is the compression, not the hash.** The
+`hash_frx.blake3` composite spans a whole hash — chunks, tree and root output —
+which is exactly what a resumable state does not hold, so it cannot serve this
+path. What a resumable state does repeat is the compression, the way a sponge
+repeats its permutation and a streaming SHAKE rides that marker on every block.
+So `_compress1` carries `hash_frx.blake3_compress` and every hop — absorb,
+finalize, parent merge — rides it. The two traced counts above stay outside it.
 """
 
 from __future__ import annotations
@@ -60,7 +60,8 @@ from frx import Array, lax
 from frx.tree_util import register_dataclass
 
 from hash_frx.blake3 import blake3
-from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, compress
+from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, IV_WORDS, compress
+from hash_frx.fusion import fused_region
 from hash_frx.word import pack_le
 
 U32 = fnp.uint32
@@ -82,20 +83,62 @@ _MODE_FLAGS = U32(_MODE.flags)
 def _compress1(
     cv: Array, block_words: Array, counter: Array, block_len: Array, flags: Array
 ) -> Array:
-    """`compress` on a single row, unbatched in and out.
+    """`compress` on a single row, unbatched in and out, as one generic marked
+    region.
 
     The batch axis is where BLAKE3's parallelism lives, and a resumable state has
     none of it — one chunk, one block, one stack entry at a time — so every call
     here is the `[1, ...]` spelling of the batched primitive rather than a second
     compression function.
+
+    Marked here rather than in `compress`: a stream repeats this compression the
+    way a sponge repeats its permutation, so this is the region a streaming
+    consumer needs, while marking `compress` itself would nest a composite
+    inside `hash_frx.blake3` and `hash_frx.blake3_parent`, whose emitters read a
+    plain body.
+
+    Name-routed, not generic. The generic rewriter declines a body with no
+    live-width operand — it would otherwise route to a LoopFusion whose indexed
+    per-element subgraph re-executes shared producers per output element, which
+    for a compression (every output word depends on the whole state) is the
+    worst case — so a generic marker here lowers and then silently inlines. An
+    unrecognized *name* inlines too, which is why this is safe to emit before
+    the plugin ships its arm: bytes stay right and only the fusion waits.
+
+    `iv` is passed rather than defaulted: `compress`'s ABI note says a caller
+    under a marked region hands in the region's operand, since a captured
+    constant would be lifted ahead of the explicit ones.
     """
-    return compress(
-        cv[None, :],
-        block_words[None, :],
-        counter[None, :],
-        block_len[None],
-        flags[None],
-    )[0]
+
+    def decomposition(
+        cv: Array,
+        block_words: Array,
+        counter: Array,
+        block_len: Array,
+        flags: Array,
+        iv: Array,
+        **_attrs: object,
+    ) -> Array:
+        return compress(
+            cv[None, :],
+            block_words[None, :],
+            counter[None, :],
+            block_len[None],
+            flags[None],
+            iv,
+        )[0]
+
+    return fused_region(
+        decomposition,
+        cv,
+        block_words,
+        counter,
+        block_len,
+        flags,
+        IV_WORDS,
+        name=blake3.BLAKE3_COMPRESS_MARKER,
+        version=blake3.BLAKE3_COMPRESS_MARKER_VERSION,
+    )
 
 
 def _counter_inc(counter: Array) -> Array:
