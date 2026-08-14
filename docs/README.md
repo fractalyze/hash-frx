@@ -79,7 +79,8 @@ constraint is what shapes the code — the authoring rules it forces are in
 
 **Name-routed** — `hash_frx.poseidon`, `hash_frx.sparse_poseidon`,
 `hash_frx.poseidon2`, `hash_frx.sha256`, `hash_frx.sponge_hash`,
-`hash_frx.blake3`, `hash_frx.keccak_f`, `hash_frx.keccak_sponge`. Each goes to a
+`hash_frx.blake3`, `hash_frx.blake3_compress`, `hash_frx.keccak_f`,
+`hash_frx.keccak_sponge`. Each goes to a
 dedicated emitter that owns its own operand ABI and, unlike the generic path,
 tolerates reductions and calls.
 

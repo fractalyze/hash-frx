@@ -26,6 +26,7 @@ import frx
 import numpy as np
 from absl.testing import absltest
 
+from hash_frx.blake3 import blake3
 from hash_frx.blake3.blake3 import (
     BLAKE3_COMPRESS_MARKER,
     BLOCK_LEN,
@@ -173,19 +174,23 @@ class PytreeThreadingTest(absltest.TestCase):
             bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), _host(msg).hex()
         )
 
-    def test_every_hop_emits_the_compression_marker(self) -> None:
-        # The whole point of the marker is that a resumable state cannot reach
-        # `hash_frx.blake3`, so each hop must carry its own region. Absorbing a
-        # full block forces one compression; finalize adds its own. Without this
-        # the marker can be renamed or dropped and only a GPU profile notices.
+    def test_the_node_finishing_hops_are_marked(self) -> None:
+        # Counted, not found: a resumable state cannot reach `hash_frx.blake3`,
+        # so every node it finishes has to carry its own region, and an
+        # `assertIn` passes with one of them marked and the rest inline — which
+        # is exactly the state this replaced. Three hops finish a node (the
+        # absorb path's block, the subtree merge, finalize's stack fold); the
+        # root read is a batch of output blocks and stays with `blake3.py`.
         block = frx.device_put(_u8(b"x" * BLOCK_LEN))
 
         def absorb_then_finalize(part: frx.Array) -> frx.Array:
             return blake3_stream_init().absorb(part).finalize(DIGEST_LEN)
 
         text = frx.jit(absorb_then_finalize).lower(block).as_text()
-        self.assertIn(f'"{BLAKE3_COMPRESS_MARKER}"', text)
-        self.assertNotIn('"hash_frx.blake3"', text)
+        self.assertEqual(text.count(f'"{BLAKE3_COMPRESS_MARKER}"'), 3)
+        # A whole-hash marker here would mean the resumable path fell back to
+        # the one region that cannot express it.
+        self.assertNotIn(f'"{blake3.BLAKE3_MARKER}"', text)
 
 
 if __name__ == "__main__":
