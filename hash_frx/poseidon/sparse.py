@@ -83,6 +83,18 @@ _DEDICATED_EMITTER_AVAILABLE = True
 # property; flipped together with the pin, like `_DEDICATED_EMITTER_AVAILABLE`.
 _WIDE_ATTR_EMITTER_AVAILABLE = True
 
+# Which backends carry the emitter — a different question from the pin, per
+# #147. Mis-routing is not neutral: `has_dedicated_fusion` also traces the whole
+# round chain as one composite, which a backend without the emitter can only
+# inline (zisk-zorch's Poseidon1 commit goldens, CPU: 275.9 s vs 18.0 s).
+_EMITTER_BACKENDS = ("gpu",)
+
+
+def _routes_to_dedicated_emitter() -> bool:
+    """Whether the pin *and* the backend carry the emitter. Read per
+    construction so importing does not initialize a backend."""
+    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+
 
 class SparsePoseidon:
     """An optimized-sparse Poseidon permutation built from a SparsePoseidonParams;
@@ -125,9 +137,11 @@ class SparsePoseidon:
     def _select_fused_region_name(
         self, rows: tuple[tuple[tuple[int, ...], ...], ...]
     ) -> str:
-        """Route to the dedicated `SparsePoseidonFusion` when the pinned plugin
-        ships it AND the four matrices are representable in its int64 attributes,
-        else the generic marker so compiles don't fail on an unknown composite.
+        """Route to the dedicated `SparsePoseidonFusion` when the pin *and* the
+        backend ship it AND the four matrices are representable in its int64
+        attributes, else the generic marker so compiles don't fail on an unknown
+        composite — and so a backend without the emitter is not handed a
+        whole-permutation composite it can only inline.
 
         Every linear layer here is a matrix of field elements (unlike Poseidon2,
         whose one matrix attribute is the small structural M4). Values below 2^63
@@ -135,7 +149,7 @@ class SparsePoseidon:
         `p = 2^64 - 2^32 + 1` — ride as a u64 bit-cast, gated on
         `_WIDE_ATTR_EMITTER_AVAILABLE` (see its rationale). A wider field has
         nothing the attributes can carry and takes the generic marker."""
-        if not _DEDICATED_EMITTER_AVAILABLE:
+        if not _routes_to_dedicated_emitter():
             return FUSED_REGION_MARKER
         if all(_fits_i64(m) for m in rows):
             return POSEIDON_SPARSE_MARKER
