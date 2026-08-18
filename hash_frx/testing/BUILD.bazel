@@ -52,6 +52,28 @@ py_test(
 )
 
 py_test(
+    name = "fusion_path_test",
+    size = "medium",
+    srcs = ["fusion_path_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:compression",
+        "//hash_frx:duplex_sponge",
+        "//hash_frx:fusion",
+        "//hash_frx:sha256",
+        "//hash_frx:sponge",
+        "//hash_frx/blake3",
+        "//hash_frx/keccak",
+        "//hash_frx/poseidon",
+        "//hash_frx/poseidon2",
+        "//hash_frx/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "_composite_test",
     size = "small",
     srcs = ["_composite_test.py"],

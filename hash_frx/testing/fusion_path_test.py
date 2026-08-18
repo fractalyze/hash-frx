@@ -1,0 +1,139 @@
+# Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
+"""The (hash, backend) → FusionPath matrix, asserted cell by cell.
+
+Each device family keeps its own pin+backend switch next to its marker; this is
+the one place the *facts* those switches encode — which backends carry which
+dedicated emitters — are spelled together, independently of the production
+tuples, so a tuple edit is a conscious two-place change rather than a silent
+routing move. The states themselves are pinned with the cells: an absent
+backend reads GENERIC (device, traceable, un-routed), never HOST, and a host
+row reads HOST on every leg.
+
+Per-family derivation mechanics (pin veto, backend veto, marker agreement) live
+with each family — `keccak.testing.permutation_test.EmitterGateTest` is the
+pattern — and are not repeated here.
+"""
+
+from __future__ import annotations
+
+from unittest import mock
+
+import frx
+import numpy as np
+from absl.testing import absltest
+
+from hash_frx import sha256 as sha256_mod
+from hash_frx.blake3 import byte_hashes as blake3_rows
+from hash_frx.blake3.byte_hashes import Blake3, HostBlake3
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.duplex_sponge import DuplexSponge
+from hash_frx.fusion import FusionPath
+from hash_frx.keccak import permutation as keccak_perm_mod
+from hash_frx.keccak.byte_hashes import HostSha3_256, Sha3_256
+from hash_frx.keccak.permutation import KeccakF1600
+from hash_frx.poseidon import poseidon as poseidon_mod
+from hash_frx.poseidon import sparse as sparse_mod
+from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
+from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
+from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.sponge import Sponge, SpongeParams
+
+# The matrix rows: which backends the pinned plugin's dedicated emitters cover,
+# per family. Keccak's arms are GPU-only; the rest run wherever the
+# ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
+# Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`.
+_MATRIX = {
+    poseidon_mod: ("cpu", "gpu"),
+    poseidon2_mod: ("cpu", "gpu"),
+    sparse_mod: ("gpu",),
+    keccak_perm_mod: ("gpu",),
+    sha256_mod: ("cpu", "gpu"),
+    blake3_rows: ("cpu", "gpu"),
+}
+
+
+class MatrixFactsTest(absltest.TestCase):
+    def test_the_production_tuples_are_the_documented_matrix(self) -> None:
+        for module, backends in _MATRIX.items():
+            with self.subTest(module=module.__name__):
+                self.assertEqual(module._EMITTER_BACKENDS, backends)
+                # Premise for every cell below: the pin half of each switch is
+                # on, so the backend half is what decides.
+                self.assertTrue(module._DEDICATED_EMITTER_AVAILABLE)
+
+
+class DeviceCellTest(absltest.TestCase):
+    def test_this_leg_reads_its_cell(self) -> None:
+        backend = frx.default_backend()
+        rows = (
+            (KeccakF1600(), _MATRIX[keccak_perm_mod]),
+            (koalabear16_perm(), _MATRIX[poseidon2_mod]),
+            (Sha256(), _MATRIX[sha256_mod]),
+            (Sha3_256(), _MATRIX[keccak_perm_mod]),
+            (Blake3(), _MATRIX[blake3_rows]),
+        )
+        for impl, backends in rows:
+            with self.subTest(impl=type(impl).__name__):
+                expected = (
+                    FusionPath.DEDICATED if backend in backends else FusionPath.GENERIC
+                )
+                self.assertIs(impl.fusion_path, expected)
+                self.assertTrue(impl.fusion_path.is_traceable)
+                self.assertEqual(
+                    impl.has_dedicated_fusion, impl.fusion_path.is_one_kernel
+                )
+
+    def test_an_absent_backend_reads_generic_not_host(self) -> None:
+        # The Metal-shaped cell: a device hash on a backend without the arm is
+        # still a device hash — traceable, un-fused — and collapsing it into
+        # HOST is the exact conflation the three-state enum retires.
+        for module, build in (
+            (keccak_perm_mod, KeccakF1600),
+            (poseidon2_mod, koalabear16_perm),
+            (sha256_mod, Sha256),
+            (blake3_rows, Blake3),
+        ):
+            with self.subTest(module=module.__name__):
+                with mock.patch.object(module, "_EMITTER_BACKENDS", ("nonesuch",)):
+                    impl = build()
+                self.assertIs(impl.fusion_path, FusionPath.GENERIC)
+                self.assertTrue(impl.fusion_path.is_traceable)
+                self.assertFalse(impl.has_dedicated_fusion)
+
+
+class HostCellTest(absltest.TestCase):
+    def test_host_rows_are_host_on_every_leg(self) -> None:
+        for row in (HostSha256(), HostSha3_256(), HostBlake3()):
+            with self.subTest(row=type(row).__name__):
+                self.assertIs(row.fusion_path, FusionPath.HOST)
+                self.assertFalse(row.fusion_path.is_traceable)
+                self.assertFalse(row.has_dedicated_fusion)
+
+
+class ConstructionDelegationTest(absltest.TestCase):
+    def test_constructions_read_their_permutation(self) -> None:
+        perm = koalabear16_perm()
+        for c in (
+            Sponge(perm, SpongeParams(rate=8, out=8)),
+            Compression(perm, CompressionParams(arity=2, chunk=8)),
+            DuplexSponge(perm, rate=8),
+        ):
+            with self.subTest(construction=type(c).__name__):
+                self.assertIs(c.fusion_path, perm.fusion_path)
+                self.assertEqual(c.has_dedicated_fusion, c.fusion_path.is_one_kernel)
+
+
+class TraceabilityTest(absltest.TestCase):
+    def test_is_traceable_agrees_with_the_return_type(self) -> None:
+        # The seam's rule: the return type is the authority and the attribute
+        # answers to it. One cheap pair proves the tie on both sides.
+        msg = np.zeros((1, 3), dtype=np.uint8)
+        device, host = Sha256(), HostSha256()
+        self.assertTrue(device.fusion_path.is_traceable)
+        self.assertNotIsInstance(device.digest(msg), np.ndarray)
+        self.assertFalse(host.fusion_path.is_traceable)
+        self.assertIsInstance(host.digest(msg), np.ndarray)
+
+
+if __name__ == "__main__":
+    absltest.main()
