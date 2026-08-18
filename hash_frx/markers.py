@@ -1,23 +1,29 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""The registry of every composite marker this package owns, and its axis.
+"""The registry of every composite marker this package owns, and its kind.
 
-Every hash here is a fixed-width primitive composed under a domain-extension
-construction, and the markers split along that line:
+A marker names the KERNEL that lowers — the fusible unit — not the taxonomy:
+an axis-B construction (Merkle–Damgård, Tree, Sponge, Duplex) is a schedule
+over a unit, so it gets no namespace of its own. A construction lives baked
+into a ``DIGEST`` name (`hash_frx.sha256` IS Merkle–Damgård, the sponge
+markers ARE Sponge) and/or as a composite attribute (the sponge mode rides as
+``construction=<mode>``); Duplex is stateful, so it has no whole-hash marker
+at all — each step is a ``PERM``. Three kinds cover every kernel:
 
-- ``PERM`` — a primitive's unit: one permutation call (`hash_frx.poseidon2`,
-  `hash_frx.keccak_f`) or one compression-level hop of a tree hash
-  (`hash_frx.blake3_parent`, `hash_frx.blake3_compress`).
-- ``DIGEST`` — a whole hash: an entire absorb/squeeze chain or tree collapsed
-  behind one digest-shaped call (`hash_frx.sha256`, `hash_frx.keccak_sponge`,
-  `hash_frx.blake3`, and the field-level `hash_frx.sponge_hash`).
+- ``PERM`` — a permutation (n→n): one `permute` call is the marked region.
+- ``COMPRESS`` — a compression function (n→m): BLAKE3's parent-node and
+  streaming compressions. The `Compression` *class* — a truncated permutation
+  — has no marker of its own: its unit IS the permute, so it rides ``PERM``.
+- ``DIGEST`` — a whole hash: arbitrary input to a digest, construction baked
+  in. `hash_frx.sponge_hash` (the field sponge) sits here too — field-level
+  rather than byte-level, but a whole hash all the same.
 
-**Namespace rule.** A *new* primitive marker is born ``hash_frx.perm.<name>``
-and a *new* whole-hash marker ``hash_frx.digest.<name>`` (the field sponge's
-future spelling is ``hash_frx.field_sponge`` — field-level, so neither byte
-namespace claims it). The rows below keep their pre-namespace spellings
-because a marker name is a wire ABI (`hash_frx.fusion`): renaming one requires
-the Fractalyze XLA recognizer to accept both spellings first, so the renames
-stage cross-repo rather than riding a hash-frx change alone.
+**Namespace rule.** A *new* marker is born ``hash_frx.<kind>.<name>``:
+``hash_frx.perm.*`` / ``hash_frx.compress.*`` / ``hash_frx.digest.*``
+(``compress`` rather than ``comp``, which would read as "composite"). The rows
+below keep their pre-namespace spellings because a marker name is a wire ABI
+(`hash_frx.fusion`): renaming one requires the Fractalyze XLA recognizer to
+accept both spellings first, so the renames stage cross-repo — #165 carries
+the old→new map — rather than riding a hash-frx change alone.
 
 The registry restates each emitting module's constants as literals instead of
 importing them, so reading it stays free of every hash's dependencies (frx, the
@@ -40,33 +46,36 @@ from typing import NamedTuple
 # The namespaces new markers are born into (see the module docstring). Existing
 # rows migrate only behind dual-spelling recognition in Fractalyze XLA.
 PERM_NAMESPACE = "hash_frx.perm."
+COMPRESS_NAMESPACE = "hash_frx.compress."
 DIGEST_NAMESPACE = "hash_frx.digest."
 
 
-class MarkerAxis(enum.Enum):
-    """Which side of the primitive ∘ construction split a marker sits on."""
+class MarkerKind(enum.Enum):
+    """The kind of fusible unit a marker names (the module docstring's split)."""
 
-    PERM = "perm"  # one primitive unit: a permute, or a tree hash's node hop
-    DIGEST = "digest"  # a whole hash collapsed behind one digest-shaped call
+    PERM = "perm"  # permutation (n→n)
+    COMPRESS = "compress"  # compression function (n→m)
+    DIGEST = "digest"  # whole hash, construction baked in
 
 
 class Marker(NamedTuple):
     name: str  # the `composite.name` on the wire
     version: int  # the `composite.version` the emitting module currently rides
-    axis: MarkerAxis
+    kind: MarkerKind
 
 
 MARKERS: tuple[Marker, ...] = (
-    # Primitives — one marked region per permute / node hop.
-    Marker("hash_frx.poseidon", 1, MarkerAxis.PERM),
-    Marker("hash_frx.sparse_poseidon", 2, MarkerAxis.PERM),
-    Marker("hash_frx.poseidon2", 2, MarkerAxis.PERM),
-    Marker("hash_frx.keccak_f", 1, MarkerAxis.PERM),
-    Marker("hash_frx.blake3_parent", 1, MarkerAxis.PERM),
-    Marker("hash_frx.blake3_compress", 1, MarkerAxis.PERM),
+    # Permutations — one marked region per permute.
+    Marker("hash_frx.poseidon", 1, MarkerKind.PERM),
+    Marker("hash_frx.sparse_poseidon", 2, MarkerKind.PERM),
+    Marker("hash_frx.poseidon2", 2, MarkerKind.PERM),
+    Marker("hash_frx.keccak_f", 1, MarkerKind.PERM),
+    # Compression functions — BLAKE3's node-level units.
+    Marker("hash_frx.blake3_parent", 1, MarkerKind.COMPRESS),
+    Marker("hash_frx.blake3_compress", 1, MarkerKind.COMPRESS),
     # Whole hashes — the construction's entire chain behind one call.
-    Marker("hash_frx.sha256", 1, MarkerAxis.DIGEST),
-    Marker("hash_frx.keccak_sponge", 1, MarkerAxis.DIGEST),
-    Marker("hash_frx.blake3", 1, MarkerAxis.DIGEST),
-    Marker("hash_frx.sponge_hash", 1, MarkerAxis.DIGEST),
+    Marker("hash_frx.sha256", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.keccak_sponge", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.blake3", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.sponge_hash", 1, MarkerKind.DIGEST),
 )

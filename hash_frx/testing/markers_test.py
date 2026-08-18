@@ -20,7 +20,12 @@ from hash_frx import sha256, sponge
 from hash_frx.blake3 import blake3
 from hash_frx.keccak import permutation as keccak_permutation
 from hash_frx.keccak import sponge as keccak_sponge
-from hash_frx.markers import DIGEST_NAMESPACE, MARKERS, PERM_NAMESPACE
+from hash_frx.markers import (
+    COMPRESS_NAMESPACE,
+    DIGEST_NAMESPACE,
+    MARKERS,
+    PERM_NAMESPACE,
+)
 from hash_frx.poseidon import poseidon, sparse
 from hash_frx.poseidon2 import poseidon2
 
@@ -77,8 +82,8 @@ class MarkerRegistryTest(absltest.TestCase):
         # here only as the rule for new names, and a row adopting one is a
         # wire-ABI event this pin makes deliberate.
         for marker in MARKERS:
-            self.assertFalse(marker.name.startswith(PERM_NAMESPACE))
-            self.assertFalse(marker.name.startswith(DIGEST_NAMESPACE))
+            for namespace in (PERM_NAMESPACE, COMPRESS_NAMESPACE, DIGEST_NAMESPACE):
+                self.assertFalse(marker.name.startswith(namespace))
 
 
 if __name__ == "__main__":
