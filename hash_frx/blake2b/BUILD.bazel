@@ -1,0 +1,17 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "blake2b",
+    srcs = [
+        "__init__.py",
+        "byte_hashes.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
