@@ -14,10 +14,11 @@ construction.
 
 This is the byte counterpart of `permutation.Permutation`: where a `Permutation`
 backs the algebraic sponge / compression / duplex transcript over a field dtype,
-a `ByteHash` backs byte hashing over raw bytes. The two `has_dedicated_fusion`
-flags mean the same thing: whether the primitive lowers to a hash-dedicated
-fusion marker (vs a host-eager path), so a consumer can gate device-fusion
-wrapping without naming a concrete hash.
+a `ByteHash` backs byte hashing over raw bytes. The two `fusion_path` attributes
+mean the same thing — how one call lowers on this backend — with one difference:
+a `ByteHash` may be `HOST` (a native library looped per message), a state a
+`Permutation` never has, so this is the seam where all three states of
+`hash_frx.fusion.FusionPath` are live.
 
 Implementations define value-based `__eq__`/`__hash__` over their full parameter
 surface — the same rule `Permutation` carries. A host byte transcript is a
@@ -37,6 +38,8 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.fusion import FusionPath
+
 if TYPE_CHECKING:
     # Typeshed-only: what every host hash accepts, and what numpy's stub declines
     # to say `ndarray` is. TYPE_CHECKING-guarded, so it is a name mypy resolves
@@ -47,9 +50,20 @@ if TYPE_CHECKING:
 @runtime_checkable
 class ByteHash(Protocol):
     digest_size: int
-    # Whether `digest` lowers to a hash-dedicated fusion marker (vs a host-eager
-    # path). Mirrors `Permutation.has_dedicated_fusion`: a consumer gates
-    # device-fusion wrapping on it without naming a concrete hash.
+    # How `digest` lowers on the backend this instance was built for.
+    # `DEDICATED` — a hash-dedicated marker the pinned plugin routes to one
+    # kernel; consumers gate device-fusion wrapping on
+    # `fusion_path.is_one_kernel` without naming a concrete hash. `GENERIC` — a
+    # device path whose marker this backend does not route (it inlines; right
+    # bytes, no kernel), still traceable. `HOST` — a native library looped per
+    # message; never traceable, and `digest`'s return type says so. Device rows
+    # derive it per (hash, backend) at construction; a host row is the one
+    # legitimate constant (`HOST` everywhere).
+    fusion_path: FusionPath
+    # Compat alias for `fusion_path.is_one_kernel`, kept because downstream
+    # consumers gate on it by this name. Mirrors
+    # `Permutation.has_dedicated_fusion`; implementations derive it beside
+    # `fusion_path` at the same assignment site, so the two cannot drift.
     has_dedicated_fusion: bool
 
     def digest(self, msg: ArrayLike) -> Array | np.ndarray:
@@ -70,20 +84,18 @@ class ByteHash(Protocol):
         to get a traceable path. An implementation returning `np.ndarray` is a
         host call and never can: it has to read the bytes.
 
-        `has_dedicated_fusion` looks like it separates exactly those two, but it
-        is a proxy rather than the same question — it says the digest lowers to
-        one dedicated kernel, and a device hash whose marker the pinned plugin
-        does not route is traceable with the flag `False`.
+        `fusion_path` states the same split declaratively:
+        `fusion_path.is_traceable` agrees with the return type by construction
+        (a device row — `DEDICATED` or `GENERIC` — returns `Array`; a `HOST` row
+        returns `np.ndarray`), and the return type remains the authority the
+        attribute is held to. The lone bool this seam used to carry could not
+        say it — a device hash whose marker the pinned plugin does not route
+        (BLAKE3 on Metal) and a host hash both read `False` — which is what the
+        three-state `FusionPath` exists to keep apart.
 
-        **BLAKE3's `ByteHash`es are that case** (`blake3/byte_hashes.py`): they
-        run on the device and take a tracer, yet report `False`. So the flag does
-        not answer "may I hash inside my own `@jit`" — only the return type does.
-        The seam grows a field for that when a consumer has to make the choice
-        and cannot; a hash that merely exposes the gap is not yet that consumer.
-
-        Which hash sits in the gap moves with the pin — Keccak was there until
-        its emitter shipped — so the reason this is a return-type question rather
-        than a flag question does not move with it.
+        Which hash sits in the `GENERIC` gap moves with the pin — Keccak was
+        there until its emitter shipped — so the reason the return type stays
+        the authority does not move with it.
         """
         ...
 

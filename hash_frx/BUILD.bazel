@@ -35,7 +35,10 @@ py_library(
     name = "permutation",
     srcs = ["permutation.py"],
     visibility = ["//visibility:public"],
-    deps = [requirement("frx")],
+    deps = [
+        ":fusion",
+        requirement("frx"),
+    ],
 )
 
 py_library(
@@ -43,6 +46,7 @@ py_library(
     srcs = ["byte_hash.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         requirement("frx"),
         requirement("numpy"),
     ],
@@ -99,6 +103,7 @@ py_library(
     srcs = ["duplex_sponge.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         ":permutation",
         requirement("frx"),
     ],
@@ -110,6 +115,7 @@ py_library(
     srcs = ["compression.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         ":permutation",
         requirement("frx"),
     ],

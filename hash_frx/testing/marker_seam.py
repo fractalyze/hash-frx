@@ -21,10 +21,12 @@ covered on purpose:
   pinned to the module constants by that instance's own marker-emission test, so
   the constant-to-attribute chain stays covered end to end.
 
-`has_dedicated_fusion` is checked in the same breath because it is defined as
-"the marker is not the generic one" — two ways of saying one thing, and this is
-where they are held to it. That half is independent of how the marker is emitted,
-so it holds for every implementation.
+`fusion_path` (and its `has_dedicated_fusion` alias) is checked in the same
+breath because it is defined as "the marker is not the generic one" — two ways
+of saying one thing, and this is where they are held to it. That half is
+independent of how the marker is emitted, so it holds for every implementation.
+A permutation is additionally held off `HOST`: that state exists only on the
+`ByteHash` seam.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from typing import Any
 import frx
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
 
 
@@ -45,12 +47,17 @@ def _composite_lines(perm: Permutation, state: Array) -> list[str]:
 
 def assert_marker_matches_emission(test: Any, perm: Permutation, state: Array) -> None:
     """Assert `perm.fused_region_marker` names the composite `permute` emits, and
-    that `has_dedicated_fusion` agrees with it."""
+    that `fusion_path` (with its `has_dedicated_fusion` alias) agrees with it."""
     name, version = perm.fused_region_marker
     test.assertEqual(
+        perm.fusion_path,
+        FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC,
+        f"fusion_path disagrees with fused_region_marker {name!r}",
+    )
+    test.assertEqual(
         perm.has_dedicated_fusion,
-        name != FUSED_REGION_MARKER,
-        f"has_dedicated_fusion disagrees with fused_region_marker {name!r}",
+        perm.fusion_path.is_one_kernel,
+        "has_dedicated_fusion drifted from its fusion_path derivation",
     )
 
     lines = _composite_lines(perm, state)

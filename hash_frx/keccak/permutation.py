@@ -24,8 +24,9 @@ kernel.
 be reached and the generic `zorch.fused_region` where it cannot — which takes
 both `_DEDICATED_EMITTER_AVAILABLE` (does the pinned plugin carry it) and
 `_EMITTER_BACKENDS` (does this backend), since the Keccak emitters are GPU-only.
-`has_dedicated_fusion` reports which of the two ran, and the two are not a fast
-and a slow kernel: **only the dedicated marker is one device unit.**
+`fusion_path` reports which of the two ran (`DEDICATED` vs `GENERIC`), and the
+two are not a fast and a slow kernel: **only the dedicated marker is one device
+unit.**
 
 A bare `zorch.fused_region` carries no live-width operand, and the rewriter
 declines those on purpose — routing one to the generic loop fusion would build an
@@ -47,7 +48,7 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath, fused_region
 from hash_frx.keccak import lane as lanes
 from hash_frx.keccak.lane import Lane
 from hash_frx.keccak.params import (
@@ -75,7 +76,7 @@ KECCAK_F_MARKER_VERSION = 1
 # Two separate things turn on this flag, and the second is why it must track the
 # pin rather than being left optimistic: emitting an unrecognized *name* is
 # byte-neutral (the composite inlines and the fusion is silently lost), but
-# `has_dedicated_fusion` also routes a `Sponge` over this permutation to
+# a `DEDICATED` fusion path also routes a `Sponge` over this permutation to
 # `hash_frx.sponge_hash` carrying `permutation="keccak_f"`, which a plugin without
 # the arm rejects outright as an unknown permutation — a hard compile failure, not
 # a fallback. Nothing here builds that `Sponge` (the byte hashes go through
@@ -275,9 +276,8 @@ def _permute_body(perm: "KeccakF1600", state: Array) -> Array:
 
     The marker is the contract rather than an optimisation: a permutation call
     *is* one marked region by construction, so an unmarked body leaves nothing
-    naming the unit. `has_dedicated_fusion` selects *which* marker, not whether
-    there is one — the same thing `SparsePoseidon` does on its non-dedicated
-    path.
+    naming the unit. `fusion_path` selects *which* marker, not whether there is
+    one — the same thing `SparsePoseidon` does on its non-dedicated path.
 
     The generic marker is also what obliges the body to be straight-line and
     element-wise, since the generic rewriter accepts nothing else. The dedicated
@@ -290,7 +290,7 @@ def _permute_body(perm: "KeccakF1600", state: Array) -> Array:
         *_abi_operands(state),
         name=name,
         version=version,
-        **(_marker_attrs() if perm.has_dedicated_fusion else {}),
+        **(_marker_attrs() if perm.fusion_path.is_one_kernel else {}),
     )
 
 
@@ -319,8 +319,12 @@ class KeccakF1600:
             name,
             KECCAK_F_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
         )
-        # Derived from the marker choice itself so the two can't drift.
-        self.has_dedicated_fusion = name != FUSED_REGION_MARKER
+        # Derived from the marker choice itself so the three can't drift; never
+        # HOST — a permutation is a device function by construction.
+        self.fusion_path = (
+            FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC
+        )
+        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def __eq__(self, other: object) -> bool:
         # The parameter surface is empty, so the marker IS the identity: without
@@ -357,7 +361,7 @@ class KeccakF1600:
         operand-fed permute, and the identifying attrs. Dedicated path only;
         otherwise an inert stub (non-dedicated, so consumers never route a
         whole-region composite through it)."""
-        if not self.has_dedicated_fusion:
+        if not self.fusion_path.is_one_kernel:
             return (leading,), (lambda state, *_ops: self.permute(state)), {}
         return _abi_operands(leading), _rounds, _marker_attrs()
 

@@ -12,7 +12,7 @@ its own ([`keccak/sponge.py`](keccak/sponge.py)) and why `duplex_sponge.py`
 refuses an absorb-mode flag for the same reason.
 
 `rate`/`out` are the free params on `SpongeParams` (capacity = width - rate). A
-`has_dedicated_fusion` permutation lowers the whole absorb to one
+`DEDICATED`-path permutation lowers the whole absorb to one
 `hash_frx.sponge_hash` region (assembled here over the permutation's fused-region
 ABI); a non-fused one runs the `while_loop` absorb over `permute`. Both read the
 absorb length at runtime, so concrete and symbolic `n` lower the same way.
@@ -30,7 +30,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array, lax
 
-from hash_frx.fusion import fused_region_over
+from hash_frx.fusion import FusionPath, fused_region_over
 from hash_frx.permutation import Permutation
 
 
@@ -129,7 +129,7 @@ def _fused_hash(
     permutation. `fused_region_over` rebuilds `permute` from the ABI operands —
     the emitter's operand contract names the round constants there — so the
     fallback HLO matches the generic path. Caller gates on
-    `has_dedicated_fusion`."""
+    `fusion_path.is_one_kernel`."""
 
     def sponge(inp: Array, permute: Callable[[Array], Array]) -> Array:
         state = fnp.zeros(perm.width, dtype=inp.dtype)
@@ -208,10 +208,15 @@ class Sponge:
         return hash((self._permutation, self.rate, self.out))
 
     @property
+    def fusion_path(self) -> FusionPath:
+        """How the underlying permute lowers on this backend — `DEDICATED` is
+        what lets a consumer wrap a whole region using this hash in an
+        expandable composite. Delegates to the permutation."""
+        return self._permutation.fusion_path
+
+    @property
     def has_dedicated_fusion(self) -> bool:
-        """Whether the permutation lowers to a hash-dedicated fusion marker, so a
-        consumer can wrap a whole region using this hash in an expandable
-        composite. Delegates to the permutation."""
+        """Compat alias for `fusion_path.is_one_kernel` (see the seam)."""
         return self._permutation.has_dedicated_fusion
 
     @property
@@ -225,7 +230,7 @@ class Sponge:
         """Absorb `input` (1-D) and squeeze the first `out` lanes: (n,) -> (out,).
 
         `sponge_type` picks the construction (see `SpongeType`). A
-        `has_dedicated_fusion` permutation lowers to one `hash_frx.sponge_hash`
+        `DEDICATED`-path permutation lowers to one `hash_frx.sponge_hash`
         region; a non-fused one runs the `while_loop` absorb. Both read the absorb
         length at runtime, so symbolic `n` lowers like a concrete one.
         """
@@ -267,7 +272,7 @@ def _hash_body(sponge: Sponge, input: Array, sponge_type: SpongeType) -> Array:
     # Dedicated-fusion → one `hash_frx.sponge_hash` region (built here); else the
     # generic `while_loop` absorb over `permute`.
     perm = sponge._permutation
-    if perm.has_dedicated_fusion:
+    if perm.fusion_path.is_one_kernel:
         return _fused_hash(perm, input, sponge.rate, sponge.out, sponge_type)
     state = fnp.zeros(perm.width, dtype=input.dtype)
     return _absorb(input, state, sponge.rate, sponge.out, perm.permute, sponge_type)

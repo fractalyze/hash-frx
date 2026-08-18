@@ -102,9 +102,9 @@ itself.
 
 `Sha256` and `HostSha256` ([`sha256.py`](../../hash_frx/sha256.py)) produce the
 same FIPS 180-4 bytes and differ only in substrate: one lowers to the device
-marker, the other loops `hashlib` on the host. `has_dedicated_fusion` is what a
-consumer branches on, exactly as on the permutation side — the substrate is a
-value the hash carries, never a class name a caller has to test.
+marker, the other loops `hashlib` on the host. `fusion_path` is what a consumer
+branches on, exactly as on the permutation side — the substrate is a value the
+hash carries, never a class name a caller has to test.
 
 **That holds for SHA-256 and does not hold in general.** The flag says a digest
 lowers to a hash-*dedicated* marker, which for SHA-256 coincides with "runs on

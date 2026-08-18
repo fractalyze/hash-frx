@@ -72,6 +72,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.blake3 import blake3
 from hash_frx.byte_hash import host_digest
+from hash_frx.fusion import FusionPath
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
@@ -92,6 +93,7 @@ class _Blake3Hash:
     equal, and serves one key's trace for another as pytree aux. It never errors.
     """
 
+    fusion_path = FusionPath.GENERIC
     has_dedicated_fusion = False
 
     def __init__(self, output_size: int = blake3.DIGEST_LEN) -> None:
@@ -201,6 +203,7 @@ class _HostBlake3Hash:
     shared with every other host row in the package.
     """
 
+    fusion_path = FusionPath.HOST
     has_dedicated_fusion = False
 
     def __init__(self, output_size: int = blake3.DIGEST_LEN) -> None:

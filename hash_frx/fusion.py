@@ -41,6 +41,7 @@ one place every marker in this package routes through.
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -52,6 +53,54 @@ if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
 
 FUSED_REGION_MARKER = "zorch.fused_region"
+
+
+class FusionPath(enum.Enum):
+    """How a hash's one-call unit lowers on the backend it was built for.
+
+    Three states, because two different questions used to share one bool and
+    came apart: "does this lower to one dedicated kernel?" (routing / perf) and
+    "may this be called inside a traced region?" (traceability). A device hash
+    whose marker nothing on this backend recognizes — BLAKE3 on Metal — is
+    traceable without being one kernel, and a host hash is neither; a single
+    flag collapses the two into one `False`.
+
+    - ``DEDICATED``: the pinned plugin *and* the backend carry the dedicated
+      emitter, so the marked call lowers to one device unit. Only this state
+      lets a consumer route a whole-region composite (a sponge hash, a Merkle
+      commit) through the hash's marker.
+    - ``GENERIC``: a device function — traceable, takes a tracer — whose marker
+      the backend does not route: either the generic region marker, or a
+      dedicated name that inlines unrecognized. Right bytes, no dedicated
+      kernel.
+    - ``HOST``: a host-library path over ``np.ndarray``. Never traceable — it
+      has to read the message bytes.
+
+    Derived per (hash, backend) at construction — the emitter switch is a
+    property of the pin and the backend, so it is never a class constant on a
+    device hash (`keccak.permutation._routes_to_dedicated_emitter` is the
+    pattern). Host rows are the one legitimate constant: a host path is
+    ``HOST`` on every backend.
+    """
+
+    DEDICATED = "dedicated"
+    GENERIC = "generic"
+    HOST = "host"
+
+    @property
+    def is_one_kernel(self) -> bool:
+        """Whether one call lowers to one device unit — the gate for wrapping a
+        whole region over this hash in an expandable composite. The question
+        `has_dedicated_fusion` used to answer."""
+        return self is FusionPath.DEDICATED
+
+    @property
+    def is_traceable(self) -> bool:
+        """Whether a call may sit inside a traced region (`jit` / `vmap`). For a
+        `ByteHash` this agrees with the return type by construction — a device
+        row returns `Array`, a host row `np.ndarray` — and the return type
+        remains the authority (`byte_hash.py`)."""
+        return self is not FusionPath.HOST
 
 
 def fused_region(
@@ -109,8 +158,9 @@ def fused_region_over(
     construction is. `attrs` wins on a collision, the construction being the one
     that owns the marker name.
 
-    Callers gate on `has_dedicated_fusion`: a permutation on the generic marker
-    hands out an inert spec, which names no layout for an emitter to read.
+    Callers gate on `fusion_path.is_one_kernel`: a permutation on the generic
+    marker hands out an inert spec, which names no layout for an emitter to
+    read.
     """
     operands, permute_from_operands, perm_attrs = perm.fused_region_spec(leading)
 

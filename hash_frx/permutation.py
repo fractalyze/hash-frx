@@ -29,6 +29,8 @@ from typing import Any, Protocol, runtime_checkable
 from frx import Array
 from frx.typing import DTypeLike
 
+from hash_frx.fusion import FusionPath
+
 
 @runtime_checkable
 class Permutation(Protocol):
@@ -39,10 +41,22 @@ class Permutation(Protocol):
     # narrow enough for mypy to reject a non-dtype at the pin every
     # implementation carries.
     dtype: DTypeLike
-    # Whether `permute` lowers to a hash-dedicated fusion marker (vs the generic
-    # region marker). When true, a vendor can expand a whole-region composite —
-    # e.g. a Merkle commit — by reading this hash's marker; consumers gate that
-    # wrapping on it without naming a concrete hash.
+    # How `permute` lowers on the backend this instance was built for.
+    # `DEDICATED` — a hash-dedicated marker the pinned plugin routes to one
+    # kernel; a vendor can then expand a whole-region composite (e.g. a Merkle
+    # commit) by reading this hash's marker, and consumers gate that wrapping on
+    # `fusion_path.is_one_kernel` without naming a concrete hash. `GENERIC` —
+    # the generic region marker, or a dedicated name this backend does not
+    # recognize; same bytes, no expandable marker. Never `HOST`: a permutation
+    # is a device function by construction (the host state of the taxonomy
+    # exists only on the `ByteHash` seam). Derived per (hash, backend) at
+    # construction, because the emitter switch is a property of the pin and the
+    # backend rather than of the hash.
+    fusion_path: FusionPath
+    # Compat alias for `fusion_path.is_one_kernel`, kept because downstream
+    # consumers gate on it by this name. A plain attribute (the seam types it
+    # so a fake can be a bare class); implementations derive it beside
+    # `fusion_path` at the same assignment site, so the two cannot drift.
     has_dedicated_fusion: bool
     # The composite name + version `permute`'s marker carries — what a consumer
     # needs to RE-MARK a permute inside its own composite decomposition (a duplex
@@ -55,7 +69,8 @@ class Permutation(Protocol):
     # contract change stages through `composite.version` rather than a rename (see
     # `hash_frx.fusion`), so a consumer holding the name alone can re-mark against
     # a stale contract. An undedicated permutation reports the generic marker at
-    # version 0, which is what `has_dedicated_fusion` is read off.
+    # version 0, which is what `fusion_path` (and its `has_dedicated_fusion`
+    # alias) is read off.
     fused_region_marker: tuple[str, int]
 
     def permute(self, state: Array) -> Array:

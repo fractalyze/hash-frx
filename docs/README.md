@@ -105,10 +105,12 @@ whether a `Sponge` over it wraps its whole hash as `hash_frx.sponge_hash` — an
 that marker carries a `permutation` discriminator a plugin without the arm
 rejects outright, which is a failed compile rather than a lost kernel.
 
-A permutation advertises which path it is on through `has_dedicated_fusion`, and
-hands out its operand layout through `fused_region_spec` — that pair is what lets
-a consumer wrap a whole computation as one region without naming the hash
-underneath it.
+A permutation advertises which path it is on through `fusion_path`
+(`hash_frx.fusion.FusionPath`: `DEDICATED` / `GENERIC` / `HOST`, the last only
+on the byte seam; `has_dedicated_fusion` remains as its `is_one_kernel` alias),
+and hands out its operand layout through `fused_region_spec` — that pair is
+what lets a consumer wrap a whole computation as one region without naming the
+hash underneath it.
 
 **Marker names are a wire ABI.** The rewriters match by name, and an unrecognized
 name does not error: the composite inlines and fusion is silently lost. A

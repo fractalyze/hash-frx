@@ -15,6 +15,7 @@ from absl.testing import absltest
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import ByteHash
+from hash_frx.fusion import FusionPath
 
 
 class _ByteHashDouble:
@@ -27,6 +28,7 @@ class _ByteHashDouble:
     """
 
     digest_size = 32
+    fusion_path = FusionPath.HOST
     has_dedicated_fusion = False
 
     def digest(self, msg: ArrayLike) -> np.ndarray:

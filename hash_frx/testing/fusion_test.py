@@ -11,7 +11,12 @@ from absl.testing import absltest
 from frx import Array
 from zk_dtypes import koalabear_mont as F
 
-from hash_frx.fusion import FUSED_REGION_MARKER, fused_region, fused_region_over
+from hash_frx.fusion import (
+    FUSED_REGION_MARKER,
+    FusionPath,
+    fused_region,
+    fused_region_over,
+)
 from hash_frx.testing.random_field import rand_field
 
 # The stub permutation's single ABI constant — one value, so two permutes inside
@@ -51,6 +56,7 @@ class _StubPerm:
 
     width = 8
     dtype = F
+    fusion_path = FusionPath.DEDICATED
     has_dedicated_fusion = True
     fused_region_marker = ("hash_frx.stub", 1)
 
