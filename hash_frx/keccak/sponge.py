@@ -180,6 +180,16 @@ class KeccakSponge:
     Frozen over three ints, so the derived `__eq__`/`__hash__` are value-based —
     what the seam needs of anything riding as pytree aux, and safe here precisely
     because no field is an `Array`.
+
+    Deliberately Keccak-bound rather than a generic byte sponge over any
+    `Permutation`: with one byte sponge in the package there is no second
+    implementation to shape a shared seam against, and a surface generalized
+    from a single instance encodes that instance's accidents (the XOR absorb,
+    the multi-rate padding split, the 4-byte lane packing) as if they were the
+    family's. Generalizing is deferred until a second byte sponge (Ascon)
+    lands and pays for the seam — none of the queued hashes needs it before
+    then: Vision rides the field `Sponge`, BLAKE2b and Grøstl are plain
+    `ByteHash` rows.
     """
 
     rate: int

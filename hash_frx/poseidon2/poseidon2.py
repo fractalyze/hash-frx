@@ -100,7 +100,6 @@ class Poseidon2:
         # region one (which a vendor can't route, so a whole-region composite
         # around it is unexpandable).
         self.fusion_path = FusionPath.from_marker(name)
-        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux

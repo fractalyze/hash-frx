@@ -175,7 +175,7 @@ class WholeHashRoutingTest(absltest.TestCase):
     """What the backend gate is actually protecting.
 
     `hash` routes to the whole-chain `keccak_sponge` region only when the
-    permutation reports `has_dedicated_fusion`, and that region is the expensive
+    permutation reports a `DEDICATED` fusion path, and that region is the expensive
     thing to trace: it unrolls the entire padded absorb and squeeze into one
     composite. Where the emitter exists that buys one kernel; where it does not
     it buys nothing and the trace is spent anyway.

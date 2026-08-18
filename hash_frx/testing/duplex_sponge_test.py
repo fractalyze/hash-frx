@@ -107,12 +107,13 @@ class DuplexSpongeAbsorbSqueezeTest(absltest.TestCase):
 
 
 class DuplexSpongeContractTest(absltest.TestCase):
-    def test_has_dedicated_fusion_delegates_to_permutation(self) -> None:
-        # The construction names no hash; it forwards the permutation's flag so a
-        # region consumer can gate whole-region wrapping on it (mirrors Sponge).
+    def test_fusion_path_delegates_to_permutation(self) -> None:
+        # The construction names no hash; it forwards the permutation's path so
+        # a region consumer can gate whole-region wrapping on it (mirrors
+        # Sponge).
         perm = koalabear16_perm()
         sp = DuplexSponge(perm, rate=_RATE)
-        self.assertEqual(sp.has_dedicated_fusion, perm.has_dedicated_fusion)
+        self.assertIs(sp.fusion_path, perm.fusion_path)
 
     def test_rate_not_less_than_width_raises(self) -> None:
         with self.assertRaises(ValueError):

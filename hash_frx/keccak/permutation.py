@@ -325,7 +325,6 @@ class KeccakF1600:
             KECCAK_F_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
         )
         self.fusion_path = FusionPath.from_marker(name)
-        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def __eq__(self, other: object) -> bool:
         # The parameter surface is empty, so the marker IS the identity: without

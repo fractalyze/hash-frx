@@ -15,6 +15,7 @@ from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
 from zk_dtypes import pfinfo
 
+from hash_frx.fusion import FusionPath
 from hash_frx.permutation import Permutation
 from hash_frx.poseidon.params import PoseidonParams
 from hash_frx.poseidon.poseidon import (
@@ -134,7 +135,7 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
         self.assertIsInstance(p, Permutation)
         self.assertEqual(p.width, _WIDTH)
         self.assertEqual(p.dtype, F)
-        self.assertTrue(p.has_dedicated_fusion)
+        self.assertIs(p.fusion_path, FusionPath.DEDICATED)
 
     def test_permute_shape_and_vmap(self) -> None:
         p = Poseidon(_poseidon_params())

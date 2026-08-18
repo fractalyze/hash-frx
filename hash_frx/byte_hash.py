@@ -60,11 +60,6 @@ class ByteHash(Protocol):
     # derive it per (hash, backend) at construction; a host row is the one
     # legitimate constant (`HOST` everywhere).
     fusion_path: FusionPath
-    # Compat alias for `fusion_path.is_one_kernel`, kept because downstream
-    # consumers gate on it by this name. Mirrors
-    # `Permutation.has_dedicated_fusion`; implementations derive it beside
-    # `fusion_path` at the same assignment site, so the two cannot drift.
-    has_dedicated_fusion: bool
 
     def digest(self, msg: ArrayLike) -> Array | np.ndarray:
         """Hash a batch of equal-length messages: uint8 `[B, L]` -> uint8
@@ -72,8 +67,8 @@ class ByteHash(Protocol):
         result is a device `Array` (a marker hash) or a host `np.ndarray` (a
         host-library hash); consumers `np.asarray` it to bytes.
 
-        One call is one function — the unit that lowers to one fused kernel when
-        `has_dedicated_fusion`. `L` is static, so any padding is data-independent.
+        One call is one function — the unit that lowers to one fused kernel on
+        the `DEDICATED` path. `L` is static, so any padding is data-independent.
         Batch with the `B` axis: a dedicated-fusion hash lowers the whole batch
         through one shared decomposition (Merkle leaves, a PoW nonce window).
 

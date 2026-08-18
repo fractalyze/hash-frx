@@ -18,7 +18,6 @@ class _Id:
     width = 3
     dtype = fnp.int32
     fusion_path = FusionPath.GENERIC  # no dedicated marker -> fallback
-    has_dedicated_fusion = False
     fused_region_marker = (FUSED_REGION_MARKER, 0)
 
     def permute(self, state: Array) -> Array:

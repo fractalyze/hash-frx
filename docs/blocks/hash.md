@@ -32,6 +32,14 @@ several independent axes, and one config object holding two of them is not reuse
 sibling: `digest(uint8[B, L]) -> uint8[B, digest_size]`, byte-identical to the
 hash's standard. A consumer reads `digest_size` and calls `digest`.
 
+There is deliberately no byte-side `Sponge` seam. The one byte sponge in the
+package ([`keccak/sponge.py`](../../hash_frx/keccak/sponge.py)) stays
+Keccak-bound: a surface generalized from a single implementation encodes that
+implementation's accidents as the family's, so the generalization waits until
+a second byte sponge (Ascon) exists to shape it against — and nothing queued
+before then needs it (Vision rides the field `Sponge`; BLAKE2b and Grøstl are
+plain `ByteHash` rows).
+
 The split is load-bearing because the two have no common surface below `digest`.
 A byte hash's internal construction differs per family — Merkle–Damgård chains a
 midstate, a tree hash combines subtree roots, a sponge absorbs into a state — so

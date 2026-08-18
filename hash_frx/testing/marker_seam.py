@@ -17,16 +17,15 @@ covered on purpose:
 - An implementation that emits *through* the attribute — `Poseidon`, `Poseidon2`,
   `SparsePoseidon` — cannot disagree by construction, which is the stronger
   arrangement and the reason to prefer it. Here this assertion degenerates to
-  "exactly one composite, and `has_dedicated_fusion` agrees"; the emission is
+  "exactly one composite, and `fusion_path` agrees"; the emission is
   pinned to the module constants by that instance's own marker-emission test, so
   the constant-to-attribute chain stays covered end to end.
 
-`fusion_path` (and its `has_dedicated_fusion` alias) is checked in the same
-breath because it is defined as "the marker is not the generic one" — two ways
-of saying one thing, and this is where they are held to it. That half is
-independent of how the marker is emitted, so it holds for every implementation.
-A permutation is additionally held off `HOST`: that state exists only on the
-`ByteHash` seam.
+`fusion_path` is checked in the same breath because it is defined as "the
+marker is not the generic one" — two ways of saying one thing, and this is
+where they are held to it. That half is independent of how the marker is
+emitted, so it holds for every implementation. A permutation is additionally
+held off `HOST`: that state exists only on the `ByteHash` seam.
 """
 
 from __future__ import annotations
@@ -47,17 +46,12 @@ def _composite_lines(perm: Permutation, state: Array) -> list[str]:
 
 def assert_marker_matches_emission(test: Any, perm: Permutation, state: Array) -> None:
     """Assert `perm.fused_region_marker` names the composite `permute` emits, and
-    that `fusion_path` (with its `has_dedicated_fusion` alias) agrees with it."""
+    that `fusion_path` agrees with it."""
     name, version = perm.fused_region_marker
     test.assertEqual(
         perm.fusion_path,
         FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC,
         f"fusion_path disagrees with fused_region_marker {name!r}",
-    )
-    test.assertEqual(
-        perm.has_dedicated_fusion,
-        perm.fusion_path.is_one_kernel,
-        "has_dedicated_fusion drifted from its fusion_path derivation",
     )
 
     lines = _composite_lines(perm, state)

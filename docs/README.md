@@ -107,8 +107,8 @@ than a lost kernel.
 
 A permutation advertises which path it is on through `fusion_path`
 (`hash_frx.fusion.FusionPath`: `DEDICATED` / `GENERIC` / `HOST`, the last only
-on the byte seam; `has_dedicated_fusion` remains as its `is_one_kernel` alias),
-and hands out its operand layout through `fused_region_spec` — that pair is
+on the byte seam), and hands out its operand layout through
+`fused_region_spec` — that pair is
 what lets a consumer wrap a whole computation as one region without naming the
 hash underneath it.
 

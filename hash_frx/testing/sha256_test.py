@@ -19,6 +19,7 @@ from absl.testing import absltest, parameterized
 
 from hash_frx import sha256
 from hash_frx.byte_hash import ByteHash
+from hash_frx.fusion import FusionPath
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block
@@ -169,7 +170,7 @@ class Sha256ByteHashTest(parameterized.TestCase):
             with self.subTest(impl=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
                 self.assertEqual(h.digest_size, 32)
-                self.assertIsInstance(h.has_dedicated_fusion, bool)
+                self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_flag_pins_the_substrate(self) -> None:
         # The only assertion in the repo that says WHICH implementation is the
@@ -177,8 +178,8 @@ class Sha256ByteHashTest(parameterized.TestCase):
         # zorch's byte_transcript, whose grind window is a wide nonce sweep on a
         # fused hash and a single nonce otherwise — so a silent flip here would
         # change a proof-of-work strategy rather than fail a hash.
-        self.assertTrue(sha256.Sha256().has_dedicated_fusion)
-        self.assertFalse(sha256.HostSha256().has_dedicated_fusion)
+        self.assertIs(sha256.Sha256().fusion_path.is_one_kernel, True)
+        self.assertIs(sha256.HostSha256().fusion_path, FusionPath.HOST)
 
     @parameterized.parameters(*_LENGTHS)
     def test_host_matches_hashlib(self, length: int) -> None:
