@@ -28,6 +28,29 @@ py_test(
     ],
 )
 
+# The registry's drift guard. The deps are its sweep's coverage boundary: the
+# completeness case walks the package files these targets place in runfiles,
+# so a new hash package joins this list when it joins the registry.
+py_test(
+    name = "markers_test",
+    size = "small",
+    srcs = ["markers_test.py"],
+    # GPU_PLUGIN_DEPS despite touching no device: importing `sha256` puts its
+    # round-constant table on the default backend at module load, and the cuda
+    # leg refuses to initialize without the plugin wheels in runfiles.
+    deps = [
+        "//hash_frx",
+        "//hash_frx:markers",
+        "//hash_frx:sha256",
+        "//hash_frx:sponge",
+        "//hash_frx/blake3",
+        "//hash_frx/keccak",
+        "//hash_frx/poseidon",
+        "//hash_frx/poseidon2",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 py_test(
     name = "_composite_test",
     size = "small",

@@ -29,6 +29,16 @@ py_library(
     ],
 )
 
+# The registry of every composite marker this package owns (name, version,
+# axis) — data only, no hash imports, so a consumer can read the wire surface
+# without pulling every hash's dependencies. `markers_test` holds the rows to
+# the emitting modules' constants.
+py_library(
+    name = "markers",
+    srcs = ["markers.py"],
+    visibility = ["//visibility:public"],
+)
+
 # The two seams a consumer codes against: a fixed-width permutation over a field
 # dtype, and its byte sibling. Neither names a concrete hash.
 py_library(
