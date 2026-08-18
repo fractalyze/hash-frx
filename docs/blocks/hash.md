@@ -102,31 +102,28 @@ itself.
 
 `Sha256` and `HostSha256` ([`sha256.py`](../../hash_frx/sha256.py)) produce the
 same FIPS 180-4 bytes and differ only in substrate: one lowers to the device
-marker, the other loops `hashlib` on the host. `has_dedicated_fusion` is what a
-consumer branches on, exactly as on the permutation side — the substrate is a
-value the hash carries, never a class name a caller has to test.
+marker, the other loops `hashlib` on the host. `fusion_path` is what a consumer
+branches on, exactly as on the permutation side — the substrate is a value the
+hash carries, never a class name a caller has to test.
 
-**That holds for SHA-256 and does not hold in general.** The flag says a digest
-lowers to a hash-*dedicated* marker, which for SHA-256 coincides with "runs on
-the device". BLAKE3's `ByteHash`es
-([`blake3/byte_hashes.py`](../../hash_frx/blake3/byte_hashes.py)) are the case
-where the two come apart: they run on the device and accept a tracer, yet carry a
-marker the pinned plugin does not route, so every one of them reports `False`. A
-consumer branching on the flag alone will size a nonce window for the host path
-against a device hash. The seam anticipated this and named the remedy — a second
-field for "the digest returns an `Array`" — which is a decision owed to the next
-consumer that has to make the choice, not to the hash that exposed it.
-
-Keccak used to be that example and is no longer one: its rows report `True`
-because the pinned plugin routes `hash_frx.keccak_sponge`. Which hash sits in the
-gap is a property of the pin, not of the design — so the gap is what the seam has
-to answer for, not the hash currently in it.
+**The three states are all live, and which hash sits where moves with the
+pin.** `FusionPath` separates "lowers to one dedicated kernel" (`DEDICATED`)
+from "device and traceable, marker un-routed" (`GENERIC`) from "host loop over
+a native library" (`HOST`), because a consumer that cannot tell the middle
+state from the last will size a nonce window for the host path against a
+device hash. Keccak's byte rows are the standing `GENERIC` case on the CPU leg
+(the Keccak arms are GPU-only); BLAKE3's rows were `GENERIC` everywhere until
+the emitter shipped and now read `DEDICATED` on cpu and gpu, with Metal keeping
+`GENERIC` alive. The gap is a property of the pin and the backend, not of the
+design — so the seam names it as a value, and the return type of `digest`
+(`Array` against `np.ndarray`) remains the authority `is_traceable` answers
+to.
 
 Both stay, and the reason is not only speed. A byte transcript is host-shaped by
 construction — a `bytes` buffer with host framing — so a device hash forces a
 device-to-host sync on every squeeze; and a proof-of-work grind sizes its nonce
-window off `has_dedicated_fusion`, testing a wide window on a device hash and one
-nonce at a time on a host hash. The host implementation is what makes that branch
+window off `fusion_path`, testing a wide window on a device hash and one nonce
+at a time on a host hash. The host implementation is what makes that branch
 reachable at all.
 
 The choice between them is **by batch shape, not by machine** — measured on the

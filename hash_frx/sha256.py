@@ -31,7 +31,7 @@ from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import host_digest
-from hash_frx.fusion import fused_region
+from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import rotr
 
 if TYPE_CHECKING:
@@ -44,6 +44,23 @@ SHA256_MARKER = "hash_frx.sha256"
 # name + attributes and deliberately does not gate on the version; it lets a
 # future contract change be staged without renaming the marker (cf. POSEIDON2).
 SHA256_MARKER_VERSION = 1
+
+# Whether the pinned Fractalyze XLA plugin ships the dedicated SHA-256 emitter,
+# and on which backends (`allow_sha256_fusion` is set in both the CPU and the
+# GPU compiler). Two flags with the family-wide rationale in
+# `keccak.permutation`; a backend absent from the tuple — Metal today — still
+# emits the marker (there is no per-block routing alternative for a whole-hash
+# digest), which inlines unrecognized: right bytes, `GENERIC` fusion path.
+_DEDICATED_EMITTER_AVAILABLE = True
+_EMITTER_BACKENDS = ("cpu", "gpu")
+
+
+def _routes_to_dedicated_emitter() -> bool:
+    """Whether the pin *and* the backend both carry the SHA-256 emitter. Read
+    per construction so importing does not initialize a backend; the lookup
+    behind `frx.default_backend()` is memoized."""
+    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+
 
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
 # first 64 primes) and initial hash state (sqrt of first 8 primes).
@@ -500,8 +517,8 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 
 # ---------------------------------------------------------------------------
 # ByteHash seam implementations (SHA-256). Both hash to the identical FIPS 180-4
-# bytes and differ only in substrate — `has_dedicated_fusion` is the type-level
-# signal. Param-free, so value identity is by type (no jit re-trace).
+# bytes and differ only in substrate — `fusion_path` is the type-level signal.
+# Param-free, so value identity is by type (no jit re-trace).
 #
 # Two implementations of one function is a cost, so each names the workload it
 # exists for. The split is by batch shape, not by machine: device latency is flat
@@ -512,15 +529,22 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 # ---------------------------------------------------------------------------
 class Sha256:
     """`ByteHash` for device SHA-256 — `digest` runs the batch on the
-    `hash_frx.sha256` marker (data-parallel, lowers to a GPU kernel), so
-    `has_dedicated_fusion = True`.
+    `hash_frx.sha256` marker (data-parallel, lowers to one dedicated kernel
+    where the pin and the backend route the name, so `fusion_path` reads
+    `DEDICATED` there and `GENERIC` elsewhere).
 
     For batched hashing where the messages already live on the device — Merkle
     leaves being the motivating case. Wrong choice for a caller that hashes one
     short message at a time and reads the result on the host."""
 
     digest_size = 32
-    has_dedicated_fusion = True
+
+    def __init__(self) -> None:
+        # Read per instance rather than pinned on the class: the emitter switch
+        # is a property of the pin and the backend, and a value read at import
+        # would pin the answer before anything could vary it.
+        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
@@ -541,18 +565,21 @@ class Sha256:
 
 class HostSha256:
     """`ByteHash` for host SHA-256 — `digest` loops `hashlib` per message on the
-    host (eager, no device kernel), so `has_dedicated_fusion = False`. The fast
-    path for a strictly-sequential byte challenger: `hashlib` on a small buffer
-    beats a device dispatch per squeeze.
+    host (eager, no device kernel), so `fusion_path = HOST`. The fast path for a
+    strictly-sequential byte challenger: `hashlib` on a small buffer beats a
+    device dispatch per squeeze.
 
     For a host-shaped byte transcript, which holds a `bytes` buffer and reads
     each digest back immediately — so a device hash there buys a kernel and pays
-    a device-to-host sync per squeeze. It is also the instance that makes
-    `has_dedicated_fusion = False` reachable, which consumers branch on: zorch's
-    byte transcript grinds a wide nonce window against a fused hash and one nonce
-    at a time against this one."""
+    a device-to-host sync per squeeze. It is also the instance that makes the
+    `HOST` path reachable, which consumers branch on: zorch's byte transcript
+    grinds a wide nonce window against a fused hash and one nonce at a time
+    against this one."""
 
     digest_size = 32
+    # The one legitimate class constant of the taxonomy: a host row is HOST on
+    # every backend, so nothing here varies with the pin.
+    fusion_path = FusionPath.HOST
     has_dedicated_fusion = False
 
     def digest(self, msg: ArrayLike) -> np.ndarray:

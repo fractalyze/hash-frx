@@ -12,23 +12,24 @@ not.
 So the suites that would pay it cap what they run on the legs that cannot afford
 it — a shorter differential sweep, seam rows that stop below the tree layer,
 value tables that read the unmarked decomposition instead of the shipped entry
-points. Each site states what it gives up. This is the one place the condition
-is spelled, so a leg gaining an emitter lifts every one of them at once.
+points. Each site states what it gives up.
 
 Both legs now have one, so on `cpu` and `gpu` nothing is capped and the tables
-read the shipped entry points. The list is explicit rather than `!= "unknown"`
-because a leg is capped until an emitter is *written* for it: a backend absent
-here — Metal today — still inlines the marker and still pays the cliff.
+read the shipped entry points. The condition is read off the production switch
+in `byte_hashes` — the same pin+backend conjunction that derives the rows'
+`fusion_path` — so the caps and the seam cannot disagree about which legs pay
+the cliff, and a leg gaining an emitter lifts every cap when the production
+tuple moves. A backend absent there — Metal today — still inlines the marker
+and still pays it.
 """
 
 from __future__ import annotations
 
-import frx
+from hash_frx.blake3.byte_hashes import _routes_to_dedicated_emitter
 
-# The Fractalyze XLA emitters: fractalyze/xla#499 registers the recognizer and
-# rewriter on the GPU compiler, fractalyze/xla#507 on the CPU one. On CPU every
-# entry point — `digest` at one block, one chunk and three chunks, `xof` at 64
-# and 131 bytes, both keyed modes, `derive_key`, `non_root_digest` and
-# `parent_digest` — compiles to exactly one custom fusion in ~1s, where the
-# inline form had not finished in 150s.
-HAS_BLAKE3_EMITTER = frx.default_backend() in ("cpu", "gpu")
+# Measured on the CPU leg when the emitters landed (fractalyze/xla#499 gpu,
+# #507 cpu): every entry point — `digest` at one block, one chunk and three
+# chunks, `xof` at 64 and 131 bytes, both keyed modes, `derive_key`,
+# `non_root_digest` and `parent_digest` — compiles to exactly one custom fusion
+# in ~1s, where the inline form had not finished in 150s.
+HAS_BLAKE3_EMITTER = _routes_to_dedicated_emitter()

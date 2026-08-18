@@ -28,6 +28,52 @@ py_test(
     ],
 )
 
+# The registry's drift guard. The deps are its sweep's coverage boundary: the
+# completeness case walks the package files these targets place in runfiles,
+# so a new hash package joins this list when it joins the registry.
+py_test(
+    name = "markers_test",
+    size = "small",
+    srcs = ["markers_test.py"],
+    # GPU_PLUGIN_DEPS despite touching no device: importing `sha256` (its
+    # round-constant table) and `blake3.compress` (its IV words) puts arrays on
+    # the default backend at module load, and the cuda leg refuses to
+    # initialize without the plugin wheels in runfiles.
+    deps = [
+        "//hash_frx",
+        "//hash_frx:markers",
+        "//hash_frx:sha256",
+        "//hash_frx:sponge",
+        "//hash_frx/blake3",
+        "//hash_frx/keccak",
+        "//hash_frx/poseidon",
+        "//hash_frx/poseidon2",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "fusion_path_test",
+    size = "medium",
+    srcs = ["fusion_path_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:compression",
+        "//hash_frx:duplex_sponge",
+        "//hash_frx:fusion",
+        "//hash_frx:sha256",
+        "//hash_frx:sponge",
+        "//hash_frx/blake3",
+        "//hash_frx/keccak",
+        "//hash_frx/poseidon",
+        "//hash_frx/poseidon2",
+        "//hash_frx/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 py_test(
     name = "_composite_test",
     size = "small",
@@ -90,6 +136,7 @@ py_test(
     srcs = ["byte_hash_test.py"],
     deps = [
         "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

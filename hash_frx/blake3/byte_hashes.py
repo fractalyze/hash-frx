@@ -30,19 +30,17 @@ context riding as the instance's parameter. The seam cannot express that — it 
 one `digest(msg)` — so a consumer reaching a `ByteHash` generically gets whichever
 reading the row it was handed carries.
 
-**`has_dedicated_fusion` is `False`, and the return type is what matters here.**
-`digest` does carry a hash-dedicated marker — every row routes through
-[`blake3.tree_hash`](blake3.py), the name-routed `hash_frx.blake3` composite — but
-no XLA emitter recognizes it yet, so the composite inlines to its decomposition
-instead of becoming one kernel. The flag claims the kernel rather than the
-marker, so it stays `False` until that emitter lands. Keccak's rows read `False`
-too but for a different reason — they carry only the generic marker, where these
-carry a dedicated one nothing recognizes — and the seam cannot currently tell the
-two apart, which is a question for `byte_hash.py` rather than for this file.
-It is still a device function that takes a tracer
-and returns an `Array`, which is what lets a consumer hash inside its own `@jit`
-— the flag and that property came apart at Keccak, and
-[`byte_hash.py`](../byte_hash.py) is where the rule lives.
+**`fusion_path` derives from the pin and the backend, like Keccak's.** Every
+row routes through [`blake3.tree_hash`](blake3.py), the name-routed
+`hash_frx.blake3` composite, and the pinned plugin recognizes that name on the
+CPU and GPU compilers (fractalyze/xla#499, #507) — so the rows read `DEDICATED`
+on both legs, and hardcoding the answer instead is exactly how the flag went
+stale for two pins after the emitter shipped. A backend without the arm —
+Metal today — inlines the marker: same bytes, no kernel, `GENERIC`, yet still
+a device function a consumer may call inside its own `@jit`. Keeping that
+state distinct from `HOST` is what the seam's three-state `FusionPath` is for
+([`byte_hash.py`](../byte_hash.py)); `blake3.testing.emitter` reads the same
+switch rather than spelling its own, so the caps it gates lift with the pin.
 
 **Each row has a host sibling** — `HostBlake3`, `HostBlake3Keyed`,
 `HostBlake3DeriveKey` — over the BLAKE3 team's own Rust binding, mirroring
@@ -51,8 +49,9 @@ strictly-sequential caller that reads each digest back immediately, where a
 device dispatch per short message costs more than a native hash does, and they
 are the differential partner the published vectors cannot be: agreement with the
 reference implementation at a random length is a check no table of 35 lengths
-performs. Since the flag reads `False` on every row here, device and host alike,
-the return type is again the only thing separating them.
+performs. They read `HOST` everywhere — a host loop cannot stop being one, so
+this is the one row class attribute in the taxonomy — and their `np.ndarray`
+return type stays the authority on why they may never see a tracer.
 
 The narrowing worth knowing before reaching for one: the binding takes a
 derive-key context as a `str`, so `HostBlake3DeriveKey` refuses a context that is
@@ -66,17 +65,37 @@ from typing import TYPE_CHECKING
 # The BLAKE3 team's Rust binding (the `blake3` distribution on PyPI), aliased
 # because the unqualified name is this package's own `blake3` module below.
 import blake3 as blake3_py
+import frx
 import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake3 import blake3
 from hash_frx.byte_hash import host_digest
+from hash_frx.fusion import FusionPath
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
 
     from hash_frx.byte_hash import ByteHash
+
+# Whether the pinned Fractalyze XLA plugin ships the BLAKE3 emitter, and on
+# which backends. fractalyze/xla#499 registers the recognizer and rewriter on
+# the GPU compiler and #507 on the CPU one, so unlike Keccak's GPU-only tuple
+# this carries both legs; the pin floor in `pyproject.toml` is already above
+# the wheel that first shipped them. Family-wide rationale for the two-flag
+# shape in `keccak.permutation`; a backend absent from the tuple — Metal today
+# — still emits the marker (an unrecognized name inlines byte-neutrally, and
+# there is no per-node routing alternative for a whole-tree digest).
+_DEDICATED_EMITTER_AVAILABLE = True
+_EMITTER_BACKENDS = ("cpu", "gpu")
+
+
+def _routes_to_dedicated_emitter() -> bool:
+    """Whether the pin *and* the backend both carry the BLAKE3 emitter. Read
+    per construction so importing does not initialize a backend; the lookup
+    behind `frx.default_backend()` is memoized."""
+    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
 
 
 class _Blake3Hash:
@@ -92,12 +111,16 @@ class _Blake3Hash:
     equal, and serves one key's trace for another as pytree aux. It never errors.
     """
 
-    has_dedicated_fusion = False
-
     def __init__(self, output_size: int = blake3.DIGEST_LEN) -> None:
         if output_size < 1:
             raise ValueError(f"output_size must be at least 1, got {output_size}")
         self.digest_size = output_size
+        # Per instance rather than on the class: the emitter switch is a
+        # property of the pin and the backend, and a value read at import would
+        # pin the answer before anything could vary it (`_KeccakHash` states
+        # the same rule).
+        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def _read(self, msg: ArrayLike) -> Array:
         raise NotImplementedError
@@ -201,6 +224,7 @@ class _HostBlake3Hash:
     shared with every other host row in the package.
     """
 
+    fusion_path = FusionPath.HOST
     has_dedicated_fusion = False
 
     def __init__(self, output_size: int = blake3.DIGEST_LEN) -> None:

@@ -49,7 +49,12 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
+from hash_frx.fusion import (
+    FUSED_REGION_MARKER,
+    FusionPath,
+    fused_region,
+    inert_region_spec,
+)
 from hash_frx.linear import apply_matrix
 from hash_frx.poseidon.linear import apply_sparse_partial
 from hash_frx.poseidon.params import SparsePoseidonParams
@@ -84,9 +89,9 @@ _DEDICATED_EMITTER_AVAILABLE = True
 _WIDE_ATTR_EMITTER_AVAILABLE = True
 
 # Which backends carry the emitter — a different question from the pin, per
-# #147. Mis-routing is not neutral: `has_dedicated_fusion` also traces the whole
-# round chain as one composite, which a backend without the emitter can only
-# inline (zisk-zorch's Poseidon1 commit goldens, CPU: 275.9 s vs 18.0 s).
+# #147. Mis-routing is not neutral: a DEDICATED fusion path also traces the
+# whole round chain as one composite, which a backend without the emitter can
+# only inline (zisk-zorch's Poseidon1 commit goldens, CPU: 275.9 s vs 18.0 s).
 _EMITTER_BACKENDS = ("gpu",)
 
 
@@ -124,8 +129,8 @@ class SparsePoseidon:
             name,
             POSEIDON_SPARSE_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
         )
-        # Derived from the marker choice itself so the two can't drift.
-        self.has_dedicated_fusion = name != FUSED_REGION_MARKER
+        self.fusion_path = FusionPath.from_marker(name)
+        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
         if self.has_dedicated_fusion:
             (
                 self._mds_rows,
@@ -192,10 +197,9 @@ class SparsePoseidon:
         """The SparsePoseidonFusion ABI: operands `(leading, *additive round
         constants)`, the operand-fed permute, and attrs whose four matrices
         (`mds` / `transition_matrix` / `partial_dot` / `partial_col`) name the
-        linear layers. Dedicated path only; otherwise an inert stub (non-dedicated,
-        so consumers never route a whole-region composite through it)."""
-        if not self.has_dedicated_fusion:
-            return (leading,), (lambda state, *ops: self.permute(state)), {}
+        linear layers. Dedicated path only; otherwise the shared inert stub."""
+        if not self.fusion_path.is_one_kernel:
+            return inert_region_spec(self, leading)
         attrs = _marker_attrs(self)
         return (
             _abi_operands(self, leading),

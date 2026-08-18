@@ -144,7 +144,8 @@ def _absorb_squeeze(
 @partial(frx.jit, static_argnames=("perm", "rate", "output_size"), inline=True)
 def _fused_hash(perm: KeccakF1600, padded: Array, rate: int, output_size: int) -> Array:
     """The padded absorb and the squeeze as ONE `hash_frx.keccak_sponge` region
-    over a dedicated-fusion permutation. Caller gates on `has_dedicated_fusion`.
+    over a dedicated-fusion permutation. Caller gates on
+    `fusion_path.is_one_kernel`.
 
     The padding is applied before the region rather than inside it, so the
     emitter reads a rate-aligned byte matrix and never needs the domain suffix:
@@ -208,7 +209,7 @@ class KeccakSponge:
         `msg` may be a tracer: the padding is a host constant built from `L`, and
         every loop bound below is static, so nothing here reads a message byte.
 
-        A `has_dedicated_fusion` permutation lowers the whole padded absorb and
+        A `DEDICATED`-path permutation lowers the whole padded absorb and
         squeeze to one `hash_frx.keccak_sponge` region; otherwise each permute is
         its own marked region and the XOR glue between them stays outside.
         """
@@ -229,7 +230,7 @@ class KeccakSponge:
         # `permutation._permute_body`'s jit zone, which does not care where the
         # instance comes from.
         perm = KeccakF1600()
-        if perm.has_dedicated_fusion:
+        if perm.fusion_path.is_one_kernel:
             return _fused_hash(
                 perm=perm,
                 padded=padded,

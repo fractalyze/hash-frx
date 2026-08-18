@@ -35,20 +35,22 @@ the length a parameter is the family-wide rule, stated once in
 [`docs/reference/conventions.md`](../../docs/reference/conventions.md); it is
 also why the SHAKEs take no default where BLAKE3's rows do.
 
-**`has_dedicated_fusion` is `False` on the host rows, and on the device rows it
-is whatever the running backend can reach**, because the whole padded absorb and
-squeeze lowers to one `hash_frx.keccak_sponge` kernel only where that emitter
-exists. The switch is `keccak.permutation._routes_to_dedicated_emitter`, which
-the device rows read through `KeccakSponge`; it asks both whether the pinned
-plugin carries the emitters and whether this backend has them, the Keccak arms
-being GPU-only.
+**`fusion_path` is `HOST` on the host rows, and on the device rows it is
+`DEDICATED` or `GENERIC` per what the running backend can reach**, because the
+whole padded absorb and squeeze lowers to one `hash_frx.keccak_sponge` kernel
+only where that emitter exists. The switch is
+`keccak.permutation._routes_to_dedicated_emitter`, which the device rows read
+through `KeccakF1600`; it asks both whether the pinned plugin carries the
+emitters and whether this backend has them, the Keccak arms being GPU-only —
+so the device rows are the standing `GENERIC` case on the CPU leg.
 
-The flag is nonetheless the wrong thing to separate substrate by, here as
-elsewhere: it answers "does this lower to a dedicated kernel", which a pin or a
-backend can change, and the return type is what actually divides the two — a
-device hash returns an `Array` and accepts a tracer, a host one returns
-`np.ndarray` and never can. That is a seam question rather than a fact about
-these hashes, and it is stated where the rule lives —
+`is_one_kernel` is nonetheless the wrong thing to separate substrate by, here
+as elsewhere: it answers "does this lower to a dedicated kernel", which a pin
+or a backend can change, and the return type is what actually divides device
+from host — a device hash returns an `Array` and accepts a tracer, a host one
+returns `np.ndarray` and never can (`fusion_path.is_traceable` restates it; the
+return type stays the authority). That is a seam question rather than a fact
+about these hashes, and it is stated where the rule lives —
 [`byte_hash.py`](../byte_hash.py) and `docs/blocks/hash.md`.
 """
 
@@ -62,6 +64,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import host_digest
+from hash_frx.fusion import FusionPath
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.keccak.sponge import KeccakSponge
 
@@ -117,8 +120,9 @@ class _KeccakHash:
         # `poseidon2.Poseidon2` uses. Per instance rather than on the class,
         # because the emitter switch is a property of the pin and a value read at
         # import would pin the answer before anything could vary it. The seam
-        # types it as a plain attribute, so this cannot be a read-only property.
-        self.has_dedicated_fusion = KeccakF1600().has_dedicated_fusion
+        # types both as plain attributes, so neither can be a read-only property.
+        self.fusion_path = KeccakF1600().fusion_path
+        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def digest(self, msg: ArrayLike) -> Array:
         return self._sponge.hash(msg)
@@ -205,6 +209,7 @@ class _HostKeccak:
     other host row in the package.
     """
 
+    fusion_path = FusionPath.HOST
     has_dedicated_fusion = False
 
     def __init__(self, digest_size: int) -> None:
