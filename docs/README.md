@@ -91,19 +91,19 @@ layout `fused_region_spec` hands out. That is what keeps a construction from
 naming the permutation's constants, and what makes a whole absorb one region
 instead of a marked permute per block with the glue between them left outside.
 
-Two of them are ahead of the toolchain, and they wait in different ways because
-the cost of being early is not the same for both. `hash_frx.blake3` is emitted
-whether or not the pinned plugin recognizes it: an unrecognized *name* only
-inlines, so being early costs the fusion and nothing else, and the BLAKE3 rows
-report `has_dedicated_fusion = False` while carrying a marker
-([#119](https://github.com/fractalyze/hash-frx/issues/119) lifts the test caps
-that buys). `hash_frx.keccak_f` is emitted only where the plugin ships its emitter, and the
-pinned one does — so Keccak-f routes to the dedicated marker, and the `frx>=`
-floor in `pyproject.toml` is what holds that true. The switch has to track the
-pin rather than be left optimistic, because a permutation's marker also decides
-whether a `Sponge` over it wraps its whole hash as `hash_frx.sponge_hash` — and
-that marker carries a `permutation` discriminator a plugin without the arm
-rejects outright, which is a failed compile rather than a lost kernel.
+The markers wait for the toolchain in two different ways, because the cost of
+being early is not the same for both. `hash_frx.blake3` and `hash_frx.sha256`
+are emitted whether or not the pinned plugin recognizes the name: an
+unrecognized *name* only inlines, so being early costs the fusion and nothing
+else, and the hash reports `fusion_path = GENERIC` while carrying its marker.
+`hash_frx.keccak_f` is emitted only where the plugin ships its emitter — off
+the pin *and* the backend, the Keccak arms being GPU-only — and the `frx>=`
+floor in `pyproject.toml` is what holds the pin half true. That switch has to
+track the pin rather than be left optimistic, because a permutation's marker
+also decides whether a `Sponge` over it wraps its whole hash as
+`hash_frx.sponge_hash` — and that marker carries a `permutation` discriminator
+a plugin without the arm rejects outright, which is a failed compile rather
+than a lost kernel.
 
 A permutation advertises which path it is on through `fusion_path`
 (`hash_frx.fusion.FusionPath`: `DEDICATED` / `GENERIC` / `HOST`, the last only

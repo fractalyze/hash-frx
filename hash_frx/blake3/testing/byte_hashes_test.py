@@ -23,10 +23,10 @@ another key's caller.
 
 **And every case runs on both substrates.** Each mode is two rows — the device
 one and its host sibling — answering to one seam, so a case that named a
-substrate would stop covering half the family. The two exceptions are the two
-claims that are *about* substrate: a device row takes a tracer, and a host row
-returns `np.ndarray`, which is the only thing separating them once
-`has_dedicated_fusion` reads `False` on all six.
+substrate would stop covering half the family. The exceptions are the claims
+that are *about* substrate: a device row takes a tracer and derives its
+`fusion_path` from the backend, a host row returns `np.ndarray` and is `HOST`
+everywhere.
 
 Two cases exist only for the host rows, and neither duplicates the above:
 
@@ -76,6 +76,7 @@ from hash_frx.blake3.testing.vectors import (
     rows,
 )
 from hash_frx.byte_hash import ByteHash
+from hash_frx.fusion import FusionPath
 
 # The published extended column is 131 bytes and its head is the digest, so one
 # table anchors both output lengths (`vectors._digests` takes the head rather
@@ -264,11 +265,31 @@ class SeamConformanceTest(parameterized.TestCase):
     def test_the_implementation_satisfies_the_byte_hash_protocol(
         self, cls: Callable[..., ByteHash], args: tuple[object, ...]
     ) -> None:
+        self.assertIsInstance(cls(*args), ByteHash)
+
+    @parameterized.named_parameters(*_DEVICE_ROWS)
+    def test_a_device_row_derives_its_path_from_the_backend(
+        self, cls: Callable[..., ByteHash], args: tuple[object, ...]
+    ) -> None:
+        # The expectation is spelled from the backend here rather than read off
+        # the module switch it derives from: the flag sat hardcoded False for
+        # two pins after the emitter shipped (xla#499/#507), and only an
+        # independent spelling notices the next hardcode.
+        expected = (
+            FusionPath.DEDICATED
+            if frx.default_backend() in ("cpu", "gpu")
+            else FusionPath.GENERIC
+        )
         h = cls(*args)
-        self.assertIsInstance(h, ByteHash)
-        # Pinned rather than merely type-checked: `False` while no BLAKE3
-        # emitter exists is the substantive claim the module docstring makes,
-        # and a marker landing without this flag moving is silent.
+        self.assertIs(h.fusion_path, expected)
+        self.assertEqual(h.has_dedicated_fusion, h.fusion_path.is_one_kernel)
+
+    @parameterized.named_parameters(*_HOST_ROWS)
+    def test_a_host_row_is_host_on_every_backend(
+        self, cls: Callable[..., ByteHash], args: tuple[object, ...]
+    ) -> None:
+        h = cls(*args)
+        self.assertIs(h.fusion_path, FusionPath.HOST)
         self.assertFalse(h.has_dedicated_fusion)
 
     @parameterized.named_parameters(*_EVERY_ROW)
@@ -333,11 +354,11 @@ class SeamConformanceTest(parameterized.TestCase):
     def test_digest_accepts_a_tracer(
         self, cls: Callable[..., ByteHash], args: tuple[object, ...]
     ) -> None:
-        # The return type is what says a consumer may hash inside its own jit,
-        # and `has_dedicated_fusion` is False here — so this is the property
-        # that has to be asserted rather than read off the flag. The body is
-        # compiled here, so the length is kept to what the property needs: two
-        # blocks, the smallest input that pads and still chains.
+        # The return type is what says a consumer may hash inside its own jit —
+        # `fusion_path.is_traceable` merely restates it, so the property is
+        # asserted rather than read off the attribute. The body is compiled
+        # here, so the length is kept to what the property needs: two blocks,
+        # the smallest input that pads and still chains.
         #
         # Note the form. Value equality is a property of the *instance*, and a
         # bound method does not inherit it — CPython compares `__self__` by
@@ -354,10 +375,9 @@ class SeamConformanceTest(parameterized.TestCase):
     def test_a_host_row_returns_a_host_array(
         self, cls: Callable[..., ByteHash], args: tuple[object, ...]
     ) -> None:
-        # The mirror of the case above, and the only thing separating the two
-        # substrates here: every row reports `has_dedicated_fusion = False`, so
-        # what tells a consumer it may not hash inside its own jit is that this
-        # one hands back an `np.ndarray`.
+        # The mirror of the case above: what tells a consumer it may not hash
+        # inside its own jit is that this row hands back an `np.ndarray` — the
+        # return type stays the authority `fusion_path.is_traceable` answers to.
         self.assertIsInstance(cls(*args).digest(_rows(official_input(65))), np.ndarray)
 
 
