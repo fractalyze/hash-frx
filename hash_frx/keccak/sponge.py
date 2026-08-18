@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import frx
 import frx.numpy as fnp
@@ -128,6 +128,20 @@ def _absorb_squeeze(
     return unpack_le(fnp.concatenate(blocks, axis=-1))[:, :output_size]
 
 
+# A zone for the same reason `permutation._permute_body` is one, one level up:
+# `lax.composite` re-traces its decomposition on every emission, and this
+# marker's decomposition is the *whole* absorb and squeeze — every block's
+# permute, each of which emits its own marker in turn. Without a zone an eager
+# caller rebuilds all of it per call, which is 200-800x the generic path rather
+# than the win the marker exists to be (#151). `inline=True` splices the cached
+# jaxpr into the enclosing trace, so the emitted module is unchanged and a caller
+# that traces its own path pays nothing for this.
+#
+# `perm` is a static key for the reason `_permute_body` gives — the marker it
+# carries is not a function of its parameters, so a dedicated and a generic
+# instance would otherwise collide here — and `rate` / `output_size` are the
+# region's attributes and its loop bounds.
+@partial(frx.jit, static_argnames=("perm", "rate", "output_size"), inline=True)
 def _fused_hash(perm: KeccakF1600, padded: Array, rate: int, output_size: int) -> Array:
     """The padded absorb and the squeeze as ONE `hash_frx.keccak_sponge` region
     over a dedicated-fusion permutation. Caller gates on `has_dedicated_fusion`.
@@ -216,19 +230,33 @@ class KeccakSponge:
         # instance comes from.
         perm = KeccakF1600()
         if perm.has_dedicated_fusion:
-            return _fused_hash(perm, padded, self.rate, self.output_size)
+            return _fused_hash(
+                perm=perm,
+                padded=padded,
+                rate=self.rate,
+                output_size=self.output_size,
+            )
         return _absorb_squeeze(
             padded, self.rate, self.output_size, frx.vmap(perm.permute)
         )
 
 
-# Deliberately NOT wrapped in a module-level jit zone the way
-# `sha256.sha256_merkle_damgard` is. Measured both ways: a zone makes a repeated
-# eager call 20-31x faster warm, but its static key is the whole
-# `(rate, suffix, output_size, B, L)` shape, so it compiles per shape at ~0.5 s a
-# time — around 300 same-shape eager calls before it pays for itself, against
-# SHA-256's zone which is keyed on the block aval alone. The consumer that
-# motivates this hash traces its own path, where `inline=True` would make the
-# zone exactly neutral, and the batched device caller it is written for measured
-# 1.3x at B=1024. So the trade lands the wrong way here and the sponge stays a
-# plain body; `_permute_body` remains the one zone, shared by every block.
+# `hash` itself is deliberately NOT wrapped in a module-level jit zone the way
+# `sha256.sha256_merkle_damgard` is, and the marked path above is, so the two
+# decisions are worth separating.
+#
+# On the *generic* path a zone would make a repeated eager call 20-31x faster
+# warm, but its static key is the whole `(rate, suffix, output_size, B, L)` shape,
+# so it compiles per shape — around 300 same-shape eager calls before it pays for
+# itself, against SHA-256's zone which is keyed on the block aval alone. The
+# consumer that motivates this hash traces its own path, and the batched device
+# caller it is written for measured 1.3x at B=1024. So the trade lands the wrong
+# way there and that path stays a plain body over `_permute_body`'s zone.
+#
+# The *marked* path is not the same trade and was not covered by that reasoning.
+# Its per-call cost is not the block loop, it is re-tracing one composite whose
+# decomposition is the entire absorb and squeeze, which is three orders above the
+# generic body rather than 20-31x below it. The same compile therefore pays back
+# in about three calls instead of three hundred — the arithmetic did not change,
+# the path it was applied to did — so the zone lives on `_fused_hash` and this
+# note stays true of everything outside it.

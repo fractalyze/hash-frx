@@ -26,6 +26,7 @@ from absl.testing import absltest
 
 from hash_frx.fusion import FUSED_REGION_MARKER
 from hash_frx.keccak import permutation as permutation_mod
+from hash_frx.keccak import sponge as sponge_mod
 from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE_SUFFIX
 from hash_frx.keccak.sponge import (
     KECCAK_SPONGE_MARKER,
@@ -194,6 +195,65 @@ class WholeHashRoutingTest(absltest.TestCase):
             self.assertEqual(names, [KECCAK_SPONGE_MARKER])
         else:
             self.assertEqual(set(names), {FUSED_REGION_MARKER})
+
+
+class DedicatedRegionTraceCountTest(absltest.TestCase):
+    """The whole-hash region is built once per shape, not once per call.
+
+    `lax.composite` re-traces its decomposition on every emission, and this
+    marker's decomposition is the entire absorb and squeeze — so without a zone
+    an eager caller rebuilds all of it every call. That is not a slow path, it is
+    200-800x the generic one (#151), and no value test can see it: the bytes are
+    right either way and every published vector passes.
+
+    Counted rather than timed, so it fails on the property instead of on a
+    threshold that a loaded machine can trip.
+    """
+
+    def _builds(self, calls: int, hash_: KeccakSponge, msg: frx.Array) -> int:
+        """How many times `calls` eager hashes construct the marked region."""
+        built = 0
+        real = sponge_mod.fused_region_over
+
+        def counting(*args: Any, **kwargs: Any) -> Any:
+            nonlocal built
+            built += 1
+            return real(*args, **kwargs)
+
+        # The zone is module-level, so its cache outlives any one test and a
+        # sibling case may already hold this key. Cleared so the count is this
+        # test's own.
+        sponge_mod._fused_hash.clear_cache()
+        with (
+            _dedicated_emitter(),
+            mock.patch.object(sponge_mod, "fused_region_over", counting),
+        ):
+            for _ in range(calls):
+                hash_.hash(msg)
+        return built
+
+    def test_repeated_eager_calls_build_the_region_once(self) -> None:
+        self.assertEqual(self._builds(4, _SHA3_256, _message(1, 64)), 1)
+
+    def test_a_second_shape_builds_its_own(self) -> None:
+        """The key is the shape, so a different one is a different region —
+        which is what makes the count above a cache hit rather than a no-op."""
+        built = 0
+        real = sponge_mod.fused_region_over
+
+        def counting(*args: Any, **kwargs: Any) -> Any:
+            nonlocal built
+            built += 1
+            return real(*args, **kwargs)
+
+        sponge_mod._fused_hash.clear_cache()
+        with (
+            _dedicated_emitter(),
+            mock.patch.object(sponge_mod, "fused_region_over", counting),
+        ):
+            _SHA3_256.hash(_message(1, 64))
+            _SHA3_256.hash(_message(2, 64))
+        self.assertEqual(built, 2)
 
 
 class MarkerRecognizedTest(absltest.TestCase):
