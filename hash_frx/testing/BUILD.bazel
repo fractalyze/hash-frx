@@ -35,9 +35,10 @@ py_test(
     name = "markers_test",
     size = "small",
     srcs = ["markers_test.py"],
-    # GPU_PLUGIN_DEPS despite touching no device: importing `sha256` puts its
-    # round-constant table on the default backend at module load, and the cuda
-    # leg refuses to initialize without the plugin wheels in runfiles.
+    # GPU_PLUGIN_DEPS despite touching no device: importing `sha256` (its
+    # round-constant table) and `blake3.compress` (its IV words) puts arrays on
+    # the default backend at module load, and the cuda leg refuses to
+    # initialize without the plugin wheels in runfiles.
     deps = [
         "//hash_frx",
         "//hash_frx:markers",

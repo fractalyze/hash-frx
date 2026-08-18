@@ -26,7 +26,12 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath, fused_region
+from hash_frx.fusion import (
+    FUSED_REGION_MARKER,
+    FusionPath,
+    fused_region,
+    inert_region_spec,
+)
 from hash_frx.poseidon2.linear import (
     apply_external_m4,
     apply_internal,
@@ -93,12 +98,8 @@ class Poseidon2:
         )
         # Dedicated == permute lowers to a hash-named marker, not the generic
         # region one (which a vendor can't route, so a whole-region composite
-        # around it is unexpandable). Derived from the marker choice itself so the
-        # three can't drift if `_select_fused_region_name` grows another case;
-        # never HOST — a permutation is a device function by construction.
-        self.fusion_path = (
-            FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC
-        )
+        # around it is unexpandable).
+        self.fusion_path = FusionPath.from_marker(name)
         self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def __eq__(self, other: object) -> bool:
@@ -152,10 +153,9 @@ class Poseidon2:
         """The Poseidon2Fusion ABI: operands `(leading, *round_constants)`, the
         M4-external + internal-diffusion permute, and attrs whose `external_m4`
         names the M4. Dedicated path only (which implies M4-structured);
-        otherwise an inert stub (non-dedicated, so consumers never route a
-        whole-region composite through it)."""
+        otherwise the shared inert stub."""
         if not self.fusion_path.is_one_kernel:
-            return (leading,), (lambda state, *_ops: self.permute(state)), {}
+            return inert_region_spec(self, leading)
         p = self._p
         attrs: dict[str, Any] = {
             "permutation": "poseidon2",

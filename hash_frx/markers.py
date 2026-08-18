@@ -22,7 +22,11 @@ stage cross-repo rather than riding a hash-frx change alone.
 The registry restates each emitting module's constants as literals instead of
 importing them, so reading it stays free of every hash's dependencies (frx, the
 `blake3` binding); `markers_test` holds every row equal to its module constant
-and the enumeration complete, which is where drift is caught.
+and the enumeration complete, which is where drift is caught. The inversion —
+emitting modules importing their names from here — would de-duplicate too, but
+a marker's name and version belong beside its emitter: the version constants
+carry their contract-change notes at the emission site, which a central file
+would strand.
 
 `zorch.fused_region` and the other `zorch.*` markers are deliberately absent:
 they are generic regions the `zorch` repos own, not hashes this package does.

@@ -61,6 +61,14 @@ class MatrixFactsTest(absltest.TestCase):
                 # on, so the backend half is what decides.
                 self.assertTrue(module._DEDICATED_EMITTER_AVAILABLE)
 
+    def test_the_enum_property_table(self) -> None:
+        # Pinned once; the per-impl cases below assert only the member, since
+        # `is_one_kernel` / `is_traceable` are functions of the enum alone.
+        self.assertEqual(
+            [(p.is_one_kernel, p.is_traceable) for p in FusionPath],
+            [(True, True), (False, True), (False, False)],
+        )
+
 
 class DeviceCellTest(absltest.TestCase):
     def test_this_leg_reads_its_cell(self) -> None:
@@ -78,7 +86,6 @@ class DeviceCellTest(absltest.TestCase):
                     FusionPath.DEDICATED if backend in backends else FusionPath.GENERIC
                 )
                 self.assertIs(impl.fusion_path, expected)
-                self.assertTrue(impl.fusion_path.is_traceable)
                 self.assertEqual(
                     impl.has_dedicated_fusion, impl.fusion_path.is_one_kernel
                 )
@@ -86,9 +93,12 @@ class DeviceCellTest(absltest.TestCase):
     def test_an_absent_backend_reads_generic_not_host(self) -> None:
         # The Metal-shaped cell: a device hash on a backend without the arm is
         # still a device hash — traceable, un-fused — and collapsing it into
-        # HOST is the exact conflation the three-state enum retires.
+        # HOST is the exact conflation the three-state enum retires. Keccak is
+        # absent from the loop: its family gate test
+        # (`keccak.testing.permutation_test.EmitterGateTest`) already owns the
+        # backend-veto mock; these three families have no gate test of their
+        # own.
         for module, build in (
-            (keccak_perm_mod, KeccakF1600),
             (poseidon2_mod, koalabear16_perm),
             (sha256_mod, Sha256),
             (blake3_rows, Blake3),
@@ -97,7 +107,6 @@ class DeviceCellTest(absltest.TestCase):
                 with mock.patch.object(module, "_EMITTER_BACKENDS", ("nonesuch",)):
                     impl = build()
                 self.assertIs(impl.fusion_path, FusionPath.GENERIC)
-                self.assertTrue(impl.fusion_path.is_traceable)
                 self.assertFalse(impl.has_dedicated_fusion)
 
 
@@ -106,7 +115,6 @@ class HostCellTest(absltest.TestCase):
         for row in (HostSha256(), HostSha3_256(), HostBlake3()):
             with self.subTest(row=type(row).__name__):
                 self.assertIs(row.fusion_path, FusionPath.HOST)
-                self.assertFalse(row.fusion_path.is_traceable)
                 self.assertFalse(row.has_dedicated_fusion)
 
 

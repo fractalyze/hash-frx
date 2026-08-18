@@ -30,7 +30,12 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath, fused_region
+from hash_frx.fusion import (
+    FUSED_REGION_MARKER,
+    FusionPath,
+    fused_region,
+    inert_region_spec,
+)
 from hash_frx.linear import apply_matrix
 from hash_frx.poseidon.params import PoseidonParams
 
@@ -93,12 +98,7 @@ class Poseidon:
             name,
             POSEIDON_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
         )
-        # Derived from the marker rather than asserted alongside it, so the
-        # three cannot drift (mirrors Poseidon2 and SparsePoseidon); never HOST
-        # — a permutation is a device function by construction.
-        self.fusion_path = (
-            FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC
-        )
+        self.fusion_path = FusionPath.from_marker(name)
         self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def __eq__(self, other: object) -> bool:
@@ -132,10 +132,9 @@ class Poseidon:
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
         """The classic-Poseidon ABI: operands `(leading, round_constants)`, the
         full/partial/full dense-MDS permute, and attrs whose `mds` names the linear
-        layer. Dedicated path only; otherwise an inert stub (non-dedicated, so
-        consumers never route a whole-region composite through it)."""
+        layer. Dedicated path only; otherwise the shared inert stub."""
         if not self.fusion_path.is_one_kernel:
-            return (leading,), (lambda state, *_ops: self.permute(state)), {}
+            return inert_region_spec(self, leading)
         return (
             (leading, self._p.round_constants.reshape(-1)),
             partial(_permute_from_rc, self),

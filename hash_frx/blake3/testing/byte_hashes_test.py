@@ -271,15 +271,11 @@ class SeamConformanceTest(parameterized.TestCase):
     def test_a_device_row_derives_its_path_from_the_backend(
         self, cls: Callable[..., ByteHash], args: tuple[object, ...]
     ) -> None:
-        # The expectation is spelled from the backend here rather than read off
-        # the module switch it derives from: the flag sat hardcoded False for
-        # two pins after the emitter shipped (xla#499/#507), and only an
-        # independent spelling notices the next hardcode.
-        expected = (
-            FusionPath.DEDICATED
-            if frx.default_backend() in ("cpu", "gpu")
-            else FusionPath.GENERIC
-        )
+        # Pinned against the shipped switch rather than a backend tuple of its
+        # own: re-hardcode detection lives with the central matrix
+        # (`testing.fusion_path_test.MatrixFactsTest`), so a third spelling of
+        # the tuple here would only add an edit site.
+        expected = FusionPath.from_routing(HAS_BLAKE3_EMITTER)
         h = cls(*args)
         self.assertIs(h.fusion_path, expected)
         self.assertEqual(h.has_dedicated_fusion, h.fusion_path.is_one_kernel)

@@ -543,11 +543,7 @@ class Sha256:
         # Read per instance rather than pinned on the class: the emitter switch
         # is a property of the pin and the backend, and a value read at import
         # would pin the answer before anything could vary it.
-        self.fusion_path = (
-            FusionPath.DEDICATED
-            if _routes_to_dedicated_emitter()
-            else FusionPath.GENERIC
-        )
+        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
         self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def digest(self, msg: ArrayLike) -> Array:

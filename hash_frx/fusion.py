@@ -87,6 +87,22 @@ class FusionPath(enum.Enum):
     GENERIC = "generic"
     HOST = "host"
 
+    @classmethod
+    def from_marker(cls, name: str) -> "FusionPath":
+        """The device path a marker choice implies: a hash-named marker is one
+        kernel, the generic region marker is not. Never `HOST` — a marker
+        emitter is a device function by construction — and deriving the path
+        from the marker actually chosen is what keeps the two from drifting
+        when a routing gate grows another case."""
+        return cls.DEDICATED if name != FUSED_REGION_MARKER else cls.GENERIC
+
+    @classmethod
+    def from_routing(cls, routed: bool) -> "FusionPath":
+        """The device path an emitter switch implies, for a hash whose marker
+        name never varies (`routed` = the pin *and* the backend carry the
+        dedicated emitter). Never `HOST`, as `from_marker` states."""
+        return cls.DEDICATED if routed else cls.GENERIC
+
     @property
     def is_one_kernel(self) -> bool:
         """Whether one call lowers to one device unit — the gate for wrapping a
@@ -130,6 +146,19 @@ def fused_region(
     unchanged.
     """
     return composite(decomposition, *operands, name=name, version=version, **attrs)
+
+
+def inert_region_spec(
+    perm: "Permutation", leading: Array
+) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+    """What `fused_region_spec` returns on the generic path: the leading
+    operand alone, a permute that ignores the (absent) ABI constants, and no
+    attrs. Every non-dedicated permutation answers identically — consumers
+    gate on `fusion_path.is_one_kernel` and never route a whole-region
+    composite through it, so the spec only has to be shaped right, never
+    emitter-readable — which is why the stub lives here rather than once per
+    implementation."""
+    return (leading,), (lambda state, *_ops: perm.permute(state)), {}
 
 
 def fused_region_over(
