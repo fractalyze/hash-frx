@@ -120,7 +120,6 @@ class _Blake3Hash:
         # pin the answer before anything could vary it (`_KeccakHash` states
         # the same rule).
         self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
-        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def _read(self, msg: ArrayLike) -> Array:
         raise NotImplementedError
@@ -225,7 +224,6 @@ class _HostBlake3Hash:
     """
 
     fusion_path = FusionPath.HOST
-    has_dedicated_fusion = False
 
     def __init__(self, output_size: int = blake3.DIGEST_LEN) -> None:
         if output_size < 1:

@@ -24,7 +24,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
-from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.keccak import permutation as permutation_mod
 from hash_frx.keccak.permutation import (
     KECCAK_F_MARKER,
@@ -251,7 +251,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # what says the marker claims nothing an emitter could read.
         with _generic_emitter():
             k = KeccakF1600()
-            self.assertFalse(k.has_dedicated_fusion)
+            self.assertIs(k.fusion_path, FusionPath.GENERIC)
             self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
             eqn = _composite(k.permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
@@ -328,12 +328,15 @@ class EmitterGateTest(absltest.TestCase):
             "premise: this asserts the backend half is what decides, so the pin "
             "half has to be True for the case to mean anything",
         )
-        self.assertEqual(KeccakF1600().has_dedicated_fusion, _HAS_KECCAK_EMITTER)
+        self.assertIs(
+            KeccakF1600().fusion_path,
+            FusionPath.DEDICATED if _HAS_KECCAK_EMITTER else FusionPath.GENERIC,
+        )
 
     def test_a_backend_without_an_arm_takes_the_generic_marker(self) -> None:
         with mock.patch.object(permutation_mod, "_EMITTER_BACKENDS", ("nonesuch",)):
             perm = KeccakF1600()
-        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
         self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
 
     def test_the_pin_still_vetoes_a_backend_that_has_the_arm(self) -> None:
@@ -344,14 +347,14 @@ class EmitterGateTest(absltest.TestCase):
             mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False),
         ):
             perm = KeccakF1600()
-        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
 
     def test_both_halves_true_is_what_routes_dedicated(self) -> None:
         with mock.patch.object(
             permutation_mod, "_EMITTER_BACKENDS", (frx.default_backend(),)
         ):
             perm = KeccakF1600()
-        self.assertTrue(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.DEDICATED)
         self.assertEqual(
             perm.fused_region_marker, (KECCAK_F_MARKER, KECCAK_F_MARKER_VERSION)
         )

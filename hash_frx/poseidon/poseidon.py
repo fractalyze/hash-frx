@@ -99,7 +99,6 @@ class Poseidon:
             POSEIDON_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
         )
         self.fusion_path = FusionPath.from_marker(name)
-        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux

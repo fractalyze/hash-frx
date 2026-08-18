@@ -33,6 +33,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.byte_hash import ByteHash
+from hash_frx.fusion import FusionPath
 from hash_frx.keccak import permutation as permutation_mod
 from hash_frx.keccak.byte_hashes import (
     SHA3_256_RATE,
@@ -229,7 +230,10 @@ class SeamConformanceTest(absltest.TestCase):
             Keccak256(),
         ):
             with self.subTest(device=type(device).__name__):
-                self.assertEqual(device.has_dedicated_fusion, expected)
+                self.assertIs(
+                    device.fusion_path,
+                    FusionPath.DEDICATED if expected else FusionPath.GENERIC,
+                )
         for host in (
             HostSha3_256(),
             HostSha3_512(),
@@ -237,7 +241,7 @@ class SeamConformanceTest(absltest.TestCase):
             HostShake256(32),
         ):
             with self.subTest(host=type(host).__name__):
-                self.assertFalse(host.has_dedicated_fusion)
+                self.assertIs(host.fusion_path, FusionPath.HOST)
 
     def test_digest_size_matches_what_digest_returns(self) -> None:
         msg = _message(64)

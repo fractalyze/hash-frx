@@ -84,11 +84,6 @@ class Compression:
         no hash."""
         return self._permutation.fusion_path
 
-    @property
-    def has_dedicated_fusion(self) -> bool:
-        """Compat alias for `fusion_path.is_one_kernel` (see the seam)."""
-        return self._permutation.has_dedicated_fusion
-
     def compress(self, inputs: Array) -> Array:
         """Compress `arity` chunks into one: (arity, chunk) over dtype -> (chunk,)."""
         if inputs.shape != (self.arity, self.chunk):

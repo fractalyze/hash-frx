@@ -278,7 +278,6 @@ class SeamConformanceTest(parameterized.TestCase):
         expected = FusionPath.from_routing(HAS_BLAKE3_EMITTER)
         h = cls(*args)
         self.assertIs(h.fusion_path, expected)
-        self.assertEqual(h.has_dedicated_fusion, h.fusion_path.is_one_kernel)
 
     @parameterized.named_parameters(*_HOST_ROWS)
     def test_a_host_row_is_host_on_every_backend(
@@ -286,7 +285,6 @@ class SeamConformanceTest(parameterized.TestCase):
     ) -> None:
         h = cls(*args)
         self.assertIs(h.fusion_path, FusionPath.HOST)
-        self.assertFalse(h.has_dedicated_fusion)
 
     @parameterized.named_parameters(*_EVERY_ROW)
     def test_digest_size_matches_what_digest_returns(

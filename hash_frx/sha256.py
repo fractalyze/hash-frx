@@ -544,7 +544,6 @@ class Sha256:
         # is a property of the pin and the backend, and a value read at import
         # would pin the answer before anything could vary it.
         self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
-        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
@@ -580,7 +579,6 @@ class HostSha256:
     # The one legitimate class constant of the taxonomy: a host row is HOST on
     # every backend, so nothing here varies with the pin.
     fusion_path = FusionPath.HOST
-    has_dedicated_fusion = False
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(

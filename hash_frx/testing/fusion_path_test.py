@@ -86,9 +86,6 @@ class DeviceCellTest(absltest.TestCase):
                     FusionPath.DEDICATED if backend in backends else FusionPath.GENERIC
                 )
                 self.assertIs(impl.fusion_path, expected)
-                self.assertEqual(
-                    impl.has_dedicated_fusion, impl.fusion_path.is_one_kernel
-                )
 
     def test_an_absent_backend_reads_generic_not_host(self) -> None:
         # The Metal-shaped cell: a device hash on a backend without the arm is
@@ -107,7 +104,6 @@ class DeviceCellTest(absltest.TestCase):
                 with mock.patch.object(module, "_EMITTER_BACKENDS", ("nonesuch",)):
                     impl = build()
                 self.assertIs(impl.fusion_path, FusionPath.GENERIC)
-                self.assertFalse(impl.has_dedicated_fusion)
 
 
 class HostCellTest(absltest.TestCase):
@@ -115,7 +111,6 @@ class HostCellTest(absltest.TestCase):
         for row in (HostSha256(), HostSha3_256(), HostBlake3()):
             with self.subTest(row=type(row).__name__):
                 self.assertIs(row.fusion_path, FusionPath.HOST)
-                self.assertFalse(row.has_dedicated_fusion)
 
 
 class ConstructionDelegationTest(absltest.TestCase):
@@ -128,7 +123,6 @@ class ConstructionDelegationTest(absltest.TestCase):
         ):
             with self.subTest(construction=type(c).__name__):
                 self.assertIs(c.fusion_path, perm.fusion_path)
-                self.assertEqual(c.has_dedicated_fusion, c.fusion_path.is_one_kernel)
 
 
 class TraceabilityTest(absltest.TestCase):

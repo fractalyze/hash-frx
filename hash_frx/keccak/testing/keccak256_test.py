@@ -27,6 +27,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.byte_hash import ByteHash
+from hash_frx.fusion import FusionPath
 from hash_frx.keccak import permutation as permutation_mod
 from hash_frx.keccak.byte_hashes import (
     KECCAK256_RATE,
@@ -116,11 +117,15 @@ class SeamConformanceTest(absltest.TestCase):
         # Keccak-256 differs from SHA3-256 in one padding byte and nothing else,
         # so it rides the same sponge marker and answers whatever this leg can
         # reach — the emitters are GPU-only. The host row never lowers.
-        self.assertEqual(
-            Keccak256().has_dedicated_fusion,
-            permutation_mod._routes_to_dedicated_emitter(),
+        self.assertIs(
+            Keccak256().fusion_path,
+            (
+                FusionPath.DEDICATED
+                if permutation_mod._routes_to_dedicated_emitter()
+                else FusionPath.GENERIC
+            ),
         )
-        self.assertFalse(HostKeccak256().has_dedicated_fusion)
+        self.assertIs(HostKeccak256().fusion_path, FusionPath.HOST)
 
     def test_value_identity_keeps_the_seam_re_trace_safe(self) -> None:
         self.assertEqual(Keccak256(), Keccak256())

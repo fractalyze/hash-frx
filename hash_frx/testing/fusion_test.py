@@ -57,7 +57,6 @@ class _StubPerm:
     width = 8
     dtype = F
     fusion_path = FusionPath.DEDICATED
-    has_dedicated_fusion = True
     fused_region_marker = ("hash_frx.stub", 1)
 
     def permute(self, state: Array) -> Array:

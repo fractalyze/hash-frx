@@ -53,11 +53,6 @@ class Permutation(Protocol):
     # construction, because the emitter switch is a property of the pin and the
     # backend rather than of the hash.
     fusion_path: FusionPath
-    # Compat alias for `fusion_path.is_one_kernel`, kept because downstream
-    # consumers gate on it by this name. A plain attribute (the seam types it
-    # so a fake can be a bare class); implementations derive it beside
-    # `fusion_path` at the same assignment site, so the two cannot drift.
-    has_dedicated_fusion: bool
     # The composite name + version `permute`'s marker carries — what a consumer
     # needs to RE-MARK a permute inside its own composite decomposition (a duplex
     # absorb chain is one), so that if the enclosing composite inlines, its
@@ -69,8 +64,7 @@ class Permutation(Protocol):
     # contract change stages through `composite.version` rather than a rename (see
     # `hash_frx.fusion`), so a consumer holding the name alone can re-mark against
     # a stale contract. An undedicated permutation reports the generic marker at
-    # version 0, which is what `fusion_path` (and its `has_dedicated_fusion`
-    # alias) is read off.
+    # version 0, which is what `fusion_path` is read off.
     fused_region_marker: tuple[str, int]
 
     def permute(self, state: Array) -> Array:

@@ -95,11 +95,6 @@ class DuplexSponge:
         expandable composite. Delegates to the permutation; names no hash."""
         return self._permutation.fusion_path
 
-    @property
-    def has_dedicated_fusion(self) -> bool:
-        """Compat alias for `fusion_path.is_one_kernel` (see the seam)."""
-        return self._permutation.has_dedicated_fusion
-
     def _with(self, *, state: Array, mode: str, pos: int) -> "DuplexSponge":
         new = object.__new__(DuplexSponge)
         new._permutation = self._permutation

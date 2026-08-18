@@ -35,6 +35,7 @@ py_test(
     srcs = ["byte_hashes_test.py"],
     deps = [
         "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
         "//hash_frx/keccak",
         requirement("absl_py"),
         requirement("frx"),
@@ -106,6 +107,7 @@ py_test(
     deps = [
         ":host_keccak256",
         "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
         "//hash_frx/keccak",
         requirement("absl_py"),
         requirement("frx"),

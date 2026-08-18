@@ -130,8 +130,7 @@ class SparsePoseidon:
             POSEIDON_SPARSE_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
         )
         self.fusion_path = FusionPath.from_marker(name)
-        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
-        if self.has_dedicated_fusion:
+        if self.fusion_path.is_one_kernel:
             (
                 self._mds_rows,
                 self._transition_rows,
@@ -329,7 +328,7 @@ def _marker_attrs(perm: "SparsePoseidon") -> dict[str, object]:
     permutation, so no `permutation` discriminator here (that rides only in
     `fused_region_spec`, where a region could wrap any permutation). The body
     ignores these (metadata only); the generic marker stays attrs-free."""
-    if not perm.has_dedicated_fusion:
+    if not perm.fusion_path.is_one_kernel:
         return {}
     p = perm._p
     return {
@@ -352,7 +351,7 @@ def _marker_attrs(perm: "SparsePoseidon") -> dict[str, object]:
 @partial(frx.jit, static_argnames=("perm",), inline=True)
 def _permute_body(perm: SparsePoseidon, state: Array) -> Array:
     # `perm` is static, so this branch resolves at trace time (no HLO select).
-    if not perm.has_dedicated_fusion:
+    if not perm.fusion_path.is_one_kernel:
 
         def decomposition(s: Array) -> Array:
             return _permute_from_params(perm, s)

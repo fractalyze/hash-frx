@@ -122,7 +122,6 @@ class _KeccakHash:
         # import would pin the answer before anything could vary it. The seam
         # types both as plain attributes, so neither can be a read-only property.
         self.fusion_path = KeccakF1600().fusion_path
-        self.has_dedicated_fusion = self.fusion_path.is_one_kernel
 
     def digest(self, msg: ArrayLike) -> Array:
         return self._sponge.hash(msg)
@@ -210,7 +209,6 @@ class _HostKeccak:
     """
 
     fusion_path = FusionPath.HOST
-    has_dedicated_fusion = False
 
     def __init__(self, digest_size: int) -> None:
         self.digest_size = digest_size

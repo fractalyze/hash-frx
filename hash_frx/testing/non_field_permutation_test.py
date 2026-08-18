@@ -59,7 +59,6 @@ class _WordPerm:
     width = _WIDTH
     dtype = fnp.uint32
     fusion_path = FusionPath.GENERIC
-    has_dedicated_fusion = False
     fused_region_marker = (FUSED_REGION_MARKER, 0)
 
     def permute(self, state: Array) -> Array:

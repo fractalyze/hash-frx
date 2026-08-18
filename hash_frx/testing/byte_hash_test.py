@@ -29,7 +29,6 @@ class _ByteHashDouble:
 
     digest_size = 32
     fusion_path = FusionPath.HOST
-    has_dedicated_fusion = False
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return np.zeros((np.asarray(msg).shape[0], self.digest_size), dtype=np.uint8)
@@ -53,7 +52,7 @@ class ByteHashProtocolTest(absltest.TestCase):
     def test_fusion_flag_is_the_substrate_axis(self) -> None:
         # The seam's whole point: substrate lives on the hash as a value, not in a
         # class name a consumer would have to branch on.
-        self.assertIsInstance(_ByteHashDouble().has_dedicated_fusion, bool)
+        self.assertIsInstance(_ByteHashDouble().fusion_path, FusionPath)
 
     def test_value_identity_keeps_the_seam_re_trace_safe(self) -> None:
         # A param-free hash compares by type, so two freshly built instances are
