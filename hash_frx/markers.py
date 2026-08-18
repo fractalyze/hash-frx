@@ -17,13 +17,14 @@ at all — each step is a ``PERM``. Three kinds cover every kernel:
   in. `hash_frx.sponge_hash` (the field sponge) sits here too — field-level
   rather than byte-level, but a whole hash all the same.
 
-**Namespace rule.** A *new* marker is born ``hash_frx.<kind>.<name>``:
+**Namespace rule.** Every marker is spelled ``hash_frx.<kind>.<name>``:
 ``hash_frx.perm.*`` / ``hash_frx.compress.*`` / ``hash_frx.digest.*``
 (``compress`` rather than ``comp``, which would read as "composite"). The rows
-below keep their pre-namespace spellings because a marker name is a wire ABI
-(`hash_frx.fusion`): renaming one requires the Fractalyze XLA recognizer to
-accept both spellings first, so the renames stage cross-repo — #165 carries
-the old→new map — rather than riding a hash-frx change alone.
+below carry the namespaced spellings; the pre-namespace spellings stayed on
+the wire until the pinned Fractalyze XLA recognizers accepted both — a marker
+name is a wire ABI (`hash_frx.fusion`), so the rename staged behind
+dual-spelling recognition (#165, which also tracks retiring the old
+spellings once every producer has flipped).
 
 The registry restates each emitting module's constants as literals instead of
 importing them, so reading it stays free of every hash's dependencies (frx, the
@@ -66,16 +67,17 @@ class Marker(NamedTuple):
 
 MARKERS: tuple[Marker, ...] = (
     # Permutations — one marked region per permute.
-    Marker("hash_frx.poseidon", 1, MarkerKind.PERM),
-    Marker("hash_frx.sparse_poseidon", 2, MarkerKind.PERM),
-    Marker("hash_frx.poseidon2", 2, MarkerKind.PERM),
-    Marker("hash_frx.keccak_f", 1, MarkerKind.PERM),
-    # Compression functions — BLAKE3's node-level units.
-    Marker("hash_frx.blake3_parent", 1, MarkerKind.COMPRESS),
-    Marker("hash_frx.blake3_compress", 1, MarkerKind.COMPRESS),
+    Marker("hash_frx.perm.poseidon", 1, MarkerKind.PERM),
+    Marker("hash_frx.perm.poseidon_sparse", 2, MarkerKind.PERM),
+    Marker("hash_frx.perm.poseidon2", 2, MarkerKind.PERM),
+    Marker("hash_frx.perm.keccak_f", 1, MarkerKind.PERM),
+    # Compression functions — BLAKE3's node-level units (the streaming one is
+    # the bare family name; the namespace already says "compression").
+    Marker("hash_frx.compress.blake3_parent", 1, MarkerKind.COMPRESS),
+    Marker("hash_frx.compress.blake3", 1, MarkerKind.COMPRESS),
     # Whole hashes — the construction's entire chain behind one call.
-    Marker("hash_frx.sha256", 1, MarkerKind.DIGEST),
-    Marker("hash_frx.keccak_sponge", 1, MarkerKind.DIGEST),
-    Marker("hash_frx.blake3", 1, MarkerKind.DIGEST),
-    Marker("hash_frx.sponge_hash", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.digest.sha256", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.digest.keccak_sponge", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.digest.blake3", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.digest.field_sponge", 1, MarkerKind.DIGEST),
 )

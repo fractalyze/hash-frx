@@ -77,31 +77,33 @@ element-wise body only: no loop, reduction, gather, dynamic index, or call. That
 constraint is what shapes the code — the authoring rules it forces are in
 [`reference/conventions.md`](reference/conventions.md#a-marked-body-is-authored-to-lower-not-to-read).
 
-**Name-routed** — `hash_frx.poseidon`, `hash_frx.sparse_poseidon`,
-`hash_frx.poseidon2`, `hash_frx.sha256`, `hash_frx.sponge_hash`,
-`hash_frx.blake3`, `hash_frx.blake3_compress`, `hash_frx.keccak_f`,
-`hash_frx.keccak_sponge`. Each goes to a
+**Name-routed** — spelled `hash_frx.<kind>.<name>` by fusible-unit kind:
+`hash_frx.perm.{poseidon, poseidon_sparse, poseidon2, keccak_f}`,
+`hash_frx.compress.{blake3, blake3_parent}`, and
+`hash_frx.digest.{sha256, field_sponge, keccak_sponge, blake3}`
+(`hash_frx/markers.py` is the registry). Each goes to a
 dedicated emitter that owns its own operand ABI and, unlike the generic path,
-tolerates reductions and calls.
+tolerates reductions and calls; the recognizers also still accept the
+pre-namespace spellings until they retire.
 
-Two of them wrap a whole hash rather than one primitive — `hash_frx.sponge_hash`
-over the field sponge, `hash_frx.keccak_sponge` over the byte one — and both are
+Two of them wrap a whole hash rather than one primitive — `hash_frx.digest.field_sponge`
+over the field sponge, `hash_frx.digest.keccak_sponge` over the byte one — and both are
 assembled by `fused_region_over`, which rebuilds the permute from the operand
 layout `fused_region_spec` hands out. That is what keeps a construction from
 naming the permutation's constants, and what makes a whole absorb one region
 instead of a marked permute per block with the glue between them left outside.
 
 The markers wait for the toolchain in two different ways, because the cost of
-being early is not the same for both. `hash_frx.blake3` and `hash_frx.sha256`
+being early is not the same for both. `hash_frx.digest.blake3` and `hash_frx.digest.sha256`
 are emitted whether or not the pinned plugin recognizes the name: an
 unrecognized *name* only inlines, so being early costs the fusion and nothing
 else, and the hash reports `fusion_path = GENERIC` while carrying its marker.
-`hash_frx.keccak_f` is emitted only where the plugin ships its emitter — off
+`hash_frx.perm.keccak_f` is emitted only where the plugin ships its emitter — off
 the pin *and* the backend, the Keccak arms being GPU-only — and the `frx>=`
 floor in `pyproject.toml` is what holds the pin half true. That switch has to
 track the pin rather than be left optimistic, because a permutation's marker
 also decides whether a `Sponge` over it wraps its whole hash as
-`hash_frx.sponge_hash` — and that marker carries a `permutation` discriminator
+`hash_frx.digest.field_sponge` — and that marker carries a `permutation` discriminator
 a plugin without the arm rejects outright, which is a failed compile rather
 than a lost kernel.
 

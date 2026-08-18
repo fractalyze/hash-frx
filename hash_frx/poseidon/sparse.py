@@ -62,7 +62,7 @@ from hash_frx.poseidon.params import SparsePoseidonParams
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
 
-POSEIDON_SPARSE_MARKER = "hash_frx.sparse_poseidon"
+POSEIDON_SPARSE_MARKER = "hash_frx.perm.poseidon_sparse"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker. Version 2

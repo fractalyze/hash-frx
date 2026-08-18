@@ -45,7 +45,7 @@ class SpongeType(enum.Enum):
 # The whole absorb+squeeze as one region the vendor expands into the fused kernel.
 # Attrs carry a `permutation` discriminator + shape; the kernel reads the absorb
 # length at runtime, so one cubin serves every width and symbolic `n`.
-SPONGE_HASH_MARKER = "hash_frx.sponge_hash"
+SPONGE_HASH_MARKER = "hash_frx.digest.field_sponge"
 SPONGE_HASH_MARKER_VERSION = 1
 
 

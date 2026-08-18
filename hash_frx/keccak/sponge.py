@@ -57,7 +57,7 @@ U32 = fnp.uint32
 # neither (bytes rather than field elements, XOR rather than overwrite, an
 # iterated squeeze rather than a truncation). Reusing it would re-merge what the
 # module docstring keeps apart.
-KECCAK_SPONGE_MARKER = "hash_frx.keccak_sponge"
+KECCAK_SPONGE_MARKER = "hash_frx.digest.keccak_sponge"
 KECCAK_SPONGE_MARKER_VERSION = 1
 
 
