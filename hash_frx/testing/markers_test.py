@@ -25,6 +25,7 @@ from hash_frx.markers import (
     DIGEST_NAMESPACE,
     MARKERS,
     PERM_NAMESPACE,
+    MarkerKind,
 )
 from hash_frx.poseidon import poseidon, sparse
 from hash_frx.poseidon2 import poseidon2
@@ -76,14 +77,18 @@ class MarkerRegistryTest(absltest.TestCase):
             found |= set(pattern.findall(path.read_text()))
         self.assertEqual(found, {m.name for m in MARKERS})
 
-    def test_the_namespaces_are_where_new_markers_are_born(self) -> None:
-        # No row carries a namespace yet — the renames stage behind
-        # dual-spelling recognition in Fractalyze XLA — so the namespaces exist
-        # here only as the rule for new names, and a row adopting one is a
-        # wire-ABI event this pin makes deliberate.
+    def test_every_row_is_spelled_in_its_kinds_namespace(self) -> None:
+        # The inverse of the pre-flip pin: every row now carries the namespace
+        # its kind names, so a marker landing outside its namespace — or a
+        # kind disagreeing with the spelling — is the wire-ABI drift this
+        # catches.
+        namespace_of = {
+            MarkerKind.PERM: PERM_NAMESPACE,
+            MarkerKind.COMPRESS: COMPRESS_NAMESPACE,
+            MarkerKind.DIGEST: DIGEST_NAMESPACE,
+        }
         for marker in MARKERS:
-            for namespace in (PERM_NAMESPACE, COMPRESS_NAMESPACE, DIGEST_NAMESPACE):
-                self.assertFalse(marker.name.startswith(namespace))
+            self.assertStartsWith(marker.name, namespace_of[marker.kind])
 
 
 if __name__ == "__main__":

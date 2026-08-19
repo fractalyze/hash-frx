@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 U32 = fnp.uint32
 
-SHA256_MARKER = "hash_frx.sha256"
+SHA256_MARKER = "hash_frx.digest.sha256"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it lets a
 # future contract change be staged without renaming the marker (cf. POSEIDON2).

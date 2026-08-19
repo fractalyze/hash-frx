@@ -52,7 +52,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         assert_single_trace(self, _permute_body, calls)
 
     def test_permute_emits_poseidon2_named_composite(self) -> None:
-        # The standard-MDS permute marks its region "hash_frx.poseidon2" so XLA
+        # The standard-MDS permute marks its region "hash_frx.perm.poseidon2" so XLA
         # routes it to the dedicated Poseidon2Fusion emitter; the permutation
         # shape rides as composite.attributes — all four ints are required by
         # the XLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.

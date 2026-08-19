@@ -42,7 +42,7 @@ from hash_frx.poseidon.params import PoseidonParams
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
 
-POSEIDON_MARKER = "hash_frx.poseidon"
+POSEIDON_MARKER = "hash_frx.perm.poseidon"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.

@@ -72,7 +72,7 @@ from hash_frx.word import pack_le, unpack_le
 
 U32 = fnp.uint32
 
-BLAKE3_MARKER = "hash_frx.blake3"
+BLAKE3_MARKER = "hash_frx.digest.blake3"
 # Marker revision riding as `composite.version`, the way `hash_frx.sha256`
 # carries one: a contract change stages through it rather than through a rename,
 # which the recognizer would not accept and which would silently lose fusion.
@@ -92,7 +92,7 @@ BLAKE3_MARKER_VERSION = 1
 # has no such failure: the composite inlines and the bytes stay right while
 # only fusion is lost (see `fusion.py`), so a new name degrades safely where a
 # new attribute degrades wrongly.
-BLAKE3_PARENT_MARKER = "hash_frx.blake3_parent"
+BLAKE3_PARENT_MARKER = "hash_frx.compress.blake3_parent"
 BLAKE3_PARENT_MARKER_VERSION = 1
 
 # The compression on its own, for the one consumer the two markers above cannot
@@ -104,7 +104,7 @@ BLAKE3_PARENT_MARKER_VERSION = 1
 # none because its state *is* the permutation's, so streaming rides
 # `hash_frx.keccak_f`. BLAKE3 is the only row here whose existing marker
 # granularity a streaming consumer cannot hit, which is what this closes.
-BLAKE3_COMPRESS_MARKER = "hash_frx.blake3_compress"
+BLAKE3_COMPRESS_MARKER = "hash_frx.compress.blake3"
 BLAKE3_COMPRESS_MARKER_VERSION = 1
 
 BLOCK_LEN = 64

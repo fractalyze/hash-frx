@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 # rho's offsets as a (5, 5) [y][x] constant, matching the grid.
 _ROT = np.asarray(ROTATION_OFFSETS, dtype=np.uint32).reshape(5, 5)
 
-KECCAK_F_MARKER = "hash_frx.keccak_f"
+KECCAK_F_MARKER = "hash_frx.perm.keccak_f"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI
 # below. XLA recognizes the marker by name + attributes and deliberately does not
 # gate on the version, which exists so a contract change can stage without a
