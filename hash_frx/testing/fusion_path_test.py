@@ -23,6 +23,7 @@ import numpy as np
 from absl.testing import absltest
 
 from hash_frx import sha256 as sha256_mod
+from hash_frx.blake2b.byte_hashes import HostBlake2b
 from hash_frx.blake3 import byte_hashes as blake3_rows
 from hash_frx.blake3.byte_hashes import Blake3, HostBlake3
 from hash_frx.compression import Compression, CompressionParams
@@ -108,7 +109,7 @@ class DeviceCellTest(absltest.TestCase):
 
 class HostCellTest(absltest.TestCase):
     def test_host_rows_are_host_on_every_leg(self) -> None:
-        for row in (HostSha256(), HostSha3_256(), HostBlake3()):
+        for row in (HostSha256(), HostSha3_256(), HostBlake3(), HostBlake2b()):
             with self.subTest(row=type(row).__name__):
                 self.assertIs(row.fusion_path, FusionPath.HOST)
 

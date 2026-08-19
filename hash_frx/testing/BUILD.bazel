@@ -63,6 +63,7 @@ py_test(
         "//hash_frx:fusion",
         "//hash_frx:sha256",
         "//hash_frx:sponge",
+        "//hash_frx/blake2b",
         "//hash_frx/blake3",
         "//hash_frx/keccak",
         "//hash_frx/poseidon",

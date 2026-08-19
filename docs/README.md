@@ -46,6 +46,7 @@ tests share.
 | SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256.py`](../hash_frx/sha256.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
 | BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/byte_hashes.py`](../hash_frx/blake3/byte_hashes.py) |
+| BLAKE2b — the host `ByteHash` row over `hashlib`, and why the host row comes first | [`blake2b/byte_hashes.py`](../hash_frx/blake2b/byte_hashes.py) |
 | SHA3-256, SHA3-512, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
 
 ## Fusion machinery
