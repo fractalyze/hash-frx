@@ -144,6 +144,33 @@ class Fips202Test(parameterized.TestCase):
         for i in range(batch.shape[0]):
             self.assertEqual(bytes(got[i]), hashlib.sha3_256(bytes(batch[i])).digest())
 
+    @parameterized.product(case=_CASES, outer=(1, 3))
+    def test_vmapped_equals_hashlib_per_row(self, case: _Case, outer: int) -> None:
+        # `digest` documents `[B, L]`, and a consumer that already batches
+        # reaches it under its own `frx.vmap` rather than by widening `B` —
+        # sig-frx's ML-DSA verification is `frx.vmap(_verify_one)` over the whole
+        # path. Inside the vmap the logical shape is still `[B, L]`, so the
+        # `ndim != 2` guard cannot see the outer axis and the marked region is
+        # emitted one rank deeper than its ABI once admitted.
+        #
+        # `outer=1` is not redundant with 3: a leading axis of one is the case a
+        # fix that squeezes rather than collapses would pass.
+        name, device, _host, reference = case
+        rng = np.random.default_rng(0)
+        batch = rng.integers(0, 256, size=(outer, 5, 200), dtype=np.uint8)
+        with self.subTest(hash=name):
+            # 200 crosses every rate in the family, so the XOFs squeeze twice
+            # here; the fixed-output rows ignore it and keep their own size.
+            hash_ = device(200)
+            got = np.asarray(frx.vmap(hash_.digest)(batch))
+            self.assertEqual(got.shape, (outer, 5, hash_.digest_size))
+            for v in range(outer):
+                for i in range(batch.shape[1]):
+                    self.assertEqual(
+                        bytes(got[v, i]),
+                        reference(bytes(batch[v, i]), hash_.digest_size),
+                    )
+
     def test_the_two_shakes_differ_at_the_same_output_length(self) -> None:
         # Same suffix and output, different rate — so a rate mix-up cannot hide.
         msg = _message(200)

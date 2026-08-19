@@ -87,6 +87,14 @@ def _message(batch: int, length: int) -> frx.Array:
     return fnp.asarray(rng.integers(0, 256, size=(batch, length), dtype=np.uint8))
 
 
+def _stacked(outer: int, batch: int, length: int) -> frx.Array:
+    """A `[outer, B, L]` message, the shape a caller's own `vmap` hands `hash`."""
+    rng = np.random.default_rng(0)
+    return fnp.asarray(
+        rng.integers(0, 256, size=(outer, batch, length), dtype=np.uint8)
+    )
+
+
 class KeccakSpongeMarkerTest(absltest.TestCase):
     def test_the_whole_hash_is_one_region_on_the_dedicated_path(self) -> None:
         # The point of the marker. Unmarked, a two-block absorb plus a second
@@ -169,6 +177,58 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         with _dedicated_emitter():
             marked = np.asarray(frx.jit(_SHA3_256.hash)(msg))
         np.testing.assert_array_equal(plain, marked)
+
+
+class VmappedMarkerTest(absltest.TestCase):
+    """The rank contract, which only a caller's own `vmap` exercises.
+
+    `hash` guards `msg.ndim != 2`, but under `frx.vmap` a tracer's *logical* ndim
+    is 2 while the lowered operand carries the batch axis — so the guard passes
+    and the region reaches the emitter one rank deeper than the shape it was
+    written against. A Python rank check cannot protect a wire ABI.
+
+    Nothing vmapped a marked *sponge* before this: the only `vmap` coverage in
+    the repo is on the permutation (`permutation_test`), which is one vmap deep
+    by construction and so was rank-tolerant from the start. On the dedicated
+    path the sponge is the OUTERMOST marker, so it is the one nobody batched —
+    which is how a whole-hash marker admitting exactly rank 2 shipped and took
+    every consumer that batches with `vmap` down on GPU while CPU stayed green.
+    """
+
+    def test_a_vmapped_hash_is_still_one_region_a_rank_deeper(self) -> None:
+        # Two absorb blocks and two squeezes, so the region is the whole chain
+        # rather than a single permute, and vmap's axis stays outermost ahead of
+        # the sponge's own batch.
+        with _dedicated_emitter():
+            eqns = _composites(frx.vmap(_SHAKE128_LONG.hash), _stacked(3, 2, 200))
+        self.assertLen(eqns, 1)
+        self.assertEqual(eqns[0].params["name"], KECCAK_SPONGE_MARKER)
+        # 200 B at rate 168 pads to two blocks, under both batch axes.
+        self.assertEqual(eqns[0].invars[0].aval.shape, (3, 2, 2 * SHAKE128_RATE))
+        self.assertEqual(eqns[0].invars[0].aval.dtype, fnp.uint8)
+
+    def test_a_leading_axis_of_one_is_still_a_rank_it_has_to_admit(self) -> None:
+        # The degenerate case a fix that squeezes rather than collapses would
+        # pass, so it is pinned apart from the case above.
+        with _dedicated_emitter():
+            eqns = _composites(frx.vmap(_SHA3_256.hash), _stacked(1, 3, 64))
+        self.assertLen(eqns, 1)
+        self.assertEqual(eqns[0].invars[0].aval.shape, (1, 3, 136))
+
+    def test_a_vmapped_hash_matches_its_flattening(self) -> None:
+        # What the collapse has to preserve: vmapping over `[V, B, L]` is the
+        # same set of digests as hashing `[V*B, L]` in one go, just reshaped.
+        # Both routings, since the marker chooses a kernel and never a result.
+        stacked = _stacked(3, 2, 200)
+        flat = fnp.reshape(stacked, (3 * 2, 200))
+        for label, ctx in (
+            ("generic", _generic_emitter()),
+            ("dedicated", _dedicated_emitter()),
+        ):
+            with self.subTest(routing=label), ctx:
+                got = np.asarray(frx.jit(frx.vmap(_SHAKE128_LONG.hash))(stacked))
+                want = np.asarray(frx.jit(_SHAKE128_LONG.hash)(flat))
+                np.testing.assert_array_equal(got.reshape(want.shape), want)
 
 
 class WholeHashRoutingTest(absltest.TestCase):
@@ -276,6 +336,23 @@ class MarkerRecognizedTest(absltest.TestCase):
         # permutes would otherwise sit outside the region.
         assert_marker_recognized(
             self, "keccak_sponge", _SHAKE128_LONG.hash, _message(1, 200)
+        )
+
+    def test_a_vmapped_hash_is_still_one_custom_fusion(self) -> None:
+        # The rank the emitter has to admit, and the case that has to COMPILE
+        # rather than merely lower: the rewriter collapses the leading axes into
+        # `B` instead of rejecting the operand. Before it did, this was a hard
+        # INVALID_ARGUMENT on GPU that no CPU leg could see, because CPU declines
+        # the marker and inlines it before any ABI is checked.
+        assert_marker_recognized(
+            self, "keccak_sponge", frx.vmap(_SHA3_256.hash), _stacked(3, 2, 64)
+        )
+
+    def test_a_vmapped_multi_block_hash_is_still_one_custom_fusion(self) -> None:
+        # The same collapse where the region spans two absorb blocks and two
+        # squeezes, so a fix that only handled the single-block shape is caught.
+        assert_marker_recognized(
+            self, "keccak_sponge", frx.vmap(_SHAKE128_LONG.hash), _stacked(2, 3, 200)
         )
 
 
