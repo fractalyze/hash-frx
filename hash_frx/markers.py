@@ -77,6 +77,11 @@ MARKERS: tuple[Marker, ...] = (
     Marker("hash_frx.compress.blake3", 1, MarkerKind.COMPRESS),
     # Whole hashes — the construction's entire chain behind one call.
     Marker("hash_frx.digest.sha256", 1, MarkerKind.DIGEST),
+    # The raw-bytes whole-message form: same digest, different wire ABI (the
+    # message operand is unpadded bytes; padding lives inside the region). A
+    # new name rather than a version bump — the pinned sha256 recognizer
+    # hard-fails on an operand-ABI mismatch instead of declining.
+    Marker("hash_frx.digest.sha256_bytes", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.keccak_sponge", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.blake3", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.field_sponge", 1, MarkerKind.DIGEST),
