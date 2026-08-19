@@ -65,7 +65,7 @@ dependencies = [
     # before any of this — sorts above the dev build named as the floor and
     # would otherwise satisfy it. Naming a later stable instead fails the other
     # way, since the nightly line resumes below it (`0.10.3.dev...` < `0.10.3`).
-    "frx>=0.10.2.dev20260818233737,!=0.10.2",
+    "frx>=0.10.2.dev20260819130755,!=0.10.2",
 ]
 
 [project.urls]
