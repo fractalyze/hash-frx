@@ -42,6 +42,7 @@ py_test(
     deps = [
         "//hash_frx",
         "//hash_frx:markers",
+        "//hash_frx:ripemd160",
         "//hash_frx:sha256",
         "//hash_frx:sha512",
         "//hash_frx:sponge",
@@ -65,6 +66,7 @@ py_test(
         "//hash_frx:compression",
         "//hash_frx:duplex_sponge",
         "//hash_frx:fusion",
+        "//hash_frx:ripemd160",
         "//hash_frx:sha256",
         "//hash_frx:sha512",
         "//hash_frx:sponge",

@@ -51,6 +51,7 @@ tests share.
 | BLAKE2b — the host `ByteHash` row over `hashlib`, and why the host row comes first | [`blake2b/byte_hashes.py`](../hash_frx/blake2b/byte_hashes.py) |
 | Grøstl-256 — the AES-round Merkle–Damgård `ByteHash` over GF(2^8), with a bitsliced S-box and a testonly host partner | [`grostl/`](../hash_frx/grostl) |
 | Ascon-Hash256 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` over uint32 lane halves, with a testonly host partner | [`ascon/`](../hash_frx/ascon) |
+| RIPEMD-160 — the little-endian Merkle–Damgård `ByteHash` (Bitcoin HASH160's second half), with a testonly host partner | [`ripemd160.py`](../hash_frx/ripemd160.py) |
 | SHA3-256, SHA3-512, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
 
 ## Fusion machinery
@@ -85,7 +86,7 @@ constraint is what shapes the code — the authoring rules it forces are in
 **Name-routed** — spelled `hash_frx.<kind>.<name>` by fusible-unit kind:
 `hash_frx.perm.{poseidon, poseidon_sparse, poseidon2, keccak_f, vision}`,
 `hash_frx.compress.{blake3, blake3_parent}`, and
-`hash_frx.digest.{sha256, sha512, field_sponge, keccak_sponge, blake3, grostl256, ascon_hash256}`
+`hash_frx.digest.{sha256, sha512, field_sponge, keccak_sponge, blake3, grostl256, ascon_hash256, ripemd160}`
 (`hash_frx/markers.py` is the registry). Each goes to a
 dedicated emitter that owns its own operand ABI and, unlike the generic path,
 tolerates reductions and calls; the recognizers also still accept the
@@ -100,9 +101,9 @@ instead of a marked permute per block with the glue between them left outside.
 
 The markers wait for the toolchain in two different ways, because the cost of
 being early is not the same for both. `hash_frx.digest.blake3`,
-`hash_frx.digest.sha256`, `hash_frx.digest.sha512`, `hash_frx.digest.grostl256`
-and `hash_frx.digest.ascon_hash256`
-are emitted whether or not the pinned plugin recognizes the name: an
+`hash_frx.digest.sha256`, `hash_frx.digest.sha512`, `hash_frx.digest.grostl256`,
+`hash_frx.digest.ascon_hash256` and `hash_frx.digest.ripemd160` are emitted
+whether or not the pinned plugin recognizes the name: an
 unrecognized *name* only inlines, so being early costs the fusion and nothing
 else, and the hash reports `fusion_path = GENERIC` while carrying its marker.
 `hash_frx.perm.keccak_f` is emitted only where the plugin ships its emitter — off
