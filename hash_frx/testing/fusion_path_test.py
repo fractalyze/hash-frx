@@ -30,6 +30,8 @@ from hash_frx.blake3.byte_hashes import Blake3, HostBlake3
 from hash_frx.compression import Compression, CompressionParams
 from hash_frx.duplex_sponge import DuplexSponge
 from hash_frx.fusion import FusionPath
+from hash_frx.grostl import grostl as grostl_mod
+from hash_frx.grostl.grostl import Grostl256
 from hash_frx.keccak import permutation as keccak_perm_mod
 from hash_frx.keccak.byte_hashes import HostSha3_256, Sha3_256
 from hash_frx.keccak.permutation import KeccakF1600
@@ -47,7 +49,7 @@ from hash_frx.vision.vision import Vision
 # per family. Keccak's arms are GPU-only; the rest run wherever the
 # ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
 # Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
-# Vision, for which no plugin ships an emitter at all yet.
+# Vision and Grøstl, for which no plugin ships an emitter at all.
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
@@ -56,6 +58,7 @@ _MATRIX = {
     vision_mod: (),
     sha256_mod: ("cpu", "gpu"),
     blake3_rows: ("cpu", "gpu"),
+    grostl_mod: (),
 }
 
 
@@ -88,9 +91,10 @@ class DeviceCellTest(absltest.TestCase):
             (Sha256(), _MATRIX[sha256_mod]),
             (Sha3_256(), _MATRIX[keccak_perm_mod]),
             (Blake3(), _MATRIX[blake3_rows]),
-            # The empty row: GENERIC on every leg, by the same derivation as
+            # The empty rows: GENERIC on every leg, by the same derivation as
             # an absent backend — never HOST.
             (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
+            (Grostl256(), _MATRIX[grostl_mod]),
         )
         for impl, backends in rows:
             with self.subTest(impl=type(impl).__name__):
