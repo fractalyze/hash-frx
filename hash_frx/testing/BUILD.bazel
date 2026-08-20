@@ -339,3 +339,17 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "sha512_stream_test",
+    # Compile-heavy: sha256_stream_test's sweep at doubled block/window
+    # shapes — every (pending, length) aval compiles its own absorb schedule.
+    size = "large",
+    srcs = ["sha512_stream_test.py"],
+    deps = [
+        "//hash_frx:sha512",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

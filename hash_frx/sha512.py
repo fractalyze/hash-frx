@@ -34,6 +34,7 @@ itself be traced. Requires no x64; all arithmetic is uint32.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from functools import lru_cache, partial
 from typing import TYPE_CHECKING
 
@@ -41,6 +42,7 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from frx import Array
+from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import host_digest
@@ -498,6 +500,181 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     """
     msg = fnp.asarray(msg, dtype=fnp.uint8)
     return sha512_merkle_damgard(INITIAL_STATE, _padded_words(msg))
+
+
+# ---------------------------------------------------------------------------
+# Streaming Merkle–Damgård midstate (the fixed-shape, scan-threadable core).
+#
+# `digest` above pads a whole message once on host; this keeps SHA-512's
+# incremental state so a byte Fiat-Shamir transcript can thread `@jit` / a
+# `lax.scan` carry — `sha256`'s streaming section at the 64-bit parameters
+# (128-byte blocks, a 16-byte length field). The midstate is over every COMPLETE
+# 128-byte block, plus the (<128 B) trailing partial block and the running byte
+# length — all fixed shapes. A squeeze `SHA512(buffer ‖ ctr)` is
+# `finalize(state, ctr)`: a non-mutating copy that pads at the current length,
+# reproducing `digest`'s bytes incrementally.
+# ---------------------------------------------------------------------------
+
+_BLOCK = 128  # SHA-512 block size in bytes
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class Sha512State:
+    """Incremental SHA-512 state as an FRX pytree. Fixed shapes → scan-threadable.
+
+    The two byte counters share one `int32[2]` leaf rather than riding as two
+    scalar fields, for the reason measured on `Sha256State`: every absorb
+    updates both, and as separate output/carry leaves each cost their own
+    scalar kernel per state hand-off."""
+
+    h: Array  # uint32[16] — midstate over all complete 128-byte blocks so far
+    pending: Array  # uint8[128] — trailing partial block, valid prefix [:counts[0]]
+    counts: Array  # int32[2] = [pending_len (0..127), total bytes absorbed]
+
+    @property
+    def pending_len(self) -> Array:
+        return self.counts[0]
+
+    @property
+    def total_len(self) -> Array:
+        return self.counts[1]
+
+
+def sha512_stream_init() -> Sha512State:
+    """A fresh incremental hash (no bytes absorbed)."""
+    return Sha512State(
+        h=INITIAL_STATE,
+        pending=fnp.zeros(_BLOCK, dtype=fnp.uint8),
+        counts=fnp.zeros(2, dtype=fnp.int32),
+    )
+
+
+def sha512_stream_absorb(state: Sha512State, data: Array) -> Sha512State:
+    """Absorb `data` (uint8 [L], L static) into the incremental hash: fold every
+    newly-complete 128-byte block into the midstate, keep the `<128 B` remainder
+    as the new pending block. The block loop is a Python-unrolled,
+    active-count-masked schedule over STATIC slices (never a traced-index gather
+    / scan-carry scatter) — `sha256_stream_absorb`'s pattern."""
+    length = data.shape[0]
+    pl = state.pending_len
+    combined_src = fnp.concatenate([state.pending, data.astype(fnp.uint8)])  # [128+L]
+    new_len = pl + fnp.int32(length)
+    active_blocks = new_len // _BLOCK
+    max_blocks = (_BLOCK - 1 + length) // _BLOCK  # static upper bound
+
+    # Drop the pending buffer's invalid gap [pending_len:128] from the stream:
+    # for stream position j, source index is j while j < pending_len, else
+    # shifted to skip past the gap.
+    total_slots = (max_blocks + 1) * _BLOCK
+    pos = fnp.arange(total_slots, dtype=fnp.int32)
+    src_idx = pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl)
+    src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
+    combined = combined_src[src_idx]  # [total_slots], valid prefix [0:new_len]
+
+    # Fold the newly-complete blocks through the marked chain. The live block
+    # count depends on pending_len by AT MOST one — (pl + L) // 128 spans
+    # {L // 128, (127 + L) // 128} — so run the chain at both static candidate
+    # counts and select; the discarded candidate is the only one that ever sees
+    # the gap-shifted junk tail block.
+    h = state.h
+    min_blocks = length // _BLOCK
+    if max_blocks == 0:
+        h_new = h
+    else:
+        words = block_to_words(
+            combined[: max_blocks * _BLOCK].reshape(1, max_blocks * _BLOCK)
+        )  # [1, max_blocks, 32]
+        h_hi = deserialize_digest(sha512_merkle_damgard(h, words))[0]
+        if min_blocks == max_blocks:
+            h_new = h_hi
+        else:
+            h_lo = (
+                deserialize_digest(sha512_merkle_damgard(h, words[:, :min_blocks]))[0]
+                if min_blocks > 0
+                else h
+            )
+            h_new = fnp.where(active_blocks == max_blocks, h_hi, h_lo)
+
+    tail_len = new_len - active_blocks * _BLOCK
+    tail = frx.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
+    slot = fnp.arange(_BLOCK, dtype=fnp.int32)
+    pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
+    # One fused counter update: [pending_len', total_len'] = [tail_len, total+L].
+    counts = fnp.stack([tail_len, state.counts[1] + fnp.int32(length)])
+    return Sha512State(h_new, pending, counts)
+
+
+def sha512_stream_finalize(state: Sha512State, extras: Array) -> Array:
+    """`SHA512(absorbed ‖ extras[b])` for each row of `extras` (uint8 [B, E], E
+    static) — a non-mutating copy of the hash finished at the current length.
+    One call finishes a whole batch of counter blocks (the transcript's
+    counter-mode squeeze) sharing the base state. Returns uint8 [B, 64]
+    big-endian digests.
+
+    The trailing content is `pending[:pending_len] ‖ extras[b]` (≤ 127 + E
+    bytes), so with the `0x80` byte and the 16-byte length it spans at most two
+    blocks; the second block is compressed unconditionally and selected away
+    when one suffices.
+    """
+    batch, e = extras.shape
+    pl = state.pending_len
+    content_len = pl + fnp.int32(e)
+    msg_bytes = state.total_len + fnp.int32(e)
+    # SHA-512's 128-bit length field (§5.1.2). The high 64 bits are zero
+    # outright; the low 64 ride as a uint32 half pair off the int32 byte count —
+    # the bit length reaches 2^34 for a count near 2^31, so the low half alone
+    # (sha256's arrangement) would not do.
+    count = msg_bytes.astype(fnp.uint32)
+    bit_lo = count << fnp.uint32(3)
+    bit_hi = count >> fnp.uint32(29)
+
+    def be4(word: Array) -> Array:
+        return fnp.stack(
+            [
+                ((word >> fnp.uint32(24)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                ((word >> fnp.uint32(16)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                ((word >> fnp.uint32(8)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                (word & fnp.uint32(0xFF)).astype(fnp.uint8),
+            ]
+        )
+
+    len_bytes = fnp.concatenate(
+        [fnp.zeros(8, dtype=fnp.uint8), be4(bit_hi), be4(bit_lo)]
+    )  # [16] big-endian
+
+    # Need a 2nd block for pad + length? One block holds ≤ 128 − 17 content.
+    two_blocks = content_len > fnp.int32(_BLOCK - 17)
+    active_bytes = fnp.where(two_blocks, fnp.int32(2 * _BLOCK), fnp.int32(_BLOCK))
+
+    pos = fnp.arange(2 * _BLOCK, dtype=fnp.int32)
+    # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:128].
+    combined_src = fnp.concatenate(
+        [fnp.broadcast_to(state.pending, (batch, _BLOCK)), extras.astype(fnp.uint8)],
+        axis=1,
+    )  # [B, 128+E]
+    src_idx = fnp.clip(
+        pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl), 0, _BLOCK + e - 1
+    )
+    content = combined_src[:, src_idx]  # [B, 256]
+
+    is_content = (pos < content_len)[None, :]
+    is_pad80 = (pos == content_len)[None, :]
+    len_start = active_bytes - fnp.int32(16)
+    is_len = ((pos >= len_start) & (pos < active_bytes))[None, :]
+    len_val = len_bytes[fnp.clip(pos - len_start, 0, 15)][None, :]
+    region = fnp.where(
+        is_content,
+        content,
+        fnp.where(is_pad80, fnp.uint8(0x80), fnp.where(is_len, len_val, fnp.uint8(0))),
+    )  # [B, 256]
+
+    # Both finalize shapes ride the marked chain from the shared midstate; the
+    # 1-vs-2-block choice is data-dependent, so emit both and select.
+    words = block_to_words(region)  # [B, 2, 32]
+    d2 = sha512_merkle_damgard(state.h, words)
+    d1 = sha512_merkle_damgard(state.h, words[:, :1])
+    return fnp.where(two_blocks, d2, d1)
 
 
 # ---------------------------------------------------------------------------
