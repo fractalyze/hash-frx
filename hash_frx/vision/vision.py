@@ -66,11 +66,13 @@ VISION_MARKER_VERSION = 1
 # None exists yet — this is the pre-emitter half of the keccak arrangement
 # (`keccak.permutation._DEDICATED_EMITTER_AVAILABLE` carries the family-wide
 # rationale): flipped together with the `frx>=` floor in `pyproject.toml` when
-# an emitter lands. It cannot be left optimistic, because a DEDICATED fusion
-# path also routes a `Sponge` over this permutation to
-# `hash_frx.digest.field_sponge` carrying `permutation="vision"`, which a
-# plugin without the arm rejects outright — a failed compile, not a lost
-# kernel.
+# an emitter lands. While `_EMITTER_BACKENDS` is empty the pin is inert (the
+# routing conjunction below is False either way) — the two flags are held to
+# agree by `fusion_path_test`'s matrix law. Once a backend joins the tuple the
+# pin cannot be left optimistic, because a DEDICATED fusion path also routes a
+# `Sponge` over this permutation to `hash_frx.digest.field_sponge` carrying
+# `permutation="vision"`, which a plugin without the arm rejects outright — a
+# failed compile, not a lost kernel.
 _DEDICATED_EMITTER_AVAILABLE = False
 
 # Which backends have that emitter — a different question from the pin, asked
@@ -164,14 +166,12 @@ def _permutation_body(
     b_inv: Array,
     mds: Array,
     round_keys: Array,
-    **_attrs: object,
 ) -> Array:
     """The straight-line permute on a single `(width,)` state, taking the ABI
     operands explicitly — the decomposition every marked Vision region runs.
-
-    `_attrs` is marker metadata passed through, which the body does not read.
-    A batch is `vmap(permute)`, which lowers to the same body over a batched
-    leading operand.
+    Every caller invokes it positionally (marker attrs are absorbed by the
+    `decomposition` wrapper in `_permute_body`). A batch is `vmap(permute)`,
+    which lowers to the same body over a batched leading operand.
     """
     s = s + round_keys[0]
     for r in range(2 * perm._p.rounds):
@@ -207,8 +207,10 @@ def _marker_attrs(perm: Vision) -> dict[str, object]:
     """The dedicated marker's `composite.attributes` — identifying rather than
     parameterising (the tables ride as operands): the `permutation`
     discriminator a whole-region recognizer keys on, plus the shape ints.
-    Caller gates on `fusion_path.is_one_kernel`; the generic marker stays
-    attrs-free."""
+    Self-gating, as `Poseidon2` lays out: the generic marker stays attrs-free,
+    and putting the gate here means no emission site can forget it."""
+    if not perm.fusion_path.is_one_kernel:
+        return {}
     return {
         "permutation": "vision",
         "width": perm.width,
@@ -231,8 +233,9 @@ def _permute_body(perm: Vision, state: Array) -> Array:
         round_keys: Array,
         **_attrs: object,
     ) -> Array:
-        # Inlined here so the region stays one straight-line body (the generic
-        # marker's single-kernel requirement allows no call).
+        # `_attrs` is marker metadata passed through — the decomposition does
+        # not read it. Inlined here so the region stays one straight-line body
+        # (the generic marker's single-kernel requirement allows no call).
         return _permutation_body(perm, s, b, b_inv, mds, round_keys)
 
     name, version = perm.fused_region_marker
@@ -241,7 +244,7 @@ def _permute_body(perm: Vision, state: Array) -> Array:
         *_abi_operands(perm, state),
         name=name,
         version=version,
-        **(_marker_attrs(perm) if perm.fusion_path.is_one_kernel else {}),
+        **_marker_attrs(perm),
     )
 
 

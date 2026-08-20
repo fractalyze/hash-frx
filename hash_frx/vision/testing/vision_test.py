@@ -35,6 +35,7 @@ from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
 from hash_frx.vision import vision as vision_mod
 from hash_frx.vision.params import VisionParams, vision_mark32_params
+from hash_frx.vision.testing.decode import int_rows, ints
 from hash_frx.vision.testing.reference import (
     MARK32_RANDOM_CIPHERTEXT,
     MARK32_RANDOM_PLAINTEXT,
@@ -69,6 +70,8 @@ for seed in (0, 1, 2):
 
 
 def _perm() -> Vision:
+    # Deliberately fresh params per call: the value-equality and single-trace
+    # cases below are about freshly built instances being interchangeable.
     return Vision(vision_mark32_params(F))
 
 
@@ -76,22 +79,31 @@ def _device_state(lanes: list[int]) -> Array:
     return fnp.array(lanes, dtype=F)
 
 
-def _ints(arr: Array) -> list[int]:
-    return [int(v) for v in np.asarray(arr).astype(object)]
-
-
 def _oracle_for(p: VisionParams, lanes: list[int]) -> list[int]:
     return vision_permutation(
-        lanes,
-        _ints(p.b),
-        _ints(p.b_inv),
-        [[int(v) for v in row] for row in np.asarray(p.mds).astype(object)],
-        [[int(v) for v in row] for row in np.asarray(p.round_keys).astype(object)],
+        lanes, ints(p.b), ints(p.b_inv), int_rows(p.mds), int_rows(p.round_keys)
     )
 
 
+# The Mark-32 tables, decoded once — an oracle run is ~0.6 s of recursive
+# tower arithmetic per state, so results are cached too: the vmap batch asks
+# for the exact states the direct comparison already paid for.
+_MARK32 = vision_mark32_params(F)
+_MARK32_TABLES = (
+    ints(_MARK32.b),
+    ints(_MARK32.b_inv),
+    int_rows(_MARK32.mds),
+    int_rows(_MARK32.round_keys),
+)
+
+
+@functools.cache
+def _cached_oracle(lanes: tuple[int, ...]) -> list[int]:
+    return vision_permutation(list(lanes), *_MARK32_TABLES)
+
+
 def _oracle(lanes: list[int]) -> list[int]:
-    return _oracle_for(vision_mark32_params(F), lanes)
+    return _cached_oracle(tuple(lanes))
 
 
 def _small_params() -> VisionParams:
@@ -130,10 +142,10 @@ class VisionMark32Test(absltest.TestCase):
         # a transcription error shared by oracle and tables cannot pass here.
         p = _perm()
         self.assertEqual(
-            _ints(p.permute(_device_state([0] * _W))), list(MARK32_ZERO_CIPHERTEXT)
+            ints(p.permute(_device_state([0] * _W))), list(MARK32_ZERO_CIPHERTEXT)
         )
         self.assertEqual(
-            _ints(p.permute(_device_state(list(MARK32_RANDOM_PLAINTEXT)))),
+            ints(p.permute(_device_state(list(MARK32_RANDOM_PLAINTEXT)))),
             list(MARK32_RANDOM_CIPHERTEXT),
         )
 
@@ -141,7 +153,7 @@ class VisionMark32Test(absltest.TestCase):
         p = _perm()
         for name, lanes in _STATES.items():
             with self.subTest(state=name):
-                got = _ints(p.permute(_device_state(lanes)))
+                got = ints(p.permute(_device_state(lanes)))
                 self.assertEqual(got, _oracle(lanes))
 
     def test_batches_under_vmap(self) -> None:
@@ -151,10 +163,10 @@ class VisionMark32Test(absltest.TestCase):
         stacked = fnp.array([_STATES[n] for n in names], dtype=F)
         out = frx.jit(frx.vmap(p.permute))(stacked)
         self.assertEqual(out.shape, (len(names), _W))
-        rows = np.asarray(out).astype(object)
+        rows = int_rows(out)
         for i, name in enumerate(names):
             with self.subTest(row=name):
-                self.assertEqual([int(v) for v in rows[i]], _oracle(_STATES[name]))
+                self.assertEqual(rows[i], _oracle(_STATES[name]))
 
     def test_permute_reuses_one_trace_across_instances(self) -> None:
         # The zone's cache is keyed on (permutation, aval) with the permutation
@@ -292,7 +304,7 @@ class VisionMarkerTest(absltest.TestCase):
         for label, dedicated in (("generic", False), ("dedicated", True)):
             with self.subTest(routing=label), _routing(dedicated):
                 out = frx.jit(Vision(p).permute)(_device_state(lanes))
-                self.assertEqual(_ints(out), want)
+                self.assertEqual(ints(out), want)
 
     def test_the_spec_hands_out_the_abi_only_on_the_dedicated_path(self) -> None:
         # The inert stub is what keeps a non-dedicated permutation from being

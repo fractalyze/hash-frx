@@ -15,16 +15,28 @@ py_library(
     visibility = ["//hash_frx:__subpackages__"],
 )
 
+# The canonical-int decode every device -> oracle handoff shares (kept out of
+# `:reference`, which stays plain-Python-int only).
+py_library(
+    name = "decode",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "decode.py",
+    ],
+    deps = [requirement("numpy")],
+)
+
 py_test(
     name = "reference_test",
     size = "small",
     srcs = ["reference_test.py"],
     deps = [
+        ":decode",
         ":reference",
         "//hash_frx/vision",
         requirement("absl_py"),
         requirement("frx"),
-        requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -46,6 +58,7 @@ py_test(
     size = "small",
     srcs = ["linear_test.py"],
     deps = [
+        ":decode",
         ":reference",
         "//hash_frx/testing:fusion_ready",
         "//hash_frx/vision",
@@ -64,6 +77,7 @@ py_test(
     size = "large",
     srcs = ["vision_test.py"],
     deps = [
+        ":decode",
         ":reference",
         "//hash_frx:fusion",
         "//hash_frx:permutation",

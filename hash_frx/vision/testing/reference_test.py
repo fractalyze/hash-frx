@@ -18,11 +18,11 @@ surface does not carry.
 
 from __future__ import annotations
 
-import numpy as np
 from absl.testing import absltest
 from zk_dtypes import binary_field_t5 as F
 
 from hash_frx.vision.params import vision_mark32_params
+from hash_frx.vision.testing.decode import int_rows, ints
 from hash_frx.vision.testing.reference import (
     CONSTANTS_CONSTANT,
     CONSTANTS_MATRIX,
@@ -36,20 +36,11 @@ from hash_frx.vision.testing.reference import (
     vision_permutation,
 )
 
-
-def _ints(arr: object) -> list[int]:
-    return [int(v) for v in np.asarray(arr).astype(object)]
-
-
-def _int_rows(arr: object) -> list[list[int]]:
-    return [[int(v) for v in row] for row in np.asarray(arr).astype(object)]
-
-
 _P = vision_mark32_params(F)
-_B = _ints(_P.b)
-_B_INV = _ints(_P.b_inv)
-_MDS = _int_rows(_P.mds)
-_ROUND_KEYS = _int_rows(_P.round_keys)
+_B = ints(_P.b)
+_B_INV = ints(_P.b_inv)
+_MDS = int_rows(_P.mds)
+_ROUND_KEYS = int_rows(_P.round_keys)
 
 
 class ReferenceAnchorTest(absltest.TestCase):

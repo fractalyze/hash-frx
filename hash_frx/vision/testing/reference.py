@@ -25,6 +25,7 @@ the shipped parameter surface carries the EXPANDED schedule, and
 
 from __future__ import annotations
 
+import operator
 from functools import reduce
 
 
@@ -83,12 +84,13 @@ def inverse(a: int, bits: int = 32) -> int:
 def evaluate_affine(coeffs: list[int], x: int, bits: int = 32) -> int:
     """Evaluate the F2-linearized affine polynomial at `x`: `coeffs[0] +
     sum_j coeffs[1 + j] * x**(2**j)` — constant-FIRST, the `VisionParams`
-    layout (binius-models stores the constant last)."""
-    result = coeffs[0]
+    layout (binius-models stores the constant last), so at least a constant
+    and one linear coefficient (the >= 2 `VisionParams` requires)."""
+    result = coeffs[0] ^ multiply(coeffs[1], x, bits)
     power = x
-    for c in coeffs[1:]:
-        result ^= multiply(c, power, bits)
+    for c in coeffs[2:]:
         power = square(power, bits)
+        result ^= multiply(c, power, bits)
     return result
 
 
@@ -102,12 +104,26 @@ def matrix_vector(
     matrix: list[list[int]], vector: list[int], bits: int = 32
 ) -> list[int]:
     return [
-        reduce(
-            lambda acc, term: acc ^ term,
-            (multiply(m, v, bits) for m, v in zip(row, vector)),
-        )
+        reduce(operator.xor, (multiply(m, v, bits) for m, v in zip(row, vector)))
         for row in matrix
     ]
+
+
+def _step(
+    state: list[int],
+    injected: list[int],
+    r: int,
+    b: list[int],
+    b_inv: list[int],
+    mds: list[list[int]],
+    bits: int,
+) -> list[int]:
+    """One Vision step `r` on `state`: S-box (`B^{-1}` on even steps, `B` on
+    odd) -> MDS -> add `injected`. The data path and the key schedule run the
+    SAME step — sharing it is what keeps the even/odd polarity defined once."""
+    out = [sbox(x, b_inv if r % 2 == 0 else b, bits) for x in state]
+    out = matrix_vector(mds, out, bits)
+    return [a ^ k for a, k in zip(out, injected)]
 
 
 def expand_round_keys(
@@ -135,9 +151,7 @@ def expand_round_keys(
                 matrix_vector(constants_matrix, injection, bits), constants_constant
             )
         ]
-        state = [sbox(x, b_inv if r % 2 == 0 else b, bits) for x in state]
-        state = matrix_vector(mds, state, bits)
-        state = [a ^ k for a, k in zip(state, injection)]
+        state = _step(state, injection, r, b, b_inv, mds, bits)
         keys.append(list(state))
     return keys
 
@@ -155,9 +169,7 @@ def vision_permutation(
     S-box (B^{-1} on even steps, B on odd) -> MDS -> key injection."""
     s = [x ^ k for x, k in zip(state, round_keys[0])]
     for r, keys in enumerate(round_keys[1:]):
-        s = [sbox(x, b_inv if r % 2 == 0 else b, bits) for x in s]
-        s = matrix_vector(mds, s, bits)
-        s = [a ^ k for a, k in zip(s, keys)]
+        s = _step(s, keys, r, b, b_inv, mds, bits)
     return s
 
 

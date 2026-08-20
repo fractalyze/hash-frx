@@ -12,6 +12,7 @@ from zk_dtypes import binary_field_t5 as F
 from hash_frx.testing.fusion_ready import assert_fusion_ready, assert_input_uses
 from hash_frx.vision.linear import apply_linearized_affine, apply_matrix
 from hash_frx.vision.params import vision_mark32_params
+from hash_frx.vision.testing.decode import ints
 from hash_frx.vision.testing.reference import evaluate_affine
 
 
@@ -30,13 +31,12 @@ class AffineLayerTest(absltest.TestCase):
         # Both shipped polynomials: the 4-entry B exercises the short chain,
         # the 33-entry B_inv every squaring up to x**(2**31).
         s = _rand(1, (24,))
-        lanes = [int(v) for v in np.asarray(s).astype(object)]
+        lanes = ints(s)
         for name, coeffs in (("b", _P.b), ("b_inv", _P.b_inv)):
             with self.subTest(poly=name):
                 got = apply_linearized_affine(coeffs, s)
-                ints = [int(v) for v in np.asarray(coeffs).astype(object)]
-                want = [evaluate_affine(ints, x) for x in lanes]
-                self.assertEqual([int(v) for v in np.asarray(got).astype(object)], want)
+                want = [evaluate_affine(ints(coeffs), x) for x in lanes]
+                self.assertEqual(ints(got), want)
 
     def test_rejects_bad_coefficients(self) -> None:
         s = _rand(2, (24,))

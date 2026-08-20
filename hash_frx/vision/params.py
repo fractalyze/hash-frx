@@ -72,24 +72,27 @@ class VisionParams:
         if self.rounds < 1:
             raise ValueError(f"rounds must be a positive int, got {self.rounds}")
         w = self.width
-        for name in ("b", "b_inv"):
-            arr = getattr(self, name)
-            got = tuple(np.shape(arr))
-            if len(got) != 1 or got[0] < 2:
-                raise ValueError(
-                    f"{name}: expected a 1-D constant-plus-coefficients vector of "
-                    f"length >= 2, got shape {got}"
-                )
-        checks = {
-            "mds": ((w, w), self.mds),
-            "round_keys": ((2 * self.rounds + 1, w), self.round_keys),
+        # None = "1-D, length >= 2" (a polynomial's coefficient count is free);
+        # the others are fixed shapes. One pass over `_ARRAY_FIELDS` so a new
+        # array field cannot silently skip either check.
+        want_shapes: dict[str, tuple[int, ...] | None] = {
+            "b": None,
+            "b_inv": None,
+            "mds": (w, w),
+            "round_keys": (2 * self.rounds + 1, w),
         }
-        for name, (want, arr) in checks.items():
-            got = tuple(np.shape(arr))
-            if got != want:
-                raise ValueError(f"{name}: expected shape {want}, got {got}")
-        for name in ("b", "b_inv", "mds", "round_keys"):
+        for name in self._ARRAY_FIELDS:
             arr = getattr(self, name)
+            got = tuple(np.shape(arr))
+            want = want_shapes[name]
+            if want is None:
+                if len(got) != 1 or got[0] < 2:
+                    raise ValueError(
+                        f"{name}: expected a 1-D constant-plus-coefficients "
+                        f"vector of length >= 2, got shape {got}"
+                    )
+            elif got != want:
+                raise ValueError(f"{name}: expected shape {want}, got {got}")
             if arr.dtype != self.dtype:
                 raise ValueError(
                     f"{name}: expected dtype {self.dtype}, got {arr.dtype}"
@@ -101,7 +104,9 @@ class VisionParams:
     # dataclass-derived __eq__ is unusable anyway: `==` on the Array fields is
     # elementwise. One cached host-side key serves both methods, as
     # `Poseidon2Params` lays out (jit dispatch calls __eq__ per call, so a live
-    # device-array comparison there would sync per dispatch).
+    # device-array comparison there would sync per dispatch). Also the field
+    # list `__post_init__` validates — one tuple, so the two sweeps cannot
+    # drift apart.
     _ARRAY_FIELDS = ("b", "b_inv", "mds", "round_keys")
 
     def _value_key(self) -> tuple:
