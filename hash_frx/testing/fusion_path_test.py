@@ -21,6 +21,7 @@ from unittest import mock
 import frx
 import numpy as np
 from absl.testing import absltest
+from zk_dtypes import binary_field_t5
 
 from hash_frx import sha256 as sha256_mod
 from hash_frx.blake2b.byte_hashes import HostBlake2b
@@ -38,16 +39,21 @@ from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.sha256 import HostSha256, Sha256
 from hash_frx.sponge import Sponge, SpongeParams
+from hash_frx.vision import vision as vision_mod
+from hash_frx.vision.params import vision_mark32_params
+from hash_frx.vision.vision import Vision
 
 # The matrix rows: which backends the pinned plugin's dedicated emitters cover,
 # per family. Keccak's arms are GPU-only; the rest run wherever the
 # ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
-# Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`.
+# Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
+# Vision, for which no plugin ships an emitter at all yet.
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
     sparse_mod: ("gpu",),
     keccak_perm_mod: ("gpu",),
+    vision_mod: (),
     sha256_mod: ("cpu", "gpu"),
     blake3_rows: ("cpu", "gpu"),
 }
@@ -58,9 +64,11 @@ class MatrixFactsTest(absltest.TestCase):
         for module, backends in _MATRIX.items():
             with self.subTest(module=module.__name__):
                 self.assertEqual(module._EMITTER_BACKENDS, backends)
-                # Premise for every cell below: the pin half of each switch is
-                # on, so the backend half is what decides.
-                self.assertTrue(module._DEDICATED_EMITTER_AVAILABLE)
+                # Premise for every cell below: wherever any backend has an
+                # arm the pin half of the switch is on, so the backend half is
+                # what decides; a family with no emitter anywhere keeps the
+                # pin off with the tuple (Vision today).
+                self.assertEqual(module._DEDICATED_EMITTER_AVAILABLE, bool(backends))
 
     def test_the_enum_property_table(self) -> None:
         # Pinned once; the per-impl cases below assert only the member, since
@@ -80,6 +88,9 @@ class DeviceCellTest(absltest.TestCase):
             (Sha256(), _MATRIX[sha256_mod]),
             (Sha3_256(), _MATRIX[keccak_perm_mod]),
             (Blake3(), _MATRIX[blake3_rows]),
+            # The empty row: GENERIC on every leg, by the same derivation as
+            # an absent backend — never HOST.
+            (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
         )
         for impl, backends in rows:
             with self.subTest(impl=type(impl).__name__):

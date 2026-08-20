@@ -20,9 +20,11 @@ still read its chained input once per lane, which is the quadratic fan-out
 `hash_frx.linear` forbids. Nothing about the layer's output or its op vocabulary
 shows it — only counting reads in the traced graph does.
 
-Applies to the linear layers, not to a whole permutation: a permutation fuses
-via its composite marker and normal-form linear layers, which is a different
-fusion shape with no dot for XLA to optimize.
+Applies to any body that must pass the generic single-kernel rewriter: the
+linear layers always, and a whole permutation exactly when its production
+marker is the generic `zorch.fused_region` (Vision today) — a permutation on
+a DEDICATED marker fuses via its own emitter instead, which tolerates shapes
+this whitelist rejects, so holding such a body here would over-constrain it.
 """
 
 from __future__ import annotations
@@ -39,6 +41,10 @@ _FUSION_SAFE = frozenset(
         "add",
         "subtract",
         "multiply",
+        # The binary-field inverse S-box: `x ** -1` lowers to `1/x`, one
+        # element-wise `divide` — the same op class as `multiply`, admitted on
+        # that property (Vision's round body is where it appears).
+        "divide",
         "negate",
         "constant",
         "convert",

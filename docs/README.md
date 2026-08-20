@@ -43,6 +43,7 @@ tests share.
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | Poseidon2 — permutation, parameter surface, and its two linear layers                       | [`poseidon2/`](../hash_frx/poseidon2)                |
 | Classic Poseidon — the naive Hades schedule and the optimized-sparse refactor of it          | [`poseidon/`](../hash_frx/poseidon)                  |
+| Vision — the binary-field Marvellous permutation (Vision Mark-32 over the GF(2^32) tower)    | [`vision/`](../hash_frx/vision)                      |
 | SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256.py`](../hash_frx/sha256.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
 | BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/byte_hashes.py`](../hash_frx/blake3/byte_hashes.py) |
@@ -79,7 +80,7 @@ constraint is what shapes the code — the authoring rules it forces are in
 [`reference/conventions.md`](reference/conventions.md#a-marked-body-is-authored-to-lower-not-to-read).
 
 **Name-routed** — spelled `hash_frx.<kind>.<name>` by fusible-unit kind:
-`hash_frx.perm.{poseidon, poseidon_sparse, poseidon2, keccak_f}`,
+`hash_frx.perm.{poseidon, poseidon_sparse, poseidon2, keccak_f, vision}`,
 `hash_frx.compress.{blake3, blake3_parent}`, and
 `hash_frx.digest.{sha256, field_sponge, keccak_sponge, blake3}`
 (`hash_frx/markers.py` is the registry). Each goes to a

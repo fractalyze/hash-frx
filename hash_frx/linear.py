@@ -1,8 +1,8 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""Shared normal-form linear helpers for the Poseidon family — explicit field
-add/mul, no dot/reduce/gather.
+"""Shared normal-form linear helpers — explicit field add/mul, no
+dot/reduce/gather.
 
-Every Poseidon-family linear layer is written as a fixed, unrolled sum of
+Every field-permutation linear layer is written as a fixed, unrolled sum of
 column-scaled lanes so a round body stays straight-line element-wise and fuses to
 one kernel: `fnp.dot`/`fnp.sum` lower to a reduction (the `kInput` fusion
 boundary) and dynamic indexing to `gather`, either of which splits the kernel.
@@ -17,8 +17,9 @@ an array, or hoist its lanes once and index the hoisted list.
 
 `unrolled_sum` is that summation primitive; `apply_matrix` is the dense
 `matrix @ state` built on it for a **field-array** matrix. The scheme-specific
-layers (`apply_external_m4`, `apply_internal`, `apply_sparse_partial`) live in
-the per-permutation `linear.py` and build on `unrolled_sum` from here.
+layers (`apply_external_m4`, `apply_internal`, `apply_sparse_partial`,
+Vision's `apply_linearized_affine`) live in the per-permutation `linear.py`
+and build on `unrolled_sum` from here.
 """
 
 from __future__ import annotations

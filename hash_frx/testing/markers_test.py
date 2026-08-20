@@ -29,6 +29,7 @@ from hash_frx.markers import (
 )
 from hash_frx.poseidon import poseidon, sparse
 from hash_frx.poseidon2 import poseidon2
+from hash_frx.vision import vision
 
 # Every emitting module's (name, version) pair, read from the constants the
 # markers actually ride the wire with.
@@ -37,6 +38,7 @@ _MODULE_CONSTANTS = {
     sparse.POSEIDON_SPARSE_MARKER: sparse.POSEIDON_SPARSE_MARKER_VERSION,
     poseidon2.POSEIDON2_MARKER: poseidon2.POSEIDON2_MARKER_VERSION,
     keccak_permutation.KECCAK_F_MARKER: keccak_permutation.KECCAK_F_MARKER_VERSION,
+    vision.VISION_MARKER: vision.VISION_MARKER_VERSION,
     blake3.BLAKE3_MARKER: blake3.BLAKE3_MARKER_VERSION,
     blake3.BLAKE3_PARENT_MARKER: blake3.BLAKE3_PARENT_MARKER_VERSION,
     blake3.BLAKE3_COMPRESS_MARKER: blake3.BLAKE3_COMPRESS_MARKER_VERSION,
