@@ -305,3 +305,17 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "hkdf_test",
+    size = "small",
+    srcs = ["hkdf_test.py"],
+    deps = [
+        "//hash_frx:hkdf",
+        "//hash_frx:hmac",
+        "//hash_frx:sha256",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

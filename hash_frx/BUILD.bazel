@@ -143,3 +143,16 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+# HKDF (RFC 5869) — extract-then-expand over HMAC, the KDF the composition
+# standards (HPKE, TLS-style schedules) name.
+py_library(
+    name = "hkdf",
+    srcs = ["hkdf.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":hmac",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
