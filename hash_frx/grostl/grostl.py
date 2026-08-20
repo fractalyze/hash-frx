@@ -92,22 +92,18 @@ _IV = np.zeros(_BLOCK, dtype=np.uint8)
 _IV[62] = 0x01
 
 
-def _round_constants() -> tuple[np.ndarray, np.ndarray]:
-    """The AddRoundConstant matrices C[i] for P_512 and Q_512, §3.4.2, as
-    uint8 [rounds, 8, 8] in the state's (row, column) layout: P's C[i] is
-    (10·j) ⊕ i across row 0 and zero elsewhere; Q's is ff everywhere except
-    row 7, which is (ff ⊖ 10·j) ⊕ i. Host-built once and threaded through the
-    marked region as operands."""
-    rc_p = np.zeros((_ROUNDS, 8, 8), dtype=np.uint8)
-    rc_q = np.full((_ROUNDS, 8, 8), 0xFF, dtype=np.uint8)
-    for r in range(_ROUNDS):
-        for j in range(8):
-            rc_p[r, 0, j] = (j << 4) ^ r
-            rc_q[r, 7, j] = 0xFF ^ (j << 4) ^ r
-    return rc_p, rc_q
-
-
-_RC_P, _RC_Q = _round_constants()
+# The AddRoundConstant matrices C[i] for P_512 and Q_512, §3.4.2, as uint8
+# [rounds, 8, 8] in the state's (row, column) layout. Both carry the one row
+# formula (10·j) ⊕ i: P on row 0 over a zero matrix, Q as its complement on
+# row 7 over an ff matrix. Host-built once and threaded through the marked
+# region as operands.
+_RC_ROW = (np.arange(8, dtype=np.uint8) << 4) ^ np.arange(
+    _ROUNDS, dtype=np.uint8
+).reshape(-1, 1)
+_RC_P = np.zeros((_ROUNDS, 8, 8), dtype=np.uint8)
+_RC_P[:, 0, :] = _RC_ROW
+_RC_Q = np.full((_ROUNDS, 8, 8), 0xFF, dtype=np.uint8)
+_RC_Q[:, 7, :] = 0xFF ^ _RC_ROW
 
 _IVd = fnp.asarray(_IV)
 _RC_Pd = fnp.asarray(_RC_P)
@@ -344,24 +340,19 @@ def _mix_bytes(state: Array) -> Array:
     constant-premultiplied state rolled up the row axis, one static roll per
     diagonal — no reduction, no gather, no per-column loop. The multiples
     02/03/04/05/07 are xtime chains computed once for the whole state
-    (03 = 02 ⊕ 01, 05 = 04 ⊕ 01, 07 = 04 ⊕ 02 ⊕ 01)."""
+    (03 = 02 ⊕ 01, 05 = 04 ⊕ 01, 07 = 04 ⊕ 03)."""
     x1 = state
     x2 = _xtime(x1)
     x3 = x2 ^ x1
     x4 = _xtime(x2)
     x5 = x4 ^ x1
-    x7 = x4 ^ x2 ^ x1
-    out = x2  # d = 0, c[0] = 02
-    for d, multiple in (
-        (1, x2),
-        (2, x3),
-        (3, x4),
-        (4, x5),
-        (5, x3),
-        (6, x5),
-        (7, x7),
-    ):
-        out = out ^ roll(multiple, -d, axis=-2)
+    x7 = x4 ^ x3
+    # The premultiplied diagonals, in c's order — term d rolls up d rows
+    # (`roll` is the identity at d = 0).
+    diagonals = (x2, x2, x3, x4, x5, x3, x5, x7)
+    out = diagonals[0]
+    for d in range(1, 8):
+        out = out ^ roll(diagonals[d], -d, axis=-2)
     return out
 
 

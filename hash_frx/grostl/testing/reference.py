@@ -77,6 +77,26 @@ SHIFT_Q: tuple[int, ...] = (1, 3, 5, 7, 0, 2, 4, 6)  # spec section 3.4.4
 # rotated right by one).
 MIX_ROW: tuple[int, ...] = (0x02, 0x02, 0x03, 0x04, 0x05, 0x03, 0x05, 0x07)
 
+# The circulant's multipliers premultiplied over F_256, built once — the
+# oracle's MixBytes is table-driven, sharing nothing with the frx xtime
+# chains (and ~20x cheaper than a gf_mul per entry across the differential
+# sweep's ~170 permutations).
+_MUL: dict[int, tuple[int, ...]] = {
+    c: tuple(gf_mul(c, x) for x in range(256)) for c in set(MIX_ROW)
+}
+
+# AddRoundConstant matrices C[r] (spec section 3.4.2), indexed [r][row][col]:
+# P's C[r] is (10*j) XOR r across row 0 and zero elsewhere; Q's is ff
+# everywhere except row 7, which is (ff - 10*j) XOR r.
+RC_P: list[list[list[int]]] = [
+    [[((j << 4) ^ r) if i == 0 else 0 for j in range(8)] for i in range(8)]
+    for r in range(ROUNDS)
+]
+RC_Q: list[list[list[int]]] = [
+    [[(0xFF ^ (j << 4) ^ r) if i == 7 else 0xFF for j in range(8)] for i in range(8)]
+    for r in range(ROUNDS)
+]
+
 
 def _to_matrix(block: bytes) -> list[list[int]]:
     """64 bytes -> 8x8 matrix A[row][col], column by column: byte k lands at
@@ -91,26 +111,22 @@ def _from_matrix(a: list[list[int]]) -> bytes:
 def _permutation(a: list[list[int]], is_q: bool) -> list[list[int]]:
     """P_512 (is_q=False) or Q_512 (is_q=True): ROUNDS rounds of
     AddRoundConstant -> SubBytes -> ShiftBytes -> MixBytes (spec section 3.4).
+    The two differ only in their constants — the round-constant matrices and
+    the shift vector — so the round body is the spec's four uniform steps.
     """
+    rc = RC_Q if is_q else RC_P
+    shifts = SHIFT_Q if is_q else SHIFT_P
     for r in range(ROUNDS):
-        # AddRoundConstant (spec section 3.4.2): P's C[i] is (10*j) XOR i
-        # across row 0 and zero elsewhere; Q's is ff everywhere except row 7,
-        # which is (ff - 10*j) XOR i.
-        if is_q:
-            a = [[byte ^ 0xFF for byte in row] for row in a[:7]] + [
-                [a[7][j] ^ 0xFF ^ (j << 4) ^ r for j in range(8)]
-            ]
-        else:
-            a = [[a[0][j] ^ (j << 4) ^ r for j in range(8)]] + a[1:]
+        # AddRoundConstant (spec section 3.4.2).
+        a = [[a[i][j] ^ rc[r][i][j] for j in range(8)] for i in range(8)]
         # SubBytes (spec section 3.4.3).
         a = [[AES_SBOX[byte] for byte in row] for row in a]
         # ShiftBytes (spec section 3.4.4): row i rotates left by sigma_i.
-        shifts = SHIFT_Q if is_q else SHIFT_P
         a = [row[s:] + row[:s] for row, s in zip(a, shifts)]
         # MixBytes (spec section 3.4.5): A <- B x A, per column.
         a = [
             [
-                _xor_fold(gf_mul(MIX_ROW[(j - i) % 8], a[j][col]) for j in range(8))
+                _xor_fold(_MUL[MIX_ROW[(j - i) % 8]][a[j][col]] for j in range(8))
                 for col in range(8)
             ]
             for i in range(8)
