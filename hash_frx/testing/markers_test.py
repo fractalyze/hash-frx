@@ -17,6 +17,7 @@ from absl.testing import absltest
 
 import hash_frx
 from hash_frx import sha256, sha512, sponge
+from hash_frx.ascon import ascon
 from hash_frx.blake3 import blake3
 from hash_frx.grostl import grostl
 from hash_frx.keccak import permutation as keccak_permutation
@@ -49,6 +50,7 @@ _MODULE_CONSTANTS = {
     keccak_sponge.KECCAK_SPONGE_MARKER: keccak_sponge.KECCAK_SPONGE_MARKER_VERSION,
     sponge.SPONGE_HASH_MARKER: sponge.SPONGE_HASH_MARKER_VERSION,
     grostl.GROSTL256_MARKER: grostl.GROSTL256_MARKER_VERSION,
+    ascon.ASCON_HASH256_MARKER: ascon.ASCON_HASH256_MARKER_VERSION,
 }
 
 
