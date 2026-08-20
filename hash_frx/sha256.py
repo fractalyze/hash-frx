@@ -70,8 +70,10 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 # Whether the pinned plugin claims `hash_frx.digest.sha256_bytes`. A plugin
 # without that recognizer declines the name and inlines the decomposition —
 # right bytes, `GENERIC` path — which at digest scale is the slow path, so
-# `digest` only routes to the bytes marker where a recognizer exists.
-_BYTES_EMITTER_AVAILABLE = False
+# `digest` only routes to the bytes marker where a recognizer exists. True
+# since the pyproject floor: that wheel's emitter pads and packs in-register
+# from the bytes operand, retiring the padded-words materialization.
+_BYTES_EMITTER_AVAILABLE = True
 
 
 def _routes_to_dedicated_emitter() -> bool:

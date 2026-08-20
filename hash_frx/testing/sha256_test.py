@@ -225,11 +225,12 @@ class Sha256ByteHashTest(parameterized.TestCase):
 class Sha256BytesMarkerTest(parameterized.TestCase):
     """The raw-bytes whole-message marker (`sha256_bytes`).
 
-    No pinned recognizer claims the name, so every execution here runs the
-    inlined decomposition — which is exactly the contract under test: right
-    bytes on the fallback path, one composite on the wire, and `digest`
-    holding the blocks route while `_BYTES_EMITTER_AVAILABLE` says no
-    recognizer exists.
+    The pinned recognizer claims the name on cpu/gpu (the pyproject floor
+    names the first wheel that does), so executions here run the dedicated
+    bytes emitter and `digest` routes to this marker. A backend outside
+    `_EMITTER_BACKENDS` emits the same composite and inlines its
+    decomposition — right bytes either way, and
+    `test_matches_the_blocks_marker` holds the two wire forms byte-equal.
     """
 
     @parameterized.parameters(*_LENGTHS)
@@ -252,6 +253,14 @@ class Sha256BytesMarkerTest(parameterized.TestCase):
             np.asarray(sha256.sha256_bytes(fnp.asarray(msgs))),
             np.asarray(via_blocks),
         )
+
+    def test_recognized_where_routed(self) -> None:
+        # The fusion contract for the bytes form: where `digest` routes to
+        # the marker, the pinned plugin must claim it as one custom fusion.
+        if not sha256._routes_to_bytes_marker():
+            self.skipTest("no bytes recognizer on this backend")
+        msgs = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
+        assert_marker_recognized(self, "sha256_bytes", sha256.sha256_bytes, msgs)
 
     def test_emits_one_composite_with_the_bytes_name(self) -> None:
         msg = np.zeros((2, 100), dtype=np.uint8)
