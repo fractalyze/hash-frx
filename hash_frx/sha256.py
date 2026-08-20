@@ -32,7 +32,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import host_digest
 from hash_frx.fusion import FusionPath, fused_region
-from hash_frx.word import rotr
+from hash_frx.word import pack_be, rotr, unpack_be
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -245,14 +245,7 @@ def block_to_words(blocks: Array) -> Array:
     incrementally (a streaming hash).
     """
     b = blocks.shape[0]
-    nblocks = blocks.shape[1] // 64
-    w = blocks.reshape(b, nblocks, 16, 4).astype(U32)
-    return (
-        (w[..., 0] << U32(24))
-        | (w[..., 1] << U32(16))
-        | (w[..., 2] << U32(8))
-        | w[..., 3]
-    )
+    return pack_be(blocks.reshape(b, -1, 64))
 
 
 def _padded_words(msg: Array, tail: Array | None = None) -> Array:
@@ -288,19 +281,7 @@ def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array
 
 def serialize_digest(state: Array) -> Array:
     """SHA-256 midstate uint32 [B, 8] -> uint8 [B, 32] big-endian digest."""
-    b = state.shape[0]
-    out = fnp.stack(
-        [
-            (state >> U32(24)) & U32(0xFF),
-            (state >> U32(16)) & U32(0xFF),
-            (state >> U32(8)) & U32(0xFF),
-            state & U32(0xFF),
-        ],
-        axis=-1,
-    ).astype(
-        fnp.uint8
-    )  # [B, 8, 4]
-    return out.reshape(b, 32)
+    return unpack_be(state)
 
 
 def deserialize_digest(digest: Array) -> Array:
@@ -309,14 +290,7 @@ def deserialize_digest(digest: Array) -> Array:
     per-block feedforward is inside the compression), so unpacking one resumes
     the stream: a streaming absorb rides the digest-shaped marker and reads the
     next midstate back out."""
-    b = digest.shape[0]
-    w = digest.reshape(b, 8, 4).astype(U32)
-    return (
-        (w[..., 0] << U32(24))
-        | (w[..., 1] << U32(16))
-        | (w[..., 2] << U32(8))
-        | w[..., 3]
-    )
+    return pack_be(digest)
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
@@ -541,20 +515,7 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     # SHA-256's 64-bit length field; the high 32 bits are zero for any message
     # below 2**32 bits (512 MiB) — so the length is a uint32 and no x64 is needed.
     bitlen = msg_bytes.astype(fnp.uint32) * fnp.uint32(8)
-    len_bytes = fnp.array([0, 0, 0, 0], dtype=fnp.uint8)
-    len_bytes = fnp.concatenate(
-        [
-            len_bytes,
-            fnp.stack(
-                [
-                    ((bitlen >> fnp.uint32(24)) & fnp.uint32(0xFF)).astype(fnp.uint8),
-                    ((bitlen >> fnp.uint32(16)) & fnp.uint32(0xFF)).astype(fnp.uint8),
-                    ((bitlen >> fnp.uint32(8)) & fnp.uint32(0xFF)).astype(fnp.uint8),
-                    (bitlen & fnp.uint32(0xFF)).astype(fnp.uint8),
-                ]
-            ),
-        ]
-    )  # [8] big-endian
+    len_bytes = unpack_be(fnp.stack([fnp.uint32(0), bitlen]))  # [8] big-endian
 
     two_blocks = content_len > fnp.int32(55)  # need a 2nd block for pad + length?
     active_bytes = fnp.where(two_blocks, fnp.int32(128), fnp.int32(64))

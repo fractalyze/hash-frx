@@ -47,7 +47,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import host_digest
 from hash_frx.fusion import FusionPath, fused_region
-from hash_frx.word import split
+from hash_frx.word import pack_be, split, unpack_be
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -217,7 +217,10 @@ INITIAL_STATE = fnp.asarray(_H0)  # uint32 [16]
 # ---------------------------------------------------------------------------
 # 64-bit lane helpers over `(lo, hi)` uint32 half pairs. Module-local: SHA-512
 # is their only consumer, and `word.py`'s charter shares only literally
-# identical functions — `keccak/lane.py`'s rotate stays keccak's the same way.
+# identical functions — `keccak/lane.py`'s rotate is the mirrored direction,
+# not the same function. The charter's lift bar is a second literal consumer;
+# a device BLAKE2b row's G is the one that would meet it (the identical
+# add/rotr/xor set, rotations 32/24/16/63).
 # The rotation is written as three static cases so no shift is ever by 32: a
 # shift equal to the word width is undefined, and the single-expression form
 # reaches it whenever the in-half shift is zero (lane.py states the hazard).
@@ -269,8 +272,13 @@ def _add64(a: _Pair, b: _Pair) -> _Pair:
     return lo, a[1] + b[1] + carry
 
 
-def _xor64(a: _Pair, b: _Pair) -> _Pair:
-    return a[0] ^ b[0], a[1] ^ b[1]
+def _xor64(*terms: _Pair) -> _Pair:
+    """XOR of two or more 64-bit values — variadic because every Σ/σ below is a
+    three-term equation, and the flat call reads as the FIPS formula it is."""
+    lo, hi = terms[0]
+    for t in terms[1:]:
+        lo, hi = lo ^ t[0], hi ^ t[1]
+    return lo, hi
 
 
 @lru_cache(maxsize=None)
@@ -317,13 +325,14 @@ def _compress(state: Array, w32: Array, k: Array) -> Array:
     def round_t(t: Array, carry: tuple) -> tuple:
         a, bb, c, d, e, f, g, h, w_lo, w_hi = carry
         word: _Pair = (w_lo[:, 0], w_hi[:, 0])
-        kt: _Pair = (kp[t, 1], kp[t, 0])
+        krow = kp[t]  # one row gather; the halves split statically below
+        kt: _Pair = (krow[1], krow[0])
         # Σ1 = ROTR14 ⊕ ROTR18 ⊕ ROTR41; Ch = (e ∧ f) ⊕ (¬e ∧ g) (§4.1.3).
-        s1 = _xor64(_xor64(_rotr64(e, 14), _rotr64(e, 18)), _rotr64(e, 41))
+        s1 = _xor64(_rotr64(e, 14), _rotr64(e, 18), _rotr64(e, 41))
         ch: _Pair = ((e[0] & f[0]) ^ (~e[0] & g[0]), (e[1] & f[1]) ^ (~e[1] & g[1]))
         t1 = _add64(_add64(_add64(_add64(h, s1), ch), kt), word)
         # Σ0 = ROTR28 ⊕ ROTR34 ⊕ ROTR39; Maj = (a∧b) ⊕ (a∧c) ⊕ (b∧c).
-        s0 = _xor64(_xor64(_rotr64(a, 28), _rotr64(a, 34)), _rotr64(a, 39))
+        s0 = _xor64(_rotr64(a, 28), _rotr64(a, 34), _rotr64(a, 39))
         maj: _Pair = (
             (a[0] & bb[0]) ^ (a[0] & c[0]) ^ (bb[0] & c[0]),
             (a[1] & bb[1]) ^ (a[1] & c[1]) ^ (bb[1] & c[1]),
@@ -334,18 +343,18 @@ def _compress(state: Array, w32: Array, k: Array) -> Array:
         # window indices as SHA-256's schedule.
         w1: _Pair = (w_lo[:, 1], w_hi[:, 1])
         w14: _Pair = (w_lo[:, 14], w_hi[:, 14])
-        sig0 = _xor64(_xor64(_rotr64(w1, 1), _rotr64(w1, 8)), _shr64(w1, 7))
-        sig1 = _xor64(_xor64(_rotr64(w14, 19), _rotr64(w14, 61)), _shr64(w14, 6))
+        sig0 = _xor64(_rotr64(w1, 1), _rotr64(w1, 8), _shr64(w1, 7))
+        sig1 = _xor64(_rotr64(w14, 19), _rotr64(w14, 61), _shr64(w14, 6))
         nxt = _add64(_add64(_add64(word, sig0), (w_lo[:, 9], w_hi[:, 9])), sig1)
         w_lo = fnp.concatenate([w_lo[:, 1:], nxt[0][:, None]], axis=1)
         w_hi = fnp.concatenate([w_hi[:, 1:], nxt[1][:, None]], axis=1)
         return (_add64(t1, t2), a, bb, c, _add64(d, t1), e, f, g, w_lo, w_hi)
 
-    init = (*(((sp[:, i, 1], sp[:, i, 0])) for i in range(8)), w_lo0, w_hi0)
-    out = frx.lax.fori_loop(0, 80, round_t, init)
+    chain0 = [(sp[:, i, 1], sp[:, i, 0]) for i in range(8)]  # a..h as pairs
+    out = frx.lax.fori_loop(0, 80, round_t, (*chain0, w_lo0, w_hi0))
     final = []
     for i in range(8):  # h_i' = h_i + var_i, the per-block feedforward (§6.4.2)
-        s = _add64((sp[:, i, 1], sp[:, i, 0]), out[i])
+        s = _add64(chain0[i], out[i])
         final.extend([s[1], s[0]])  # back to the pair layout: hi, then lo
     return fnp.stack(final, axis=1)
 
@@ -361,14 +370,7 @@ def block_to_words(blocks: Array) -> Array:
     building its own blocks incrementally (a streaming hash).
     """
     b = blocks.shape[0]
-    nblocks = blocks.shape[1] // 128
-    w = blocks.reshape(b, nblocks, 32, 4).astype(U32)
-    return (
-        (w[..., 0] << U32(24))
-        | (w[..., 1] << U32(16))
-        | (w[..., 2] << U32(8))
-        | w[..., 3]
-    )
+    return pack_be(blocks.reshape(b, -1, 128))
 
 
 def _padded_words(msg: Array, tail: Array | None = None) -> Array:
@@ -404,20 +406,8 @@ def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array
 def serialize_digest(state: Array) -> Array:
     """SHA-512 midstate uint32 [B, 16] -> uint8 [B, 64] big-endian digest. The
     pair layout is the big-endian word stream already, so this is the per-uint32
-    big-endian byte expansion with no cross-word reorder."""
-    b = state.shape[0]
-    out = fnp.stack(
-        [
-            (state >> U32(24)) & U32(0xFF),
-            (state >> U32(16)) & U32(0xFF),
-            (state >> U32(8)) & U32(0xFF),
-            state & U32(0xFF),
-        ],
-        axis=-1,
-    ).astype(
-        fnp.uint8
-    )  # [B, 16, 4]
-    return out.reshape(b, 64)
+    big-endian byte expansion (`word.unpack_be`) with no cross-word reorder."""
+    return unpack_be(state)
 
 
 def deserialize_digest(digest: Array) -> Array:
@@ -426,14 +416,7 @@ def deserialize_digest(digest: Array) -> Array:
     (the per-block feedforward is inside the compression), so unpacking one
     resumes the stream: a streaming absorb rides the digest-shaped marker and
     reads the next midstate back out."""
-    b = digest.shape[0]
-    w = digest.reshape(b, 16, 4).astype(U32)
-    return (
-        (w[..., 0] << U32(24))
-        | (w[..., 1] << U32(16))
-        | (w[..., 2] << U32(8))
-        | w[..., 3]
-    )
+    return pack_be(digest)
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
@@ -628,19 +611,8 @@ def sha512_stream_finalize(state: Sha512State, extras: Array) -> Array:
     count = msg_bytes.astype(fnp.uint32)
     bit_lo = count << fnp.uint32(3)
     bit_hi = count >> fnp.uint32(29)
-
-    def be4(word: Array) -> Array:
-        return fnp.stack(
-            [
-                ((word >> fnp.uint32(24)) & fnp.uint32(0xFF)).astype(fnp.uint8),
-                ((word >> fnp.uint32(16)) & fnp.uint32(0xFF)).astype(fnp.uint8),
-                ((word >> fnp.uint32(8)) & fnp.uint32(0xFF)).astype(fnp.uint8),
-                (word & fnp.uint32(0xFF)).astype(fnp.uint8),
-            ]
-        )
-
     len_bytes = fnp.concatenate(
-        [fnp.zeros(8, dtype=fnp.uint8), be4(bit_hi), be4(bit_lo)]
+        [fnp.zeros(8, dtype=fnp.uint8), unpack_be(fnp.stack([bit_hi, bit_lo]))]
     )  # [16] big-endian
 
     # Need a 2nd block for pad + length? One block holds ≤ 128 − 17 content.
