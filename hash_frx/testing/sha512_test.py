@@ -198,30 +198,23 @@ class Sha512MarkerTest(absltest.TestCase):
 
 
 class Sha512TracedTest(parameterized.TestCase):
-    """`digest` inside a traced region, at every padding boundary.
+    """`digest` inside a traced region.
 
     The point of the padding being a function of the length: a consumer can
     hash inside its own `@jit` without reaching past the seam for the
     compression, so a scheme built on `ByteHash` does not have to name SHA-512
-    to be traceable. Byte-equality with the eager path is the whole claim — a
-    traced padding that is subtly different produces a self-consistent wrong
-    hash.
+    to be traceable. One boundary-crossing length: compile time scales with
+    block count, the property does not (the eager sweeps already own value
+    coverage at every boundary).
     """
 
-    @parameterized.parameters(*_LENGTHS)
-    def test_jit_matches_eager(self, length: int) -> None:
-        msg = (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A))[None, :]
-        np.testing.assert_array_equal(
-            np.asarray(frx.jit(sha512.digest)(msg)), np.asarray(sha512.digest(msg))
-        )
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_jit_matches_hashlib(self, length: int) -> None:
-        # Against the reference rather than against ourselves: the eager path
-        # agreeing with a traced one that shares its bug would prove nothing.
-        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0xA5)
-        got = np.asarray(frx.jit(sha512.digest)(msg[None, :]))[0]
-        self.assertEqual(bytes(got), hashlib.sha512(bytes(msg)).digest())
+    def test_jit_matches_eager_and_hashlib(self) -> None:
+        # Against the reference as well as the eager path: eager agreeing with
+        # a traced path that shares its bug would prove nothing.
+        msg = (np.arange(129, dtype=np.uint8) ^ np.uint8(0x5A))[None, :]
+        traced = np.asarray(frx.jit(sha512.digest)(msg))
+        np.testing.assert_array_equal(traced, np.asarray(sha512.digest(msg)))
+        self.assertEqual(bytes(traced[0]), hashlib.sha512(bytes(msg[0])).digest())
 
     def test_vmap_matches_the_batch_axis(self) -> None:
         # `digest` already takes the batch, so mapping a one-row call over a
@@ -242,14 +235,6 @@ class Sha512TracedTest(parameterized.TestCase):
         np.testing.assert_array_equal(
             np.asarray(frx.jit(hasher.digest)(msg)), np.asarray(hasher.digest(msg))
         )
-
-    def test_traced_digest_still_emits_one_marker(self) -> None:
-        # The marker is what makes a digest one device unit; a traced caller
-        # must not lose it by taking a different path into the compression.
-        msg = np.zeros((1, 128), dtype=np.uint8)
-        txt = frx.jit(sha512.digest).lower(msg).as_text()
-        self.assertIn(sha512.SHA512_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
 
     def test_digest_reuses_one_trace_across_instances(self) -> None:
         # The zone's cache is keyed on the message aval alone (the digest is

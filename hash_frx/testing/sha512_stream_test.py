@@ -43,8 +43,10 @@ class Sha512StreamTest(absltest.TestCase):
         # 8-byte extra (the transcript's counter-mode append).
         for n in (0, 1, 63, 64, 111, 112, 119, 120, 127, 128, 129, 200, 255, 256, 383):
             msg = bytes((i * 7 + 3) & 0xFF for i in range(n))
+            # The absorb depends only on `n`, and finalize is a non-mutating
+            # copy — one absorbed state serves both extras.
+            state = _stream_absorb_all([msg])
             for extra in (b"", b"\x00\x11\x22\x33\x44\x55\x66\x77"):
-                state = _stream_absorb_all([msg])
                 got = bytes(
                     np.asarray(
                         sha512_stream_finalize(state, _u8(extra).reshape(1, -1))[0]
