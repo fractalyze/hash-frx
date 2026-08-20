@@ -30,22 +30,22 @@ an emitter landing flips the two module flags and nothing else here moves.
 
 The body is kept straight-line for the generic rewriter: rounds unroll (fixed,
 small count), the MDS uses the normal-form `apply_matrix`, and both S-boxes
-are explicit chains of element-wise multiplies (`_pow_unrolled`) — `x ** 7` is
-four multiplies, and the inverse S-box is a Python-unrolled square-and-multiply
-over `inv_alpha`'s fixed bits, ~2*log2(p) multiplies per layer (~100 for the
-64-bit RPO exponent). `fnp.power` with either exponent would put a call in the
-body; nothing here reduces, gathers, or calls.
+are `fnp.power` with static integer exponents — the Poseidon-family spelling:
+a static exponent lowers to an explicit square-and-multiply chain of
+element-wise multiplies (~2*log2(p) per layer, ~100 for the 64-bit RPO inverse
+exponent), never a call, and the whole-body fusion-readiness and read-limit
+cases in `testing/rescue_test.py` hold that lowering to the whitelist rather
+than assuming it. Nothing here reduces, gathers, or calls.
 """
 
 from __future__ import annotations
 
-import functools
-import operator
 from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import frx
+import frx.numpy as fnp
 from frx import Array
 
 from hash_frx.fusion import (
@@ -163,33 +163,6 @@ class Rescue:
         )
 
 
-def _pow_unrolled(x: Array, exponent: int) -> Array:
-    """`x ** exponent` as an explicit chain of element-wise multiplies.
-
-    Right-to-left binary exponentiation, Python-unrolled over `exponent`'s
-    FIXED bits: a squaring chain (`power * power`, one field multiply each)
-    produces `x**(2**j)`, and the set-bit powers fold together highest-first —
-    `x**7 = x4 * x2 * x`. Total multiplies: bit_length - 1 squarings plus
-    popcount - 1 folds, so ~2*log2(exponent) — the inverse S-box's whole cost.
-    `fnp.power` would carry an internal jit (a call, which the single-kernel
-    rewriter rejects) and a traced exponent besides.
-
-    The chained-input rule in `hash_frx.linear` holds by construction: `x` is
-    read only as the base of the squaring chain (both factors of the first
-    squaring) and, when bit 0 is set, once in the fold — at most 3 reads no
-    matter the exponent width. Every later term reads the previous power.
-    """
-    if exponent < 1:
-        raise ValueError(f"exponent must be a positive int, got {exponent}")
-    powers = [x]
-    for _ in range(exponent.bit_length() - 1):
-        powers.append(powers[-1] * powers[-1])
-    set_powers = [
-        powers[j] for j in reversed(range(exponent.bit_length())) if exponent >> j & 1
-    ]
-    return functools.reduce(operator.mul, set_powers)
-
-
 def _permutation_body(
     perm: Rescue,
     s: Array,
@@ -208,10 +181,10 @@ def _permutation_body(
         # then the S-box — NOT the SoK's S-box-first order (module docstring).
         s = apply_matrix(mds, s)
         s = s + round_constants[2 * r]
-        s = _pow_unrolled(s, p.alpha)
+        s = fnp.power(s, p.alpha)
         s = apply_matrix(mds, s)
         s = s + round_constants[2 * r + 1]
-        s = _pow_unrolled(s, p.inv_alpha)
+        s = fnp.power(s, p.inv_alpha)
     return s
 
 

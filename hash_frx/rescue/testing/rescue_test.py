@@ -57,7 +57,6 @@ from hash_frx.rescue.rescue import (
     _abi_operands,
     _permutation_body,
     _permute_body,
-    _pow_unrolled,
 )
 from hash_frx.rescue.testing.decode import int_rows, ints
 from hash_frx.rescue.testing.reference import (
@@ -263,14 +262,18 @@ class RescueLayerContractTest(absltest.TestCase):
     """
 
     def test_the_power_chains_are_fusion_ready_and_read_limited(self) -> None:
+        # `fnp.power` with a STATIC integer exponent (the Poseidon-family
+        # spelling) must lower to a square-and-multiply chain of whitelist
+        # multiplies — this is where that lowering is held to the contract
+        # rather than assumed, the 64-bit inverse exponent being the sharp
+        # case no other family exercises.
         x = _device_state(_STATES["seed0"])
         for label, e in (("alpha", 7), ("inv_alpha", _RPO128.inv_alpha)):
             with self.subTest(exponent=label):
-                assert_fusion_ready(lambda v, e=e: _pow_unrolled(v, e), x)
+                assert_fusion_ready(lambda v, e=e: fnp.power(v, e), x)
                 # The base feeds the first squaring (both factors) and the
-                # bit-0 fold: THREE reads no matter the exponent width — the
-                # 64-bit inverse exponent is the sharp case.
-                assert_input_uses(lambda v, e=e: _pow_unrolled(v, e), x, limit=3)
+                # bit-0 fold: THREE reads no matter the exponent width.
+                assert_input_uses(lambda v, e=e: fnp.power(v, e), x, limit=3)
 
     def test_the_mds_stays_normal_form(self) -> None:
         x = _device_state(_STATES["seed0"])
