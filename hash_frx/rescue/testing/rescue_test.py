@@ -21,7 +21,7 @@ contract gives it: the pinned plugin's GPU codegen miscompiles
 of a sum inside one fused kernel, which every Rescue S-box layer contains by
 construction (`(state + rc) ** alpha`), with no authoring dodge (the
 field-aware simplifier folds every respelling back). Tracked with a minimal
-repro and analysis at https://github.com/fractalyze/zkx/issues/808. The
+repro and analysis at https://github.com/fractalyze/xla/issues/564. The
 value-executing cases here guard on `_gl64_square_of_add_miscompiles`, a
 runtime probe of that exact pattern on the current backend: today it skips
 them on the GPU leg only, and the moment a pinned plugin computes the probe
@@ -122,7 +122,7 @@ def _oracle(lanes: list[int]) -> list[int]:
 @functools.cache
 def _gl64_square_of_add_miscompiles() -> bool:
     """Whether this backend's toolchain miscompiles the square-of-a-sum over
-    the 64-bit Goldilocks Montgomery dtype (fractalyze/zkx#808) — the pattern
+    the 64-bit Goldilocks Montgomery dtype (fractalyze/xla#564) — the pattern
     every Rescue S-box input is. Probed at runtime on the exact pinned plugin
     the suite runs, so the guard evaporates the moment a fixed plugin lands
     rather than living on as a stale skip."""
@@ -136,12 +136,12 @@ def _gl64_square_of_add_miscompiles() -> bool:
 def _require_trustworthy_values(test: absltest.TestCase) -> None:
     """Skip a value-asserting case where the toolchain is known to miscompile
     the body's arithmetic (see the module docstring): a red that only restates
-    zkx#808 hides a real regression, and a green is unobtainable. Lowering and
+    xla#564 hides a real regression, and a green is unobtainable. Lowering and
     marker cases never call this — they must hold everywhere."""
     if _gl64_square_of_add_miscompiles():
         test.skipTest(
             "pinned plugin miscompiles goldilocks_mont (a+b)*(a+b) on this "
-            "backend — https://github.com/fractalyze/zkx/issues/808"
+            "backend — https://github.com/fractalyze/xla/issues/564"
         )
 
 
