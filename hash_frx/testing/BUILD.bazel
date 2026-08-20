@@ -265,6 +265,26 @@ py_library(
 )
 
 py_test(
+    name = "ripemd160_test",
+    # Compile-heavy relative to its arithmetic: the vector rows and the
+    # differential sweep each compile the unrolled 160-step digest body once
+    # per (batch, length) aval.
+    size = "medium",
+    srcs = ["ripemd160_test.py"],
+    deps = [
+        ":host_ripemd160",
+        ":jit_cache",
+        ":ripemd160_reference",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:ripemd160",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "sha256_test",
     size = "medium",
     srcs = ["sha256_test.py"],
