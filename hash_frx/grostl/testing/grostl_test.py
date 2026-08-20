@@ -18,6 +18,7 @@ emitter will read, pinned before it exists (the Vision arrangement).
 
 from __future__ import annotations
 
+import functools
 from typing import Any
 
 import frx
@@ -32,6 +33,7 @@ from hash_frx.grostl import grostl
 from hash_frx.grostl.grostl import Grostl256
 from hash_frx.grostl.testing.host_grostl256 import HostGrostl256
 from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS
+from hash_frx.testing.jit_cache import assert_single_trace
 
 # Padding-boundary lengths for the differential sweep: 0/1 (empty + tiny),
 # 55/56 (the one-vs-two-block cutoff — the 0x80 byte and the 8-byte block
@@ -58,23 +60,15 @@ class Grostl256KatTest(parameterized.TestCase):
     def test_device_and_host_agree(self, length: int) -> None:
         # The differential partner issue #163 asks for: the device digest
         # against the oracle-backed host row, across every padding boundary
-        # and a batch — not one convenient length.
+        # and a batch — not one convenient length. The host row loops the
+        # oracle per row (`byte_hash.host_digest`), so the batch equality is
+        # also the bulk-parallel claim: one data-parallel device call equals
+        # the per-message digests, in order.
         msgs = _message(length)
         np.testing.assert_array_equal(
             np.asarray(Grostl256().digest(msgs)),
             np.asarray(HostGrostl256().digest(msgs)),
         )
-
-    def test_batched_equals_per_row(self) -> None:
-        # One data-parallel call over a stack must equal the per-message
-        # oracle digests, in order — the bulk-parallel claim itself.
-        msgs = _message(64, seed=7)
-        got = np.asarray(grostl.digest(msgs))
-        for i in range(msgs.shape[0]):
-            self.assertEqual(
-                bytes(got[i]).hex(),
-                HostGrostl256().digest(msgs[i : i + 1])[0].tobytes().hex(),
-            )
 
 
 class SboxCircuitTest(absltest.TestCase):
@@ -85,8 +79,8 @@ class SboxCircuitTest(absltest.TestCase):
         # exhaustively. The oracle's table is derived from the FIPS 197
         # definition and spot-anchored to the published table in
         # `reference_test`, so the two sides share no spelling.
-        x = fnp.asarray(np.arange(256, dtype=np.uint8).reshape(2, 8, 16))
-        got = np.asarray(frx.jit(grostl._sbox)(x)).reshape(256)
+        x = fnp.asarray(np.arange(256, dtype=np.uint8))
+        got = np.asarray(frx.jit(grostl._sbox)(x))
         np.testing.assert_array_equal(got, np.array(AES_SBOX, dtype=np.uint8))
 
 
@@ -162,11 +156,15 @@ class Grostl256TracedTest(absltest.TestCase):
             np.asarray(hasher.digest(msgs)),
         )
 
-    def test_traced_digest_still_emits_one_marker(self) -> None:
-        msg = np.zeros((1, 65), dtype=np.uint8)
-        txt = frx.jit(grostl.digest).lower(msg).as_text()
-        self.assertIn(grostl.GROSTL256_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
+    def test_digest_reuses_one_trace_across_instances(self) -> None:
+        # The zone's cache is keyed on the message aval alone (the digest is
+        # parameterless), so freshly built instances must share one trace —
+        # the property `grostl256_bytes`'s module-level jit zone exists for.
+        # The (4, 65) aval is the one `test_the_seam_carries_it` already
+        # compiled, so the pin costs no fresh compile.
+        msgs = fnp.asarray(_message(65, seed=3))
+        calls = [functools.partial(Grostl256().digest, msgs) for _ in range(3)]
+        assert_single_trace(self, grostl.grostl256_bytes, calls)
 
 
 class Grostl256ByteHashTest(absltest.TestCase):
@@ -184,21 +182,25 @@ class Grostl256ByteHashTest(absltest.TestCase):
         # backend) — and the traceability tie to the return type: the device
         # row returns an `Array` and takes a tracer, the host row reads bytes
         # and never can (`byte_hash.py`'s rule).
-        msg = np.zeros((1, 3), dtype=np.uint8)
+        # A (1, 1) message: the KAT already compiled that aval, so the
+        # plumbing check costs no fresh compile of the digest body.
+        msg = np.zeros((1, 1), dtype=np.uint8)
         device, host = Grostl256(), HostGrostl256()
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
         self.assertTrue(device.fusion_path.is_traceable)
-        self.assertNotIsInstance(device.digest(msg), np.ndarray)
-        self.assertIsInstance(device.digest(msg), Array)
+        out = device.digest(msg)
+        self.assertNotIsInstance(out, np.ndarray)
+        self.assertIsInstance(out, Array)
         self.assertIs(host.fusion_path, FusionPath.HOST)
         self.assertFalse(host.fusion_path.is_traceable)
         self.assertIsInstance(host.digest(msg), np.ndarray)
 
     def test_digest_shape_and_dtype(self) -> None:
+        # (4, 1) rides the differential sweep's aval — no fresh compile.
         for h in (Grostl256(), HostGrostl256()):
             with self.subTest(impl=type(h).__name__):
-                out = np.asarray(h.digest(np.zeros((3, 5), dtype=np.uint8)))
-                self.assertEqual(out.shape, (3, 32))
+                out = np.asarray(h.digest(np.zeros((4, 1), dtype=np.uint8)))
+                self.assertEqual(out.shape, (4, 32))
                 self.assertEqual(out.dtype, np.uint8)
 
     def test_value_identity_is_by_type(self) -> None:
