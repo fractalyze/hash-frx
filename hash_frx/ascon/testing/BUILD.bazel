@@ -1,0 +1,28 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+# The plain-python oracle: ints and bytes only, no frx, so the differential
+# tests hold the frx implementation to something that shares none of its
+# lowering rules (its S-box is the column-wise Table 6 lookup, not the
+# bitsliced circuit; its words are Python ints, not uint32 half pairs).
+py_library(
+    name = "reference",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "reference.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
+# No device work: plain python against the transcribed KAT, so the CUDA plugin
+# wheels would be ~430 MB of runfiles for nothing.
+py_test(
+    name = "reference_test",
+    size = "small",
+    srcs = ["reference_test.py"],
+    deps = [
+        ":reference",
+        requirement("absl_py"),
+    ],
+)
