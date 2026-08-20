@@ -1,0 +1,25 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Byte-oriented Ascon-Hash256 (NIST SP 800-232, the lightweight-cryptography
+# standard): the `digest` batch hash behind the `hash_frx.digest.ascon_hash256`
+# marker plus the `AsconHash256` ByteHash row, over uint32 lane halves. A
+# standalone hash, not a Permutation; no zk_dtypes / x64 dependency. The host
+# differential partner is testonly
+# (//hash_frx/ascon/testing:host_ascon_hash256) — no C library implements
+# Ascon.
+py_library(
+    name = "ascon",
+    srcs = [
+        "__init__.py",
+        "ascon.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
