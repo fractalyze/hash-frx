@@ -54,7 +54,7 @@ SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
 # packing inside the marker. The blocks marker above takes pre-padded words,
 # so every consumer runs a pad-and-pack pass over the whole batch first —
 # at a Merkle-leaf-scale batch (2^20 x 1 KiB) that pass writes and re-reads
-# ~1.16 GB a recognizing emitter can instead synthesize in registers, the
+# ~1.1 GB a recognizing emitter can instead synthesize in registers, the
 # padding being a function of the static length.
 SHA256_BYTES_MARKER_VERSION = 1
 
@@ -253,14 +253,17 @@ def block_to_words(blocks: Array) -> Array:
     )
 
 
-def _padded_words(msg: Array) -> Array:
+def _padded_words(msg: Array, tail: Array | None = None) -> Array:
     """A uint8 [B, L] batch padded and packed: uint32 [B, nblocks, 16].
 
     A concatenation and a reshape, which is the whole point: the message is only
     ever an operand here, never something written into a host buffer, so this
-    holds a tracer as readily as a concrete array.
+    holds a tracer as readily as a concrete array. `tail` defaults to the
+    FIPS 180-4 padding for L; `sha256_bytes` passes its tail operand explicitly
+    so its marked region captures nothing.
     """
-    tail = fnp.asarray(_padding_tail(msg.shape[-1]))
+    if tail is None:
+        tail = fnp.asarray(_padding_tail(msg.shape[-1]))
     return block_to_words(
         fnp.concatenate(
             [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
@@ -373,17 +376,15 @@ def sha256_bytes(msg: Array) -> Array:
     Operands are explicit in the recognizer's positional ABI order
     [h0, k, msg, tail]. `tail` is `_padding_tail(L)` passed as an operand
     rather than captured (a captured constant would prepend at operand 0);
-    it is redundant to a recognizing emitter and load-bearing for the
-    inlined decomposition."""
+    it is derivable from the static L — a recognizing emitter reads it
+    rather than re-deriving it — and load-bearing for the inlined
+    decomposition."""
 
     def decomposition(
         h0: Array, k: Array, msg: Array, tail: Array, **_attrs: object
     ) -> Array:
-        padded = fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
-        )
         state = fnp.broadcast_to(h0, (msg.shape[0], 8))
-        return serialize_digest(compress(state, block_to_words(padded), k))
+        return serialize_digest(compress(state, _padded_words(msg, tail), k))
 
     return fused_region(
         decomposition,
