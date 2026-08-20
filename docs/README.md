@@ -62,6 +62,7 @@ tests share.
 | The single place a `lax.composite` marker is emitted                                        | [`_composite.py`](../hash_frx/_composite.py)         |
 | Writing a linear layer that does not split the kernel — the column-scaled normal form        | [`linear.py`](../hash_frx/linear.py)                 |
 | Rotating, rolling, or packing bytes to words without emitting a call or a gather              | [`word.py`](../hash_frx/word.py)                     |
+| 64-bit rotate / shift / carry-add / XOR over `(lo, hi)` uint32 half pairs, shared by the 64-bit-word hashes | [`word64.py`](../hash_frx/word64.py)                 |
 
 ## Test helpers
 

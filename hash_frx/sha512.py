@@ -9,9 +9,10 @@ mirrors section for section).
 A SHA-512 word is 64 bits, and this toolchain cannot hold one safely: with x64
 off `uint64` truncates to `uint32`, and enabling x64 flips the default dtypes
 process-wide (`keccak/lane.py` states the law). So every 64-bit word is a pair of
-`uint32` halves, and the three 64-bit operations the compression needs beyond
-per-half bitwise ops — rotate-right, logical shift-right, add-with-carry — are
-the module-local helpers below.
+`uint32` halves, and the 64-bit operations the compression needs beyond per-half
+bitwise ops — rotate-right, logical shift-right, add-with-carry, the variadic
+XOR — are the shared half-pair helpers in `word64.py` (lifted from here when
+BLAKE2b became their second consumer).
 
 **The wire layout is the FIPS byte stream packed big-endian into uint32s.** A
 64-bit word rides as two uint32s with the HIGH half at the even index — element
@@ -48,11 +49,10 @@ from frx.typing import ArrayLike
 from hash_frx.byte_hash import host_digest
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_be, split, unpack_be
+from hash_frx.word64 import Pair, add64, rotr64, shr64, xor64
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
-
-U32 = fnp.uint32
 
 SHA512_MARKER = "hash_frx.digest.sha512"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI in
@@ -214,71 +214,12 @@ _Kd = fnp.asarray(_K)
 INITIAL_STATE = fnp.asarray(_H0)  # uint32 [16]
 
 
-# ---------------------------------------------------------------------------
-# 64-bit lane helpers over `(lo, hi)` uint32 half pairs. Module-local: SHA-512
-# is their only consumer, and `word.py`'s charter shares only literally
-# identical functions — `keccak/lane.py`'s rotate is the mirrored direction,
-# not the same function. The charter's lift bar is a second literal consumer;
-# a device BLAKE2b row's G is the one that would meet it (the identical
-# add/rotr/xor set, rotations 32/24/16/63).
-# The rotation is written as three static cases so no shift is ever by 32: a
-# shift equal to the word width is undefined, and the single-expression form
-# reaches it whenever the in-half shift is zero (lane.py states the hazard).
-# ---------------------------------------------------------------------------
-
-# A 64-bit value: (low 32 bits, high 32 bits), both halves the same shape.
-_Pair = tuple[Array, Array]
-
-
-def _rotr64(a: _Pair, n: int) -> _Pair:
-    """Rotate the 64-bit value right by a single compile-time `n` — the
-    rotate-right mirror of `keccak.lane.rotl`, three cases for the same reason:
-    `n == 32` is a pure half swap, and `n > 32` is that swap composed with the
-    sub-32 case, which is why the swapped halves appear below."""
-    n %= 64
-    lo, hi = a
-    if n == 0:
-        return lo, hi
-    if n == 32:
-        return hi, lo
-    if n < 32:
-        s = U32(n)
-        c = U32(32 - n)
-        return (lo >> s) | (hi << c), (hi >> s) | (lo << c)
-    m = n - 32
-    s = U32(m)
-    c = U32(32 - m)
-    return (hi >> s) | (lo << c), (lo >> s) | (hi << c)
-
-
-def _shr64(a: _Pair, n: int) -> _Pair:
-    """Logical shift-right of the 64-bit value by `0 < n < 32` — all σ shifts in
-    FIPS 180-4 §4.1.3 are 6 or 7, so the cross-half cases never arise and the
-    bound keeps every uint32 shift defined."""
-    lo, hi = a
-    s = U32(n)
-    c = U32(32 - n)
-    return (lo >> s) | (hi << c), hi >> s
-
-
-def _add64(a: _Pair, b: _Pair) -> _Pair:
-    """64-bit addition mod 2^64: per-half uint32 adds with a comparison-based
-    carry — `lo` wrapped iff it came out below an addend. The comparison is an
-    ordinary element-wise op, and the digest marker this feeds is name-routed
-    and exempt from the generic single-kernel whitelist regardless
-    (`sha256.sha256_merkle_damgard` states the exemption)."""
-    lo = a[0] + b[0]
-    carry = (lo < a[0]).astype(U32)
-    return lo, a[1] + b[1] + carry
-
-
-def _xor64(*terms: _Pair) -> _Pair:
-    """XOR of two or more 64-bit values — variadic because every Σ/σ below is a
-    three-term equation, and the flat call reads as the FIPS formula it is."""
-    lo, hi = terms[0]
-    for t in terms[1:]:
-        lo, hi = lo ^ t[0], hi ^ t[1]
-    return lo, hi
+# The 64-bit `(lo, hi)` half-pair helpers — `rotr64`, `shr64`, `add64`, the
+# variadic `xor64` and the `Pair` alias — live in `hash_frx.word64`, shared
+# with BLAKE2b's G (the second literal consumer that met the lift bar these
+# helpers carried while module-local; `word64`'s docstring holds the charter).
+# `keccak/lane.py`'s rotate stays keccak's: mirrored direction, not the same
+# function.
 
 
 @lru_cache(maxsize=None)
@@ -324,37 +265,37 @@ def _compress(state: Array, w32: Array, k: Array) -> Array:
 
     def round_t(t: Array, carry: tuple) -> tuple:
         a, bb, c, d, e, f, g, h, w_lo, w_hi = carry
-        word: _Pair = (w_lo[:, 0], w_hi[:, 0])
+        word: Pair = (w_lo[:, 0], w_hi[:, 0])
         krow = kp[t]  # one row gather; the halves split statically below
-        kt: _Pair = (krow[1], krow[0])
+        kt: Pair = (krow[1], krow[0])
         # Σ1 = ROTR14 ⊕ ROTR18 ⊕ ROTR41; Ch = (e ∧ f) ⊕ (¬e ∧ g) (§4.1.3).
-        s1 = _xor64(_rotr64(e, 14), _rotr64(e, 18), _rotr64(e, 41))
-        ch: _Pair = ((e[0] & f[0]) ^ (~e[0] & g[0]), (e[1] & f[1]) ^ (~e[1] & g[1]))
-        t1 = _add64(_add64(_add64(_add64(h, s1), ch), kt), word)
+        s1 = xor64(rotr64(e, 14), rotr64(e, 18), rotr64(e, 41))
+        ch: Pair = ((e[0] & f[0]) ^ (~e[0] & g[0]), (e[1] & f[1]) ^ (~e[1] & g[1]))
+        t1 = add64(add64(add64(add64(h, s1), ch), kt), word)
         # Σ0 = ROTR28 ⊕ ROTR34 ⊕ ROTR39; Maj = (a∧b) ⊕ (a∧c) ⊕ (b∧c).
-        s0 = _xor64(_rotr64(a, 28), _rotr64(a, 34), _rotr64(a, 39))
-        maj: _Pair = (
+        s0 = xor64(rotr64(a, 28), rotr64(a, 34), rotr64(a, 39))
+        maj: Pair = (
             (a[0] & bb[0]) ^ (a[0] & c[0]) ^ (bb[0] & c[0]),
             (a[1] & bb[1]) ^ (a[1] & c[1]) ^ (bb[1] & c[1]),
         )
-        t2 = _add64(s0, maj)
+        t2 = add64(s0, maj)
         # Schedule w[t+16] = σ1(w14) + w9 + σ0(w1) + w0, with σ0 = ROTR1 ⊕
         # ROTR8 ⊕ SHR7 and σ1 = ROTR19 ⊕ ROTR61 ⊕ SHR6 (§4.1.3) — the same
         # window indices as SHA-256's schedule.
-        w1: _Pair = (w_lo[:, 1], w_hi[:, 1])
-        w14: _Pair = (w_lo[:, 14], w_hi[:, 14])
-        sig0 = _xor64(_rotr64(w1, 1), _rotr64(w1, 8), _shr64(w1, 7))
-        sig1 = _xor64(_rotr64(w14, 19), _rotr64(w14, 61), _shr64(w14, 6))
-        nxt = _add64(_add64(_add64(word, sig0), (w_lo[:, 9], w_hi[:, 9])), sig1)
+        w1: Pair = (w_lo[:, 1], w_hi[:, 1])
+        w14: Pair = (w_lo[:, 14], w_hi[:, 14])
+        sig0 = xor64(rotr64(w1, 1), rotr64(w1, 8), shr64(w1, 7))
+        sig1 = xor64(rotr64(w14, 19), rotr64(w14, 61), shr64(w14, 6))
+        nxt = add64(add64(add64(word, sig0), (w_lo[:, 9], w_hi[:, 9])), sig1)
         w_lo = fnp.concatenate([w_lo[:, 1:], nxt[0][:, None]], axis=1)
         w_hi = fnp.concatenate([w_hi[:, 1:], nxt[1][:, None]], axis=1)
-        return (_add64(t1, t2), a, bb, c, _add64(d, t1), e, f, g, w_lo, w_hi)
+        return (add64(t1, t2), a, bb, c, add64(d, t1), e, f, g, w_lo, w_hi)
 
     chain0 = [(sp[:, i, 1], sp[:, i, 0]) for i in range(8)]  # a..h as pairs
     out = frx.lax.fori_loop(0, 80, round_t, (*chain0, w_lo0, w_hi0))
     final = []
     for i in range(8):  # h_i' = h_i + var_i, the per-block feedforward (§6.4.2)
-        s = _add64(chain0[i], out[i])
+        s = add64(chain0[i], out[i])
         final.extend([s[1], s[0]])  # back to the pair layout: hi, then lo
     return fnp.stack(final, axis=1)
 
