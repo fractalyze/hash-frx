@@ -94,6 +94,23 @@ py_library(
     ],
 )
 
+# Byte-oriented SHA-512 (FIPS 180-4): SHA-256's 64-bit sibling over uint32 half
+# pairs — the `digest` batch hash behind the `hash_frx.digest.sha512` marker
+# plus the `Sha512` / `HostSha512` ByteHash pair. A standalone hash, not a
+# Permutation; no zk_dtypes / x64 dependency.
+py_library(
+    name = "sha512",
+    srcs = ["sha512.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":byte_hash",
+        ":fusion",
+        ":word",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
 # Padding-free overwrite sponge — the Merkle leaf hasher over a Permutation.
 py_library(
     name = "sponge",

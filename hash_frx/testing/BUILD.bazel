@@ -226,6 +226,24 @@ py_test(
 )
 
 py_test(
+    name = "sha512_test",
+    # Compile-heavy like grostl_test: the traced sweep compiles the 80-round
+    # chain once per (batch, length) aval, and the GPU leg repeats it.
+    size = "large",
+    srcs = ["sha512_test.py"],
+    deps = [
+        ":jit_cache",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:sha256",
+        "//hash_frx:sha512",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "word_test",
     size = "small",
     srcs = ["word_test.py"],
