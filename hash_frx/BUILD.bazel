@@ -130,3 +130,16 @@ py_library(
         requirement("frx"),
     ],
 )
+
+# HMAC (FIPS 198-1) — the keyed MAC over a ByteHash. The block size rides the
+# construction, not the seam.
+py_library(
+    name = "hmac",
+    srcs = ["hmac.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":byte_hash",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
