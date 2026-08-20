@@ -214,6 +214,56 @@ py_library(
     deps = [requirement("frx")],
 )
 
+# The plain-python RIPEMD-160 oracle: ints and bytes only, no frx, so the
+# differential tests hold the frx implementation to something that shares none
+# of its lowering rules. Lives here rather than in a family package because
+# the device hash is the single top-level module `hash_frx/ripemd160.py` (the
+# sha256 shape), and this directory is that module's `testing/`.
+py_library(
+    name = "ripemd160_reference",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "ripemd160_reference.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
+# No device work: plain python against the designers' published vectors
+# (million-"a" included), so the CUDA plugin wheels would be ~430 MB of
+# runfiles for nothing.
+py_test(
+    name = "ripemd160_reference_test",
+    size = "small",
+    srcs = ["ripemd160_reference_test.py"],
+    deps = [
+        ":ripemd160_reference",
+        requirement("absl_py"),
+    ],
+)
+
+# Testonly, unlike the SHA-2/SHA-3 host siblings: OpenSSL 3 moved RIPEMD-160
+# to the legacy provider, so no dependable C binding exists and this one loops
+# the plain-python oracle — the differential partner only, never a shipped
+# fast path (the `grostl/testing:host_grostl256` asymmetry, stated in the
+# module docstring).
+py_library(
+    name = "host_ripemd160",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "host_ripemd160.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [
+        ":ripemd160_reference",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
 py_test(
     name = "sha256_test",
     size = "medium",
