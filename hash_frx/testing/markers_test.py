@@ -16,7 +16,7 @@ from pathlib import Path
 from absl.testing import absltest
 
 import hash_frx
-from hash_frx import sha256, sha512, sponge
+from hash_frx import ripemd160, sha256, sha512, sponge
 from hash_frx.ascon import ascon
 from hash_frx.blake3 import blake3
 from hash_frx.grostl import grostl
@@ -51,6 +51,7 @@ _MODULE_CONSTANTS = {
     sponge.SPONGE_HASH_MARKER: sponge.SPONGE_HASH_MARKER_VERSION,
     grostl.GROSTL256_MARKER: grostl.GROSTL256_MARKER_VERSION,
     ascon.ASCON_HASH256_MARKER: ascon.ASCON_HASH256_MARKER_VERSION,
+    ripemd160.RIPEMD160_MARKER: ripemd160.RIPEMD160_MARKER_VERSION,
 }
 
 
