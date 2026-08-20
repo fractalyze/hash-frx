@@ -21,7 +21,7 @@ from unittest import mock
 import frx
 import numpy as np
 from absl.testing import absltest
-from zk_dtypes import binary_field_t5
+from zk_dtypes import binary_field_t5, goldilocks_mont
 
 from hash_frx import sha256 as sha256_mod
 from hash_frx import sha512 as sha512_mod
@@ -42,6 +42,9 @@ from hash_frx.poseidon import poseidon as poseidon_mod
 from hash_frx.poseidon import sparse as sparse_mod
 from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
+from hash_frx.rescue import rescue as rescue_mod
+from hash_frx.rescue.params import rescue_rpo128_params
+from hash_frx.rescue.rescue import Rescue
 from hash_frx.sha256 import HostSha256, Sha256
 from hash_frx.sha512 import HostSha512, Sha512
 from hash_frx.sponge import Sponge, SpongeParams
@@ -53,13 +56,15 @@ from hash_frx.vision.vision import Vision
 # per family. Keccak's arms are GPU-only; the rest run wherever the
 # ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
 # Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
-# Vision, Grøstl and Ascon, for which no plugin ships an emitter at all.
+# Vision, Rescue, Grøstl and Ascon, for which no plugin ships an emitter at
+# all.
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
     sparse_mod: ("gpu",),
     keccak_perm_mod: ("gpu",),
     vision_mod: (),
+    rescue_mod: (),
     sha256_mod: ("cpu", "gpu"),
     sha512_mod: (),
     blake3_rows: ("cpu", "gpu"),
@@ -100,6 +105,7 @@ class DeviceCellTest(absltest.TestCase):
             # The empty rows: GENERIC on every leg, by the same derivation as
             # an absent backend — never HOST.
             (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
+            (Rescue(rescue_rpo128_params(goldilocks_mont)), _MATRIX[rescue_mod]),
             (Grostl256(), _MATRIX[grostl_mod]),
             (Sha512(), _MATRIX[sha512_mod]),
             (AsconHash256(), _MATRIX[ascon_mod]),
