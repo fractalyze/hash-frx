@@ -24,6 +24,7 @@ from absl.testing import absltest
 from zk_dtypes import binary_field_t5
 
 from hash_frx import sha256 as sha256_mod
+from hash_frx import sha512 as sha512_mod
 from hash_frx.blake2b.byte_hashes import HostBlake2b
 from hash_frx.blake3 import byte_hashes as blake3_rows
 from hash_frx.blake3.byte_hashes import Blake3, HostBlake3
@@ -40,6 +41,7 @@ from hash_frx.poseidon import sparse as sparse_mod
 from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.sha512 import HostSha512, Sha512
 from hash_frx.sponge import Sponge, SpongeParams
 from hash_frx.vision import vision as vision_mod
 from hash_frx.vision.params import vision_mark32_params
@@ -57,6 +59,7 @@ _MATRIX = {
     keccak_perm_mod: ("gpu",),
     vision_mod: (),
     sha256_mod: ("cpu", "gpu"),
+    sha512_mod: (),
     blake3_rows: ("cpu", "gpu"),
     grostl_mod: (),
 }
@@ -95,6 +98,7 @@ class DeviceCellTest(absltest.TestCase):
             # an absent backend — never HOST.
             (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
             (Grostl256(), _MATRIX[grostl_mod]),
+            (Sha512(), _MATRIX[sha512_mod]),
         )
         for impl, backends in rows:
             with self.subTest(impl=type(impl).__name__):
@@ -124,7 +128,13 @@ class DeviceCellTest(absltest.TestCase):
 
 class HostCellTest(absltest.TestCase):
     def test_host_rows_are_host_on_every_leg(self) -> None:
-        for row in (HostSha256(), HostSha3_256(), HostBlake3(), HostBlake2b()):
+        for row in (
+            HostSha256(),
+            HostSha512(),
+            HostSha3_256(),
+            HostBlake3(),
+            HostBlake2b(),
+        ):
             with self.subTest(row=type(row).__name__):
                 self.assertIs(row.fusion_path, FusionPath.HOST)
 
