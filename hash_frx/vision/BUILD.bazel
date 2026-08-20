@@ -5,10 +5,15 @@ py_library(
     name = "vision",
     srcs = [
         "__init__.py",
+        "linear.py",
         "params.py",
+        "vision.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//hash_frx:fusion",
+        "//hash_frx:linear",
+        "//hash_frx:permutation",
         requirement("frx"),
         requirement("numpy"),
     ],

@@ -39,6 +39,10 @@ _FUSION_SAFE = frozenset(
         "add",
         "subtract",
         "multiply",
+        # The binary-field inverse S-box: `x ** -1` lowers to `1/x`, one
+        # element-wise `divide` — the same op class as `multiply`, admitted on
+        # that property (Vision's round body is where it appears).
+        "divide",
         "negate",
         "constant",
         "convert",
