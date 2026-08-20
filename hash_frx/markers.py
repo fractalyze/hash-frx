@@ -83,6 +83,10 @@ MARKERS: tuple[Marker, ...] = (
     # new name rather than a version bump — the pinned sha256 recognizer
     # hard-fails on an operand-ABI mismatch instead of declining.
     Marker("hash_frx.digest.sha256_bytes", 1, MarkerKind.DIGEST),
+    # SHA-512, the 64-bit SHA-2 sibling: blocks-shaped only — no raw-bytes
+    # sibling until a recognizer ships for one (`hash_frx.sha512` notes the
+    # deliberate absence).
+    Marker("hash_frx.digest.sha512", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.keccak_sponge", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.blake3", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.field_sponge", 1, MarkerKind.DIGEST),

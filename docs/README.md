@@ -45,6 +45,7 @@ tests share.
 | Classic Poseidon — the naive Hades schedule and the optimized-sparse refactor of it          | [`poseidon/`](../hash_frx/poseidon)                  |
 | Vision — the binary-field Marvellous permutation (Vision Mark-32 over the GF(2^32) tower)    | [`vision/`](../hash_frx/vision)                      |
 | SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256.py`](../hash_frx/sha256.py)                 |
+| SHA-512 — the 64-bit SHA-2 sibling over uint32 half pairs: batched digest, incremental midstate, and the device / host `ByteHash` pair | [`sha512.py`](../hash_frx/sha512.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
 | BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/byte_hashes.py`](../hash_frx/blake3/byte_hashes.py) |
 | BLAKE2b — the host `ByteHash` row over `hashlib`, and why the host row comes first | [`blake2b/byte_hashes.py`](../hash_frx/blake2b/byte_hashes.py) |
@@ -83,7 +84,7 @@ constraint is what shapes the code — the authoring rules it forces are in
 **Name-routed** — spelled `hash_frx.<kind>.<name>` by fusible-unit kind:
 `hash_frx.perm.{poseidon, poseidon_sparse, poseidon2, keccak_f, vision}`,
 `hash_frx.compress.{blake3, blake3_parent}`, and
-`hash_frx.digest.{sha256, field_sponge, keccak_sponge, blake3, grostl256}`
+`hash_frx.digest.{sha256, sha512, field_sponge, keccak_sponge, blake3, grostl256}`
 (`hash_frx/markers.py` is the registry). Each goes to a
 dedicated emitter that owns its own operand ABI and, unlike the generic path,
 tolerates reductions and calls; the recognizers also still accept the
@@ -98,7 +99,7 @@ instead of a marked permute per block with the glue between them left outside.
 
 The markers wait for the toolchain in two different ways, because the cost of
 being early is not the same for both. `hash_frx.digest.blake3`,
-`hash_frx.digest.sha256` and `hash_frx.digest.grostl256`
+`hash_frx.digest.sha256`, `hash_frx.digest.sha512` and `hash_frx.digest.grostl256`
 are emitted whether or not the pinned plugin recognizes the name: an
 unrecognized *name* only inlines, so being early costs the fusion and nothing
 else, and the hash reports `fusion_path = GENERIC` while carrying its marker.
