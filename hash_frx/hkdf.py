@@ -65,20 +65,17 @@ def hkdf_expand(
     if info is None:  # RFC 5869 §2.3: "optional ... (can be zero-length)"
         info = fnp.zeros(0, dtype=fnp.uint8)
     info = fnp.asarray(info, dtype=fnp.uint8)
-    if prk.ndim == 2:
-        batch = prk.shape[0]
-    elif info.ndim == 2:
-        batch = info.shape[0]
-    else:
-        batch = 1
-    if info.ndim == 1:
-        info = fnp.broadcast_to(info, (batch, info.shape[0]))
+    # The batch is whatever the operands' leading axes broadcast to (both
+    # unbatched -> a batch of one); a mismatched pair fails here, at the
+    # boundary, rather than as a concatenate error inside the T(i) chain.
+    batch = np.broadcast_shapes(prk.shape[:-1], info.shape[:-1]) or (1,)
+    info = fnp.broadcast_to(info, (*batch, info.shape[-1]))
 
     n = -(-length // mac.digest_size)
-    t = fnp.zeros((batch, 0), dtype=fnp.uint8)  # T(0) is the empty string
+    t = fnp.zeros((*batch, 0), dtype=fnp.uint8)  # T(0) is the empty string
     blocks = []
     for i in range(1, n + 1):
-        ctr = fnp.full((batch, 1), i, dtype=fnp.uint8)
+        ctr = fnp.full((*batch, 1), i, dtype=fnp.uint8)
         t = fnp.asarray(
             mac.mac(prk, fnp.concatenate([t, info, ctr], axis=1)), dtype=fnp.uint8
         )
