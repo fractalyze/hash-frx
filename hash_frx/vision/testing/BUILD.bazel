@@ -1,0 +1,42 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# The plain-Python oracle: arbitrary-precision ints only, no frx, so the
+# differential tests hold the frx implementation to something that shares none
+# of its lowering rules.
+py_library(
+    name = "reference",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "reference.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
+py_test(
+    name = "reference_test",
+    size = "small",
+    srcs = ["reference_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx/vision",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "params_test",
+    size = "small",
+    srcs = ["params_test.py"],
+    deps = [
+        "//hash_frx/vision",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
