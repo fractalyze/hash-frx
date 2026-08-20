@@ -43,7 +43,20 @@ SHA256_MARKER = "hash_frx.digest.sha256"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it lets a
 # future contract change be staged without renaming the marker (cf. POSEIDON2).
+# That staging only covers attribute additions: the pinned recognizer hard-fails
+# on an operand-ABI mismatch under this name rather than declining, so an ABI
+# change ships as a NEW name (below), which an old plugin declines and inlines.
 SHA256_MARKER_VERSION = 1
+
+SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
+# The raw-bytes whole-message form: operands [h0 u32[8], k u32[64],
+# msg u8[B, L], tail u8[P]] -> u8[B, 32], with FIPS 180-4 padding and word
+# packing inside the marker. The blocks marker above takes pre-padded words,
+# so every consumer runs a pad-and-pack pass over the whole batch first —
+# at a Merkle-leaf-scale batch (2^20 x 1 KiB) that pass writes and re-reads
+# ~1.16 GB a recognizing emitter can instead synthesize in registers, the
+# padding being a function of the static length.
+SHA256_BYTES_MARKER_VERSION = 1
 
 # Whether the pinned Fractalyze XLA plugin ships the dedicated SHA-256 emitter,
 # and on which backends (`allow_sha256_fusion` is set in both the CPU and the
@@ -54,12 +67,23 @@ SHA256_MARKER_VERSION = 1
 _DEDICATED_EMITTER_AVAILABLE = True
 _EMITTER_BACKENDS = ("cpu", "gpu")
 
+# Whether the pinned plugin claims `hash_frx.digest.sha256_bytes`. A plugin
+# without that recognizer declines the name and inlines the decomposition —
+# right bytes, `GENERIC` path — which at digest scale is the slow path, so
+# `digest` only routes to the bytes marker where a recognizer exists.
+_BYTES_EMITTER_AVAILABLE = False
+
 
 def _routes_to_dedicated_emitter() -> bool:
     """Whether the pin *and* the backend both carry the SHA-256 emitter. Read
     per construction so importing does not initialize a backend; the lookup
     behind `frx.default_backend()` is memoized."""
     return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+
+
+def _routes_to_bytes_marker() -> bool:
+    """Whether `digest` should emit the raw-bytes marker on this backend."""
+    return _BYTES_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
 
 
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
@@ -328,12 +352,58 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     )
 
 
+# Module-level jit zone for the same reason as `sha256_merkle_damgard`: the
+# composite re-traces its decomposition per emission, and a Merkle commit
+# emits one digest call per tree level.
+@partial(frx.jit, inline=True)
+def sha256_bytes(msg: Array) -> Array:
+    """Whole-message SHA-256 over raw bytes as ONE marked region:
+    uint8 [B, L] -> uint8 [B, 32], padding and word packing inside the marker.
+
+    The blocks marker (`sha256_merkle_damgard`) takes pre-padded words, so its
+    consumers pack the padded word layout as ordinary graph ops first — a
+    materialized pass over the whole batch that a recognizing emitter can do
+    in registers instead, the padding being a function of the static length.
+    This form hands the emitter the raw bytes; where no recognizer is wired
+    the marker inlines its decomposition, so the bytes are unchanged.
+
+    Whole-message only: a resumed stream pads at its running total rather
+    than at `L`, so the streaming path stays on the blocks marker.
+
+    Operands are explicit in the recognizer's positional ABI order
+    [h0, k, msg, tail]. `tail` is `_padding_tail(L)` passed as an operand
+    rather than captured (a captured constant would prepend at operand 0);
+    it is redundant to a recognizing emitter and load-bearing for the
+    inlined decomposition."""
+
+    def decomposition(
+        h0: Array, k: Array, msg: Array, tail: Array, **_attrs: object
+    ) -> Array:
+        padded = fnp.concatenate(
+            [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
+        )
+        state = fnp.broadcast_to(h0, (msg.shape[0], 8))
+        return serialize_digest(compress(state, block_to_words(padded), k))
+
+    return fused_region(
+        decomposition,
+        INITIAL_STATE,
+        _Kd,
+        msg,
+        fnp.asarray(_padding_tail(msg.shape[-1])),
+        name=SHA256_BYTES_MARKER,
+        version=SHA256_BYTES_MARKER_VERSION,
+    )
+
+
 def digest(msg: ArrayLike) -> fnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
-    Byte-identical to the FIPS 180-4 standard per message. The device compression
-    is emitted as the name-routed `hash_frx.sha256` marker; the padding constant
-    stays out of the region, since it is a function of the static length.
+    Byte-identical to the FIPS 180-4 standard per message. The device
+    compression is emitted as one name-routed marker; which one depends on the
+    pinned plugin: the raw-bytes form (`sha256_bytes`) where its recognizer
+    exists, else the blocks form with the padded words packed here — the two
+    produce identical bytes, split only by where the padding runs.
 
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash inside
     its own `@jit` or `vmap` without reaching past the seam for
@@ -342,9 +412,10 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     buffer holding the message, so the message had to be concrete. Built from the
     length instead, it never reads the message at all.
     """
-    return sha256_merkle_damgard(
-        INITIAL_STATE, _padded_words(fnp.asarray(msg, dtype=fnp.uint8))
-    )
+    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    if _routes_to_bytes_marker():
+        return sha256_bytes(msg)
+    return sha256_merkle_damgard(INITIAL_STATE, _padded_words(msg))
 
 
 # ---------------------------------------------------------------------------

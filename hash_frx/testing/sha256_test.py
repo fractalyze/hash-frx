@@ -222,5 +222,63 @@ class Sha256ByteHashTest(parameterized.TestCase):
         assert_marker_recognized(self, "sha256", fn, blocks)
 
 
+class Sha256BytesMarkerTest(parameterized.TestCase):
+    """The raw-bytes whole-message marker (`sha256_bytes`).
+
+    No pinned recognizer claims the name, so every execution here runs the
+    inlined decomposition — which is exactly the contract under test: right
+    bytes on the fallback path, one composite on the wire, and `digest`
+    holding the blocks route while `_BYTES_EMITTER_AVAILABLE` says no
+    recognizer exists.
+    """
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_matches_hashlib(self, length: int) -> None:
+        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x3C)
+        got = bytes(np.asarray(sha256.sha256_bytes(fnp.asarray(msg[None, :])))[0])
+        self.assertEqual(got, hashlib.sha256(bytes(msg)).digest())
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_matches_the_blocks_marker(self, length: int) -> None:
+        # Two wire forms of one digest: the bytes marker must byte-equal the
+        # blocks marker (and so, transitively, every consumer's goldens).
+        msgs = np.random.default_rng(length).integers(
+            0, 256, size=(4, length), dtype=np.uint8
+        )
+        via_blocks = sha256.sha256_merkle_damgard(
+            sha256.INITIAL_STATE, sha256._padded_words(fnp.asarray(msgs))
+        )
+        np.testing.assert_array_equal(
+            np.asarray(sha256.sha256_bytes(fnp.asarray(msgs))),
+            np.asarray(via_blocks),
+        )
+
+    def test_emits_one_composite_with_the_bytes_name(self) -> None:
+        msg = np.zeros((2, 100), dtype=np.uint8)
+        txt = frx.jit(sha256.sha256_bytes).lower(fnp.asarray(msg)).as_text()
+        self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
+        self.assertEqual(txt.count("stablehlo.composite"), 1)
+
+    def test_jit_matches_eager(self) -> None:
+        msg = np.random.default_rng(9).integers(0, 256, (3, 120), dtype=np.uint8)
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(sha256.sha256_bytes)(fnp.asarray(msg))),
+            np.asarray(sha256.sha256_bytes(fnp.asarray(msg))),
+        )
+
+    def test_digest_routes_by_the_recognizer_flag(self) -> None:
+        # `digest` must not emit a marker the pinned plugin cannot claim: with
+        # `_BYTES_EMITTER_AVAILABLE` false the wire carries the blocks marker
+        # only. Flipping the flag is what moves the wire — this is the test
+        # that makes that flip deliberate.
+        msg = np.zeros((1, 64), dtype=np.uint8)
+        txt = frx.jit(sha256.digest).lower(msg).as_text()
+        if sha256._routes_to_bytes_marker():
+            self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
+        else:
+            self.assertIn(sha256.SHA256_MARKER, txt)
+            self.assertNotIn(sha256.SHA256_BYTES_MARKER, txt)
+
+
 if __name__ == "__main__":
     absltest.main()
