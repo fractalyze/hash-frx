@@ -6,9 +6,13 @@ py_library(
     srcs = [
         "__init__.py",
         "params.py",
+        "rescue.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//hash_frx:fusion",
+        "//hash_frx:linear",
+        "//hash_frx:permutation",
         requirement("frx"),
         requirement("numpy"),
     ],
