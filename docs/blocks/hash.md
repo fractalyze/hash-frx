@@ -48,6 +48,15 @@ shared **streaming** surface is deliberately absent from the seam: the
 incremental state has a different shape in each construction, so a common
 `absorb`/`squeeze` pair would be a fiction that fits one family.
 
+The same intersection rule decides where HMAC's block size lives. HMAC
+([`hmac.py`](../../hash_frx/hmac.py)) and HKDF over it
+([`hkdf.py`](../../hash_frx/hkdf.py)) are constructions *over* `ByteHash` the
+way `Sponge`/`Compression` are over `Permutation`, and FIPS 198-1's `B` is a
+parameter only a block-keyed construction can interpret — BLAKE3's keyed mode
+is native and has no `B` for HMAC to read. So `Hmac(hash, block_size)` carries
+it, and the seam stays `digest` alone; the parallel is `DuplexSponge` owning
+its `+`-merge rather than narrowing it into `Permutation`.
+
 Width is not a free parameter anywhere: it is whatever the permutation provides.
 The free parameters are `rate`/`out` (`SpongeParams`) and `arity`/`chunk`
 (`CompressionParams`), and validation splits along the same line — the parameter
