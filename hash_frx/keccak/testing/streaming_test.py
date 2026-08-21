@@ -232,5 +232,33 @@ class ShakeStreamValidationTest(absltest.TestCase):
             shake256_init().finalize().squeeze(0)
 
 
+class SqueezePermutationCountTest(parameterized.TestCase):
+    """`squeeze(n)` emits exactly the permutations a traced offset can reach
+    (#213): floor((rate - 1 + n) / rate), never the ceil.
+
+    Byte-identity tests cannot see this — the dead permutation fed an
+    unreachable select arm and every output byte stayed right — so the count
+    is asserted on the lowered text, the way the fusion contract's marker
+    tests do. The whole-block row (n == rate) is the one a rejection
+    sampler's loop body squeezes, where the ceil doubled the real work.
+    """
+
+    @parameterized.parameters(
+        (1, 1),  # n ≡ 1 (mod rate): floor == ceil, the last permute is live
+        (32, 1),
+        (167, 1),
+        (168, 1),  # whole block: one permutation, not two
+        (169, 2),  # 169 = rate + 1: the second permute is reachable
+        (336, 2),
+    )
+    def test_emits_only_reachable_permutations(self, nbytes: int, want: int) -> None:
+        squeezer = shake128_init().absorb(fnp.zeros(34, dtype=fnp.uint8)).finalize()
+        text = frx.jit(lambda s: s.squeeze(nbytes)).lower(squeezer).as_text()
+        emitted = text.count(
+            'stablehlo.composite "hash_frx.perm.keccak_f"'
+        ) + text.count('stablehlo.composite "zorch.fused_region"')
+        self.assertEqual(emitted, want)
+
+
 if __name__ == "__main__":
     absltest.main()

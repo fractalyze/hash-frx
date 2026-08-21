@@ -203,17 +203,26 @@ class ShakeSqueeze:
             raise ValueError(f"nbytes ({nbytes}) must be >= 1")
         rate = self.rate
 
-        # `offset + nbytes` spans two static block counts at most, so emit to the
-        # upper one and slice. The chain is walked once and every prefix kept,
-        # because the state to carry forward is one of those prefixes.
+        # `offset + nbytes` spans two static block counts at most, so emit the
+        # BYTES to the upper one and slice. The permutation count is smaller:
+        # block i's bytes need i permutations (block 0 is the live prefix), and
+        # the carried state can only be `chain[k]` for
+        # k <= (offset + nbytes) // rate <= (rate - 1 + nbytes) // rate — so a
+        # permute after the last block is reachable only when `rate - 1 +
+        # nbytes` divides evenly (nbytes ≡ 1 mod rate). Emitting the ceil
+        # unconditionally ran one dead permutation on every other length —
+        # notably the whole-block squeeze a rejection sampler loops on — that
+        # the traced select kept XLA from removing.
         upper = _blocks_of(rate - 1 + nbytes, rate)
+        nperms = (rate - 1 + nbytes) // rate
         state = self.state
         chain = [state]
         blocks = []
-        for _ in range(upper):
+        for i in range(upper):
             blocks.append(_rate_bytes(state, rate))
-            state = _PERMUTE(state)
-            chain.append(state)
+            if i < nperms:
+                state = _PERMUTE(state)
+                chain.append(state)
 
         stream = blocks[0] if len(blocks) == 1 else fnp.concatenate(blocks)
         out = lax.dynamic_slice(stream, (self.offset,), (nbytes,))
