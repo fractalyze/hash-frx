@@ -46,6 +46,7 @@ py_test(
         "//hash_frx:ripemd160",
         "//hash_frx:sha256",
         "//hash_frx:sha512",
+        "//hash_frx:sm3",
         "//hash_frx:sponge",
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
@@ -72,6 +73,7 @@ py_test(
         "//hash_frx:ripemd160",
         "//hash_frx:sha256",
         "//hash_frx:sha512",
+        "//hash_frx:sm3",
         "//hash_frx:sponge",
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
@@ -282,6 +284,24 @@ py_test(
         "//hash_frx:blake2s",
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "sm3_test",
+    # The fori_loop round body keeps the trace small (the sha256/sha512
+    # arrangement), so this compiles fast relative to the unrolled digests.
+    size = "medium",
+    srcs = ["sm3_test.py"],
+    deps = [
+        ":jit_cache",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:sha256",
+        "//hash_frx:sm3",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

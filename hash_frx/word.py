@@ -55,6 +55,16 @@ def rotr(x: Array, n: int) -> Array:
     return (x >> U32(n)) | (x << U32(32 - n))
 
 
+def rotl(x: Array, n: int) -> Array:
+    """Rotate each `uint32` lane LEFT by `n`, `0 < n < 32` — `rotr`'s mirror,
+    for the standards whose tables are written as left-rotation counts
+    (RIPEMD-160's rol_s, SM3's ROTL): spelled directly rather than as
+    `rotr(x, 32 - n)` so every call site reads as the spec's own entry.
+    Began module-local to ripemd160 and lifted when SM3 became the second
+    literal consumer (the charter word64.py states)."""
+    return (x << U32(n)) | (x >> U32(32 - n))
+
+
 def roll(x: Array, shift: int, axis: int = 0) -> Array:
     """`fnp.roll` along `axis` written as the two static slices it is.
 

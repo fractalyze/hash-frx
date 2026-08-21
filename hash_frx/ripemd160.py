@@ -51,7 +51,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.fusion import FusionPath, fused_region
-from hash_frx.word import pack_le, unpack_le
+from hash_frx.word import pack_le, rotl, unpack_le
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -176,14 +176,6 @@ def _padding_tail(length: int) -> np.ndarray:
     return tail
 
 
-def _rotl(x: Array, n: int) -> Array:
-    """Rotate each uint32 lane LEFT by `n` — the pseudocode's rol_s, `0 < n <
-    32`. RIPEMD-160 rotates the other way from the SHA-2 family, so this is
-    spelled directly rather than as `word.rotr(x, 32 - n)`: every shift amount
-    below then reads as the spec's own table entry."""
-    return (x << U32(n)) | (x >> U32(32 - n))
-
-
 def _f1(x: Array, y: Array, z: Array) -> Array:
     return x ^ y ^ z
 
@@ -230,21 +222,21 @@ def _compress(state: Array, x: Array) -> Array:
         # T := rol_s(j)(A + f(j, B, C, D) + X[r(j)] + K(j)) + E;
         # A := E; E := D; D := rol_10(C); C := B; B := T (per line).
         t = (
-            _rotl(
+            rotl(
                 al + _F[rnd](bl, cl, dl) + x[:, _R_LEFT[j]] + U32(_K_LEFT[rnd]),
                 _S_LEFT[j],
             )
             + el
         )
-        al, bl, cl, dl, el = el, t, bl, _rotl(cl, 10), dl
+        al, bl, cl, dl, el = el, t, bl, rotl(cl, 10), dl
         t = (
-            _rotl(
+            rotl(
                 ar + _F[4 - rnd](br, cr, dr) + x[:, _R_RIGHT[j]] + U32(_K_RIGHT[rnd]),
                 _S_RIGHT[j],
             )
             + er
         )
-        ar, br, cr, dr, er = er, t, br, _rotl(cr, 10), dr
+        ar, br, cr, dr, er = er, t, br, rotl(cr, 10), dr
     # T := h1 + C + D'; h1 := h2 + D + E'; h2 := h3 + E + A';
     # h3 := h4 + A + B'; h4 := h0 + B + C'; h0 := T — the cross-line
     # combination that rotates the register roles by one.

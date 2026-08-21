@@ -16,7 +16,7 @@ from pathlib import Path
 from absl.testing import absltest
 
 import hash_frx
-from hash_frx import blake2s, ripemd160, sha256, sha512, sponge
+from hash_frx import blake2s, ripemd160, sha256, sha512, sm3, sponge
 from hash_frx.ascon import ascon
 from hash_frx.blake2b import blake2b
 from hash_frx.blake3 import blake3
@@ -55,6 +55,7 @@ _MODULE_CONSTANTS = {
     ripemd160.RIPEMD160_MARKER: ripemd160.RIPEMD160_MARKER_VERSION,
     blake2b.BLAKE2B_MARKER: blake2b.BLAKE2B_MARKER_VERSION,
     blake2s.BLAKE2S_MARKER: blake2s.BLAKE2S_MARKER_VERSION,
+    sm3.SM3_MARKER: sm3.SM3_MARKER_VERSION,
 }
 
 
