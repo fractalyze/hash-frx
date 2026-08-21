@@ -37,6 +37,14 @@ tests share.
 | Interleaved absorb/squeeze with add-mode absorb, for a classic Fiat-Shamir prover            | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
 | n-to-1 truncated-permutation compression, for a hash tree                                   | [`compression.py`](../hash_frx/compression.py)       |
 
+## Constructions over a `ByteHash`
+
+| Question                                                                                   | Where                                               |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| HMAC — the FIPS 198-1 keyed MAC, one class parameterized by hash and block size             | [`hmac.py`](../hash_frx/hmac.py)                     |
+| HKDF — RFC 5869 extract-then-expand, the KDF the composition standards name                  | [`hkdf.py`](../hash_frx/hkdf.py)                     |
+| PBKDF2 — the RFC 8018 iterated KDF as a traced c-loop, with the ipad/opad midstate fast path (BIP-39's seed derivation) | [`pbkdf2.py`](../hash_frx/pbkdf2.py)                 |
+
 ## Implementations
 
 | Question                                                                                   | Where                                               |

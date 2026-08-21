@@ -445,6 +445,25 @@ py_test(
 )
 
 py_test(
+    name = "pbkdf2_test",
+    # The BIP-39 case runs a real c = 2048 chain and the differentials spin
+    # traced loops per (profile, c, dk_len) cell — loop-heavy rather than
+    # compile-heavy.
+    size = "medium",
+    srcs = ["pbkdf2_test.py"],
+    deps = [
+        "//hash_frx:blake2s",
+        "//hash_frx:hmac",
+        "//hash_frx:pbkdf2",
+        "//hash_frx:sha256",
+        "//hash_frx:sha512",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "hkdf_test",
     size = "small",
     srcs = ["hkdf_test.py"],
