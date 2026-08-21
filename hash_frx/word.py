@@ -95,7 +95,9 @@ def pack_le(data: Array) -> Array:
             f"trailing axis must be a multiple of {BYTES_PER_WORD}, "
             f"got {data.shape[-1]}"
         )
-    w = data.reshape(*data.shape[:-1], -1, BYTES_PER_WORD).astype(U32)
+    w = data.reshape(
+        *data.shape[:-1], data.shape[-1] // BYTES_PER_WORD, BYTES_PER_WORD
+    ).astype(U32)
     return (
         w[..., 0]
         | (w[..., 1] << U32(8))
@@ -115,7 +117,7 @@ def unpack_le(words: Array) -> Array:
         ],
         axis=-1,
     ).astype(fnp.uint8)
-    return out.reshape(*words.shape[:-1], -1)
+    return out.reshape(*words.shape[:-1], words.shape[-1] * BYTES_PER_WORD)
 
 
 def pack_be(data: Array) -> Array:
@@ -129,7 +131,9 @@ def pack_be(data: Array) -> Array:
             f"trailing axis must be a multiple of {BYTES_PER_WORD}, "
             f"got {data.shape[-1]}"
         )
-    w = data.reshape(*data.shape[:-1], -1, BYTES_PER_WORD).astype(U32)
+    w = data.reshape(
+        *data.shape[:-1], data.shape[-1] // BYTES_PER_WORD, BYTES_PER_WORD
+    ).astype(U32)
     return (
         (w[..., 0] << U32(24))
         | (w[..., 1] << U32(16))
@@ -149,4 +153,4 @@ def unpack_be(words: Array) -> Array:
         ],
         axis=-1,
     ).astype(fnp.uint8)
-    return out.reshape(*words.shape[:-1], -1)
+    return out.reshape(*words.shape[:-1], words.shape[-1] * BYTES_PER_WORD)

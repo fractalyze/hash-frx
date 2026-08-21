@@ -248,5 +248,20 @@ class AsconHash256ByteHashTest(absltest.TestCase):
         self.assertNotEqual(AsconHash256(), HostAsconHash256())
 
 
+class EmptyBatchTest(absltest.TestCase):
+    """A zero-row batch is a valid batch (#211): every row returns
+    uint8 [0, digest_size] instead of failing in a block-count reshape."""
+
+    def test_zero_rows_digest_to_zero_rows(self) -> None:
+        rows: list[tuple[ByteHash, int]] = [
+            (AsconHash256(), 32),
+            (HostAsconHash256(), 32),
+        ]
+        for hasher, size in rows:
+            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+            self.assertEqual(got.shape, (0, size))
+            self.assertEqual(got.dtype, np.uint8)
+
+
 if __name__ == "__main__":
     absltest.main()

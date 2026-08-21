@@ -397,7 +397,9 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         padded = fnp.concatenate(
             [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
         )
-        words = pack_le(padded.reshape(b, -1, _BLOCK))  # [B, nblocks, 32]
+        words = pack_le(
+            padded.reshape(b, padded.shape[-1] // _BLOCK, _BLOCK)
+        )  # [B, nblocks, 32]
         state = fnp.broadcast_to(h0, (b, 16))
         iv_lo, iv_hi = iv[0:16:2], iv[1:16:2]  # [8] halves, low at even index
         nblocks = words.shape[1]

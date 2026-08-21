@@ -16,6 +16,7 @@ import functools
 
 import frx
 import frx.numpy as fnp
+import numpy as np
 from absl.testing import absltest
 from frx import export
 from zk_dtypes import koalabear_mont as F
@@ -284,6 +285,22 @@ class MerkleDamgardTest(absltest.TestCase):
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         x = fnp.arange(16, dtype=F)
         assert_marker_recognized(self, "sponge_hash", s.hash, x)
+
+
+class EmptyInputTest(absltest.TestCase):
+    """The hash of the empty input is the zero-state squeeze (#211).
+
+    Zero absorbed blocks leave the state at its zero initialization, so the
+    digest is the zero prefix — Plonky3's PaddingFreeSponge over an empty
+    iterator. Without the static guard the absorb gather slices a length-0
+    input and fails instead of returning the defined value.
+    """
+
+    def test_empty_input_hashes_to_zeros(self) -> None:
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        for sponge_type in SpongeType:
+            got = np.asarray(s.hash(fnp.zeros(0, dtype=F), sponge_type))
+            np.testing.assert_array_equal(got, np.zeros(8, dtype=got.dtype))
 
 
 if __name__ == "__main__":

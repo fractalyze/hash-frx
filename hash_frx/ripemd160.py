@@ -289,7 +289,9 @@ def ripemd160_bytes(msg: Array) -> Array:
         padded = fnp.concatenate(
             [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
         )
-        words = pack_le(padded.reshape(b, -1, _BLOCK))  # [B, nblocks, 16]
+        words = pack_le(
+            padded.reshape(b, padded.shape[-1] // _BLOCK, _BLOCK)
+        )  # [B, nblocks, 16]
         state = fnp.broadcast_to(h0, (b, 5))
         for i in range(words.shape[1]):  # static, small
             state = _compress(state, words[:, i])

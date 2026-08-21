@@ -301,7 +301,7 @@ def ascon_hash256_bytes(msg: Array) -> Array:
         )
         # Blocks as (lo, hi) uint32 pairs, packed little-endian (§A.1):
         # [B, nblocks, 2], [..., 0] the low half.
-        words = pack_le(padded.reshape(b, -1, _RATE))
+        words = pack_le(padded.reshape(b, padded.shape[-1] // _RATE, _RATE))
         lo = fnp.broadcast_to(init[:, 0], (b, 5))
         hi = fnp.broadcast_to(init[:, 1], (b, 5))
         masks = _masks()

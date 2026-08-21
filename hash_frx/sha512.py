@@ -359,7 +359,7 @@ def block_to_words(blocks: Array) -> Array:
     building its own blocks incrementally (a streaming hash).
     """
     b = blocks.shape[0]
-    return pack_be(blocks.reshape(b, -1, 128))
+    return pack_be(blocks.reshape(b, blocks.shape[-1] // 128, 128))
 
 
 def _padded_words(msg: Array, tail: Array | None = None) -> Array:
