@@ -121,6 +121,23 @@ py_library(
     ],
 )
 
+# Byte-oriented BLAKE2s (RFC 7693, unkeyed): BLAKE2b's 32-bit sibling at
+# native uint32 — the `digest` batch hash behind the `hash_frx.digest.blake2s`
+# marker plus the `Blake2s` / `HostBlake2s` ByteHash pair. A standalone hash,
+# not a Permutation; no zk_dtypes / x64 dependency.
+py_library(
+    name = "blake2s",
+    srcs = ["blake2s.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":byte_hash",
+        ":fusion",
+        ":word",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
 # Byte-oriented RIPEMD-160 (Dobbertin–Bosselaers–Preneel, ISO/IEC 10118-3;
 # Bitcoin HASH160's second half): the `digest` batch hash behind the
 # `hash_frx.digest.ripemd160` marker plus the `Ripemd160` ByteHash row. A

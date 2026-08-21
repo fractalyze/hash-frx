@@ -23,6 +23,7 @@ import numpy as np
 from absl.testing import absltest
 from zk_dtypes import binary_field_t5
 
+from hash_frx import blake2s as blake2s_mod
 from hash_frx import ripemd160 as ripemd160_mod
 from hash_frx import sha256 as sha256_mod
 from hash_frx import sha512 as sha512_mod
@@ -31,6 +32,7 @@ from hash_frx.ascon.ascon import AsconHash256
 from hash_frx.blake2b import blake2b as blake2b_mod
 from hash_frx.blake2b.blake2b import Blake2b
 from hash_frx.blake2b.byte_hashes import HostBlake2b
+from hash_frx.blake2s import Blake2s, HostBlake2s
 from hash_frx.blake3 import byte_hashes as blake3_rows
 from hash_frx.blake3.byte_hashes import Blake3, HostBlake3
 from hash_frx.compression import Compression, CompressionParams
@@ -64,8 +66,8 @@ from hash_frx.vision.vision import Vision
 # per family. Keccak's arms are GPU-only; the rest run wherever the
 # ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
 # Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
-# Vision, Grøstl, Ascon, RIPEMD-160 and BLAKE2b, for which no plugin ships an
-# emitter at all.
+# Vision, Grøstl, Ascon, RIPEMD-160 and the BLAKE2 pair, for which no plugin
+# ships an emitter at all.
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
@@ -79,6 +81,7 @@ _MATRIX = {
     ascon_mod: (),
     ripemd160_mod: (),
     blake2b_mod: (),
+    blake2s_mod: (),
 }
 
 
@@ -123,6 +126,7 @@ class DeviceCellTest(absltest.TestCase):
             (AsconHash256(), _MATRIX[ascon_mod]),
             (Ripemd160(), _MATRIX[ripemd160_mod]),
             (Blake2b(), _MATRIX[blake2b_mod]),
+            (Blake2s(), _MATRIX[blake2s_mod]),
         )
         for impl, backends in rows:
             with self.subTest(impl=type(impl).__name__):
@@ -160,6 +164,7 @@ class HostCellTest(absltest.TestCase):
             HostSha3_256(),
             HostBlake3(),
             HostBlake2b(),
+            HostBlake2s(),
         ):
             with self.subTest(row=type(row).__name__):
                 self.assertIs(row.fusion_path, FusionPath.HOST)
