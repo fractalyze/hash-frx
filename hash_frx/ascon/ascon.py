@@ -53,6 +53,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_le, roll, split, unpack_le
+from hash_frx.word64 import rotr64
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -151,32 +152,6 @@ def _padding_tail(length: int) -> np.ndarray:
     return tail
 
 
-def _rotr64(a: _Lane, n: int) -> _Lane:
-    """Rotate the 64-bit (lo, hi) word right by a single compile-time `n`.
-
-    Three cases rather than one expression, because a uint32 shift by 32 is
-    undefined and the single-expression form reaches it whenever the in-half
-    shift is zero (`keccak/lane.py` states the hazard; this is its `rotl`
-    mirrored). `n == 32` is a pure half swap, and `n > 32` is that swap
-    composed with the sub-32 case, which is why the swapped halves appear
-    below. Σ's ten offsets never hit 0 or 32, but the cases stay total.
-    """
-    n %= 64
-    lo, hi = a
-    if n == 0:
-        return lo, hi
-    if n == 32:
-        return hi, lo
-    if n < 32:
-        s = U32(n)
-        c = U32(32 - n)
-        return (lo >> s) | (hi << c), (hi >> s) | (lo << c)
-    m = n - 32
-    s = U32(m)
-    c = U32(32 - m)
-    return (hi >> s) | (lo << c), (lo >> s) | (hi << c)
-
-
 # The three word-position masks the substitution layer applies, as uint32 [5]
 # 0/1 grids (`_masks`): which words take the leading XOR of their predecessor,
 # which the trailing one, and which is complemented.
@@ -240,14 +215,14 @@ def _substitution(lo: Array, hi: Array, masks: _Masks) -> _Lane:
 
 def _linear_diffusion(lo: Array, hi: Array) -> _Lane:
     """p_L (§3.4): S_i ^= (S_i ⋙ r1) ^ (S_i ⋙ r2), the Σ_i pairs — the one
-    step where the halves interact, through `_rotr64`. Each word carries its
-    own rotation pair, so the grid splits into static columns and stacks
-    back, the way Grøstl's ShiftBytes splits rows."""
+    step where the halves interact, through the shared `word64.rotr64`. Each
+    word carries its own rotation pair, so the grid splits into static
+    columns and stacks back, the way Grøstl's ShiftBytes splits rows."""
     out_lo, out_hi = [], []
     for i, (r1, r2) in enumerate(_SIGMA_ROTATIONS):
         w = (lo[:, i], hi[:, i])
-        a = _rotr64(w, r1)
-        b = _rotr64(w, r2)
+        a = rotr64(w, r1)
+        b = rotr64(w, r2)
         out_lo.append(w[0] ^ a[0] ^ b[0])
         out_hi.append(w[1] ^ a[1] ^ b[1])
     return fnp.stack(out_lo, axis=-1), fnp.stack(out_hi, axis=-1)

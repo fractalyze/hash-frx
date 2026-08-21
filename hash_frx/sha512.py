@@ -49,7 +49,7 @@ from frx.typing import ArrayLike
 from hash_frx.byte_hash import host_digest
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_be, split, unpack_be
-from hash_frx.word64 import Pair, add64, rotr64, shr64, xor64
+from hash_frx.word64 import Pair, add64, rotr64, xor64
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -214,12 +214,23 @@ _Kd = fnp.asarray(_K)
 INITIAL_STATE = fnp.asarray(_H0)  # uint32 [16]
 
 
-# The 64-bit `(lo, hi)` half-pair helpers — `rotr64`, `shr64`, `add64`, the
-# variadic `xor64` and the `Pair` alias — live in `hash_frx.word64`, shared
-# with BLAKE2b's G (the second literal consumer that met the lift bar these
+# The 64-bit `(lo, hi)` half-pair helpers — `rotr64`, `add64`, the variadic
+# `xor64` and the `Pair` alias — live in `hash_frx.word64`, shared with
+# BLAKE2b's G and Ascon's Σ (the literal consumers that met the lift bar these
 # helpers carried while module-local; `word64`'s docstring holds the charter).
+# The σ shift below stays module-local: no second family reads it.
 # `keccak/lane.py`'s rotate stays keccak's: mirrored direction, not the same
 # function.
+
+
+def _shr64(a: Pair, n: int) -> Pair:
+    """Logical shift-right of the 64-bit value by `0 < n < 32` — every σ
+    shift in §4.1.3 is 6 or 7, so the cross-half cases never arise and the
+    bound keeps every uint32 shift defined."""
+    lo, hi = a
+    s = fnp.uint32(n)
+    c = fnp.uint32(32 - n)
+    return (lo >> s) | (hi << c), hi >> s
 
 
 @lru_cache(maxsize=None)
@@ -284,8 +295,8 @@ def _compress(state: Array, w32: Array, k: Array) -> Array:
         # window indices as SHA-256's schedule.
         w1: Pair = (w_lo[:, 1], w_hi[:, 1])
         w14: Pair = (w_lo[:, 14], w_hi[:, 14])
-        sig0 = xor64(rotr64(w1, 1), rotr64(w1, 8), shr64(w1, 7))
-        sig1 = xor64(rotr64(w14, 19), rotr64(w14, 61), shr64(w14, 6))
+        sig0 = xor64(rotr64(w1, 1), rotr64(w1, 8), _shr64(w1, 7))
+        sig1 = xor64(rotr64(w14, 19), rotr64(w14, 61), _shr64(w14, 6))
         nxt = add64(add64(add64(word, sig0), (w_lo[:, 9], w_hi[:, 9])), sig1)
         w_lo = fnp.concatenate([w_lo[:, 1:], nxt[0][:, None]], axis=1)
         w_hi = fnp.concatenate([w_hi[:, 1:], nxt[1][:, None]], axis=1)

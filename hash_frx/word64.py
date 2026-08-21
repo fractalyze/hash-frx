@@ -7,16 +7,17 @@ safely: with x64 off `uint64` truncates to `uint32`, and enabling x64 flips
 the default dtypes process-wide (`keccak/lane.py` states the law). So a 64-bit
 word rides as a pair of `uint32` halves — `(lo, hi)`, both halves the same
 shape — and the operations a 64-bit ARX round needs beyond per-half bitwise
-ops live here: rotate-right, logical shift-right, add-with-carry, and the
-variadic XOR.
+ops live here: rotate-right, add-with-carry, and the variadic XOR.
 
 **The charter is `word.py`'s: only literally identical functions are shared.**
-These four began module-local to `sha512` with exactly that bar written on
+These helpers began module-local to `sha512` with exactly that bar written on
 them — a second literal consumer would justify the lift — and BLAKE2b's G is
 that consumer: the identical add/rotr/xor set at the rotation constants
-(32, 24, 16, 63). What is family-specific stays out: `keccak/lane.py`'s
-`rotl` is the mirrored rotation direction (not the same function), and its
-`rho_tables` bulk machinery is Keccak's own.
+(32, 24, 16, 63). Ascon's Σ layer carried a byte-identical rotate of its own
+and adopts `rotr64` as a third reader. What is family-specific stays out:
+`keccak/lane.py`'s `rotl` is the mirrored rotation direction (not the same
+function), its `rho_tables` bulk machinery is Keccak's own, and sha512's σ
+shift (`_shr64`) stays module-local on its single consumer.
 
 The pair layout inside a packed state array is each module's convention, not
 this one's: sha512 packs big-endian (high half at the even index), BLAKE2b
@@ -64,16 +65,6 @@ def rotr64(a: Pair, n: int) -> Pair:
     s = U32(m)
     c = U32(32 - m)
     return (hi >> s) | (lo << c), (lo >> s) | (hi << c)
-
-
-def shr64(a: Pair, n: int) -> Pair:
-    """Logical shift-right of the 64-bit value by `0 < n < 32` — every σ
-    shift in FIPS 180-4 §4.1.3 is 6 or 7, so the cross-half cases never arise
-    and the bound keeps every uint32 shift defined."""
-    lo, hi = a
-    s = U32(n)
-    c = U32(32 - n)
-    return (lo >> s) | (hi << c), hi >> s
 
 
 def add64(a: Pair, b: Pair) -> Pair:
