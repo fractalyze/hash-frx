@@ -1,5 +1,6 @@
 load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
     name = "byte_hashes_test",
@@ -12,4 +13,22 @@ py_test(
         requirement("absl_py"),
         requirement("numpy"),
     ],
+)
+
+py_test(
+    name = "blake2b_test",
+    # Compile-heavy relative to its arithmetic, like sha512_test: the vector
+    # rows and the differential sweep each compile the 96-G unrolled digest
+    # body once per (batch, length) aval, and the GPU leg repeats it.
+    size = "large",
+    srcs = ["blake2b_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx/blake2b",
+        "//hash_frx/testing:jit_cache",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
 )

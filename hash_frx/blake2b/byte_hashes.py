@@ -14,9 +14,9 @@ the EIP-152 precompile, Zcash, Filecoin — are strictly-sequential byte callers
 that read each digest back immediately, which is the exact profile the host
 rows exist for (`byte_hash.py`), and `hashlib.blake2b` is a C implementation
 the standard library already ships. So the host row is free and immediately
-useful, while the device row (`hash_frx.digest.blake2b`, `GENERIC` until an
-emitter lands) is the follow-up that earns its keep only once a batched
-consumer exists.
+useful, while the device row that earns its keep under a batched consumer is
+the sibling module (`blake2b.Blake2b` behind the `hash_frx.digest.blake2b`
+marker, `GENERIC` until an emitter lands).
 
 **The output length is a parameter of *which hash this is*.** RFC 7693 defines
 digests of 1..64 bytes, and `HostBlake2b(digest_size=32)` is a different hash

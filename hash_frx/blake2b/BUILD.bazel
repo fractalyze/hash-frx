@@ -1,16 +1,23 @@
 load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
+# Byte-oriented BLAKE2b (RFC 7693, unkeyed): the `digest` batch hash behind
+# the `hash_frx.digest.blake2b` marker plus the `Blake2b` device row, and the
+# `HostBlake2b` row over `hashlib.blake2b` — the shipped fast path for the
+# family's strictly-sequential real consumers (EIP-152, Zcash, Filecoin).
 py_library(
     name = "blake2b",
     srcs = [
         "__init__.py",
+        "blake2b.py",
         "byte_hashes.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx:word64",
         requirement("frx"),
         requirement("numpy"),
     ],
