@@ -138,13 +138,15 @@ class Blake2bMarkerTest(absltest.TestCase):
         # floor and this case flips to the keccak-style backend gate.
         self.assertFalse(blake2b._DEDICATED_EMITTER_AVAILABLE)
         self.assertEqual(blake2b._EMITTER_BACKENDS, ())
-        for size in _SIZES:
-            self.assertIs(Blake2b(size).fusion_path, FusionPath.GENERIC)
+        # One instance suffices: the path reads the two flags alone, and the
+        # size sweeps elsewhere already construct every length.
+        self.assertIs(Blake2b().fusion_path, FusionPath.GENERIC)
 
     def test_digest_emits_one_composite_with_the_digest_name(self) -> None:
         # The contract's unit: an absent or split marker still computes the
-        # right bytes, so only the lowered module shows it.
-        msg = np.zeros((2, 100), dtype=np.uint8)
+        # right bytes, so only the lowered module shows it. (4, 127) is the
+        # differential sweep's aval, so the marker cases add no fresh trace.
+        msg = np.zeros((4, 127), dtype=np.uint8)
         txt = frx.jit(blake2b.digest).lower(msg).as_text()
         self.assertIn(blake2b.BLAKE2B_MARKER, txt)
         self.assertEqual(txt.count("stablehlo.composite"), 1)
@@ -157,23 +159,23 @@ class Blake2bMarkerTest(absltest.TestCase):
         # operand-ABI rule in docs/reference/conventions.md); the counter
         # schedule and the SIGMA rows must enter as scalar literals and
         # trace-time tuples, never as lifted table arrays.
-        msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
+        msg = fnp.asarray(np.zeros((4, 127), dtype=np.uint8))
         eqn = _composite(blake2b.digest, msg)
         self.assertEqual(eqn.params["name"], blake2b.BLAKE2B_MARKER)
         self.assertEqual(eqn.params["version"], blake2b.BLAKE2B_MARKER_VERSION)
         self.assertLen(eqn.invars, 4)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
-        # L = 100: one block once padded, so the zero tail is 28 bytes.
-        self.assertEqual(shapes, [(16,), (16,), (2, 100), (28,)])
+        # L = 127: one block once padded, so the zero tail is 1 byte.
+        self.assertEqual(shapes, [(16,), (16,), (4, 127), (1,)])
 
     def test_a_block_multiple_rides_an_empty_tail(self) -> None:
         # The ABI's degenerate shape: at L a multiple of 128 the zero tail is
         # empty, and the operand still rides — zero-length, never dropped
         # (the invar COUNT is the pinned surface; only shapes move with L).
-        msg = fnp.asarray(np.zeros((2, 128), dtype=np.uint8))
+        msg = fnp.asarray(np.zeros((4, 128), dtype=np.uint8))
         eqn = _composite(blake2b.digest, msg)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
-        self.assertEqual(shapes, [(16,), (16,), (2, 128), (0,)])
+        self.assertEqual(shapes, [(16,), (16,), (4, 128), (0,)])
 
 
 class Blake2bTracedTest(absltest.TestCase):
@@ -183,7 +185,10 @@ class Blake2bTracedTest(absltest.TestCase):
     compile time scales with block count, the property does not."""
 
     def test_jit_matches_eager_and_hashlib(self) -> None:
-        msgs = _message(129, seed=7)[:2]  # 129 bytes: the counter crosses
+        # 129 bytes: the counter crosses a block boundary. The full (4, 129)
+        # batch deliberately — the eager leg then rides the class's shared
+        # compile instead of minting a fresh aval.
+        msgs = _message(129, seed=7)
         eager = np.asarray(blake2b.digest(msgs))
         traced = np.asarray(frx.jit(blake2b.digest)(msgs))
         np.testing.assert_array_equal(traced, eager)

@@ -185,10 +185,9 @@ def _initial_state(digest_size: int) -> np.ndarray:
     layout (`fnp.asarray`ed at use, for the reason `_IV_PAIRS` states).
     Built on the host, where Python ints are exact (`word.split`), and
     cached per size: there are at most 64 of them. This is where the digest
-    length
-    enters the hash — which is why truncating a longer digest is the WRONG
-    bytes at every shorter length, and why the range check lives here on the
-    module path as well as on the row's constructor."""
+    length enters the hash — which is why truncating a longer digest is the
+    WRONG bytes at every shorter length, and why the range check lives here
+    on the module path as well as on the row's constructor."""
     if not 1 <= digest_size <= MAX_DIGEST_SIZE:
         raise ValueError(
             f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
@@ -215,17 +214,22 @@ def _padding_tail(length: int) -> np.ndarray:
     return np.zeros((-length) % _BLOCK, dtype=np.uint8)
 
 
-def _xor_lanes(row: Array, values: tuple[int, int, int, int]) -> Array:
-    """XOR static per-lane constants into a 4-lane trailing axis, spelled as
-    static lane slices re-concatenated — each value enters as a uint32 scalar
-    literal, never as a host-materialised mask array that would lift into an
-    unnamed operand (docs/reference/conventions.md). A zero value emits
-    nothing; its lane passes through."""
-    parts = [
-        row[..., i : i + 1] ^ U32(v) if v else row[..., i : i + 1]
-        for i, v in enumerate(values)
+def _fold_counter(row: Array, v12: int, v14: int) -> Array:
+    """XOR §3.2's two folded words into one half of the working vector's IV
+    row — the byte offset into lane 0 (`v[12]`) and the final-block mask into
+    lane 2 (`v[14]`) — as static lane slices re-concatenated, each value
+    entering as a uint32 scalar literal, never as a host-materialised mask
+    array that would lift into an unnamed operand
+    (docs/reference/conventions.md). A zero value emits nothing and its lane
+    passes through: the mask on every interior block, the offset on an empty
+    message's one block."""
+    lanes = [
+        row[..., 0:1] ^ U32(v12) if v12 else row[..., 0:1],
+        row[..., 1:2],
+        row[..., 2:3] ^ U32(v14) if v14 else row[..., 2:3],
+        row[..., 3:4],
     ]
-    return fnp.concatenate(parts, axis=-1)
+    return fnp.concatenate(lanes, axis=-1)
 
 
 def _g_row(
@@ -253,35 +257,37 @@ def _roll_row(p: Pair, shift: int) -> Pair:
     return roll(p[0], shift, axis=-1), roll(p[1], shift, axis=-1)
 
 
-def _sched(w32: Array, s: tuple[int, ...], base: int) -> tuple[Pair, Pair]:
+def _sched(cols: list[Pair], idxs: tuple[int, ...]) -> tuple[Pair, Pair]:
     """The (x, y) message rows one vectorized G step reads: lane j's x is
-    m[s[base + 2j]] and its y m[s[base + 2j + 1]] (§3.2's call pattern) —
-    static column slices of the packed words, stacked into [B, 4] half grids
-    at trace time. The SIGMA row is a Python tuple, so a schedule entry is a
-    slice index, never an indexed read of a table array (the no-gather
-    rule)."""
-    xs = [s[base + 2 * j] for j in range(4)]
-    ys = [s[base + 2 * j + 1] for j in range(4)]
-    x: Pair = (
-        fnp.stack([w32[:, 2 * i] for i in xs], axis=-1),
-        fnp.stack([w32[:, 2 * i + 1] for i in xs], axis=-1),
-    )
-    y: Pair = (
-        fnp.stack([w32[:, 2 * i] for i in ys], axis=-1),
-        fnp.stack([w32[:, 2 * i + 1] for i in ys], axis=-1),
-    )
-    return x, y
+    m[idxs[2j]] and its y m[idxs[2j + 1]] (§3.2's call pattern; a SIGMA row's
+    first eight indices feed the column step, its last eight the diagonal) —
+    the once-sliced word columns stacked into [B, 4] half grids at trace
+    time. The SIGMA row is a Python tuple, so a schedule entry picks a column
+    at trace time, never through an indexed read of a table array (the
+    no-gather rule)."""
+    xs, ys = idxs[0::2], idxs[1::2]
+
+    def lanes(picks: tuple[int, ...]) -> Pair:
+        return (
+            fnp.stack([cols[i][0] for i in picks], axis=-1),
+            fnp.stack([cols[i][1] for i in picks], axis=-1),
+        )
+
+    return lanes(xs), lanes(ys)
 
 
-def _compress(state: Array, iv: Array, w32: Array, t: int, f: bool) -> Array:
+def _compress(
+    state: Array, iv_lo: Array, iv_hi: Array, w32: Array, t: int, f: bool
+) -> Array:
     """One compression F(h, m, t, f) (RFC 7693 §3.2): state [B, 16] (h as
-    pairs) + the IV operand [16] + message words w32 [B, 32] -> state
-    [B, 16], everything in the module's little-endian pair layout. `t` (the
-    byte offset at the end of this block) and `f` (the final-block flag) are
-    HOST values, not operands: the length is static, so both fold into the
-    working vector's IV lanes as scalar-literal XORs before anything reaches
-    the device (the module docstring states the sub-2^64 exactness and why
-    §3.2's `v[13]` XOR never appears).
+    pairs) + the IV operand's [8] halves (split once by the caller, low at
+    the even index) + message words w32 [B, 32] -> state [B, 16], everything
+    in the module's little-endian pair layout. `t` (the byte offset at the
+    end of this block) and `f` (the final-block flag) are HOST values, not
+    operands: the length is static, so both fold into the working vector's
+    IV lanes as scalar-literal XORs before anything reaches the device (the
+    module docstring states the sub-2^64 exactness and why §3.2's `v[13]`
+    XOR never appears).
 
     **The working vector rides as four 4-lane rows** — va = v[0..3],
     vb = v[4..7], vc = v[8..11], vd = v[12..15], each a pair of [B, 4] (or
@@ -303,7 +309,7 @@ def _compress(state: Array, iv: Array, w32: Array, t: int, f: bool) -> Array:
     (a `lax` loop would need a gather into the schedule, and is a
     control-flow boundary besides, docs/reference/conventions.md)."""
     b = state.shape[0]
-    iv_lo, iv_hi = iv[0:16:2], iv[1:16:2]  # [8] halves, low at even index
+    cols = [(w32[:, 2 * i], w32[:, 2 * i + 1]) for i in range(16)]  # m[i]
     ha: Pair = (state[:, 0:8:2], state[:, 1:8:2])  # h[0..3] as [B, 4] grids
     hb: Pair = (state[:, 8:16:2], state[:, 9:16:2])  # h[4..7]
 
@@ -314,16 +320,16 @@ def _compress(state: Array, iv: Array, w32: Array, t: int, f: bool) -> Array:
     t_lo, t_hi = split(t)
     ff = 0xFFFFFFFF if f else 0
     vd: Pair = (
-        _xor_lanes(iv_lo[4:8], (t_lo, 0, ff, 0)),
-        _xor_lanes(iv_hi[4:8], (t_hi, 0, ff, 0)),
+        _fold_counter(iv_lo[4:8], t_lo, ff),
+        _fold_counter(iv_hi[4:8], t_hi, ff),
     )
 
     for r in range(12):
         s = _SIGMA[r % 10]  # rounds 10 and 11 reuse rows 0 and 1 (§2.7)
-        x, y = _sched(w32, s, 0)
+        x, y = _sched(cols, s[:8])
         va, vb, vc, vd = _g_row(va, vb, vc, vd, x, y)  # the column step
         vb, vc, vd = _roll_row(vb, -1), _roll_row(vc, -2), _roll_row(vd, -3)
-        x, y = _sched(w32, s, 8)
+        x, y = _sched(cols, s[8:])
         va, vb, vc, vd = _g_row(va, vb, vc, vd, x, y)  # the diagonal step
         vb, vc, vd = _roll_row(vb, 1), _roll_row(vc, 2), _roll_row(vd, 3)
 
@@ -393,6 +399,7 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         )
         words = pack_le(padded.reshape(b, -1, _BLOCK))  # [B, nblocks, 32]
         state = fnp.broadcast_to(h0, (b, 16))
+        iv_lo, iv_hi = iv[0:16:2], iv[1:16:2]  # [8] halves, low at even index
         nblocks = words.shape[1]
         for i in range(nblocks):  # static, small
             last = i == nblocks - 1
@@ -400,7 +407,7 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
             # block's worth per interior block, the true length on the final
             # one (§3.3) — the zero pad is never counted.
             t = ll if last else (i + 1) * _BLOCK
-            state = _compress(state, iv, words[:, i], t, last)
+            state = _compress(state, iv_lo, iv_hi, words[:, i], t, last)
         return unpack_le(state)  # little-endian serialization: [B, 64]
 
     return fused_region(
