@@ -26,7 +26,14 @@ from hash_frx import sha512
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.sha256 import Sha256
-from hash_frx.sha512 import HostSha512, Sha512
+from hash_frx.sha512 import (
+    HostSha384,
+    HostSha512,
+    HostSha512_256,
+    Sha384,
+    Sha512,
+    Sha512_256,
+)
 from hash_frx.testing.jit_cache import assert_single_trace
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 111/112 (the one-block/two-block
@@ -332,6 +339,193 @@ class Sha512ByteHashTest(parameterized.TestCase):
                 self.assertEqual(hash(cls()), hash(cls()))
         self.assertNotEqual(Sha512(), HostSha512())
         self.assertNotEqual(Sha512(), Sha256())
+
+
+# ---------------------------------------------------------------------------
+# The truncated variants (§6.5 SHA-384, §6.7 SHA-512/256): the published
+# worked examples, the hashlib differential, the shared-marker pins, and the
+# rows. Every message shape below reuses an aval the SHA-512 cases above
+# already compiled, and `h0`'s aval is the same uint32 [16] for every variant
+# — so this whole section adds no fresh trace or compile of the 80-round
+# chain (the one-trace case pins exactly that).
+# ---------------------------------------------------------------------------
+
+# The NIST example-values series for the truncated variants ("abc" and the
+# two-block 896-bit message), plus the empty message every independent
+# transcription publishes.
+_VARIANT_VECTORS = (
+    (
+        "sha384_abc",
+        "sha384",
+        b"abc",
+        "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed"
+        "8086072ba1e7cc2358baeca134c825a7",
+    ),
+    (
+        "sha384_empty",
+        "sha384",
+        b"",
+        "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da"
+        "274edebfe76f65fbd51ad2f14898b95b",
+    ),
+    (
+        "sha384_two_block_896_bit",
+        "sha384",
+        _MSG_896,
+        "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712"
+        "fcc7c71a557e2db966c3e9fa91746039",
+    ),
+    (
+        "sha512_256_abc",
+        "sha512_256",
+        b"abc",
+        "53048e2681941ef99b2e29b76b4c7dabe4c2d0c634fc6d46e0e2f13107e7af23",
+    ),
+    (
+        "sha512_256_empty",
+        "sha512_256",
+        b"",
+        "c672b8d1ef56ed28ab87c3622c5114069bdd3ad7b8f9737498d0c01ecef0967a",
+    ),
+    (
+        "sha512_256_two_block_896_bit",
+        "sha512_256",
+        _MSG_896,
+        "3928e184fb8690f840da3988121d31be65cb9d3ef83ee6146feac861e19b563a",
+    ),
+)
+
+# name -> (module digest fn, digest size, hashlib oracle). `sha512_256`
+# reaches hashlib through OpenSSL (`hashlib.new`); the host row's docstring
+# carries the availability story.
+_VARIANTS = {
+    "sha384": (sha512.sha384_digest, 48, lambda b: hashlib.sha384(b)),
+    "sha512_256": (
+        sha512.sha512_256_digest,
+        32,
+        lambda b: hashlib.new("sha512_256", b),
+    ),
+}
+
+
+class Sha2VariantVectorTest(parameterized.TestCase):
+    @parameterized.named_parameters(*_VARIANT_VECTORS)
+    def test_matches_the_published_vector(
+        self, variant: str, msg: bytes, digest_hex: str
+    ) -> None:
+        fn, _, oracle = _VARIANTS[variant]
+        rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        got = np.asarray(fn(rows))[0]
+        self.assertEqual(bytes(got).hex(), digest_hex)
+        # The reference the differential sweep uses is anchored to the same
+        # record, so agreeing with hashlib below means agreeing with FIPS.
+        self.assertEqual(oracle(msg).hexdigest(), digest_hex)
+
+
+class Sha2VariantTest(parameterized.TestCase):
+    @parameterized.parameters(*_LENGTHS)
+    def test_sha384_matches_hashlib(self, length: int) -> None:
+        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
+        got = bytes(np.asarray(sha512.sha384_digest(msg[None, :]))[0])
+        self.assertEqual(got, hashlib.sha384(bytes(msg)).digest())
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_sha512_256_matches_hashlib(self, length: int) -> None:
+        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
+        got = bytes(np.asarray(sha512.sha512_256_digest(msg[None, :]))[0])
+        self.assertEqual(got, hashlib.new("sha512_256", bytes(msg)).digest())
+
+    def test_variants_ride_the_sha512_marker_with_truncation_outside(self) -> None:
+        # The #199 acceptance pin: ONE composite carrying the sha512 name and
+        # version, whose output is the FULL [B, 64] serialized state — the
+        # truncation is the caller's slice, outside the marker, so the wire
+        # contract a recognizer reads is byte-for-byte SHA-512's.
+        msg = fnp.asarray(np.zeros((1, 1), dtype=np.uint8))
+        for variant, (fn, size, _) in _VARIANTS.items():
+            with self.subTest(variant=variant):
+                eqn = _composite(fn, msg)
+                self.assertEqual(eqn.params["name"], sha512.SHA512_MARKER)
+                self.assertEqual(eqn.params["version"], sha512.SHA512_MARKER_VERSION)
+                self.assertEqual(tuple(eqn.outvars[0].aval.shape), (1, 64))
+                self.assertEqual(np.asarray(fn(msg)).shape, (1, size))
+
+    def test_one_chain_trace_serves_every_variant(self) -> None:
+        # The issue-#199 design pin: a variant is DATA (a different h0 value
+        # on the same [16] aval), not ABI — so SHA-512, SHA-384 and
+        # SHA-512/256 of one message shape must all ride one trace of the
+        # marked chain.
+        msgs = fnp.asarray(np.zeros((1, 1), dtype=np.uint8))
+        calls = [
+            functools.partial(fn, msgs)
+            for fn in (sha512.digest, sha512.sha384_digest, sha512.sha512_256_digest)
+        ]
+        assert_single_trace(self, sha512.sha512_merkle_damgard, calls)
+
+
+class Sha2VariantByteHashTest(parameterized.TestCase):
+    """The four variant rows against the seam and against each other — the
+    `Sha512ByteHashTest` split at the truncated tables. The device/host
+    agreement plus the module-function sweeps above close the triangle, so
+    the host rows carry no separate hashlib sweep."""
+
+    def test_impls_satisfy_the_seam(self) -> None:
+        for h, size in (
+            (Sha384(), 48),
+            (HostSha384(), 48),
+            (Sha512_256(), 32),
+            (HostSha512_256(), 32),
+        ):
+            with self.subTest(impl=type(h).__name__):
+                self.assertIsInstance(h, ByteHash)
+                self.assertEqual(h.digest_size, size)
+                self.assertIsInstance(h.fusion_path, FusionPath)
+
+    def test_fusion_paths_pin_the_substrate(self) -> None:
+        msg = np.zeros((1, 1), dtype=np.uint8)
+        for device, host in (
+            (Sha384(), HostSha384()),
+            (Sha512_256(), HostSha512_256()),
+        ):
+            with self.subTest(variant=type(device).__name__):
+                self.assertIs(device.fusion_path, FusionPath.GENERIC)
+                self.assertTrue(device.fusion_path.is_traceable)
+                self.assertNotIsInstance(device.digest(msg), np.ndarray)
+                self.assertIs(host.fusion_path, FusionPath.HOST)
+                self.assertFalse(host.fusion_path.is_traceable)
+                self.assertIsInstance(host.digest(msg), np.ndarray)
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_device_and_host_agree(self, length: int) -> None:
+        rng = np.random.default_rng(length + 2)
+        msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
+        for device, host in (
+            (Sha384(), HostSha384()),
+            (Sha512_256(), HostSha512_256()),
+        ):
+            with self.subTest(variant=type(device).__name__):
+                got = np.asarray(device.digest(msgs))
+                self.assertEqual(got.shape, (4, device.digest_size))
+                np.testing.assert_array_equal(got, np.asarray(host.digest(msgs)))
+
+    def test_value_identity_is_by_type(self) -> None:
+        for cls in (Sha384, HostSha384, Sha512_256, HostSha512_256):
+            with self.subTest(impl=cls.__name__):
+                self.assertEqual(cls(), cls())
+                self.assertEqual(hash(cls()), hash(cls()))
+        # No two rows of the family are ever equal — across variants,
+        # substrates, and the parent pair — or a consumer holding several
+        # would collide (and substrate swaps would not re-trace).
+        distinct = [
+            Sha512(),
+            HostSha512(),
+            Sha384(),
+            HostSha384(),
+            Sha512_256(),
+            HostSha512_256(),
+        ]
+        for i, a in enumerate(distinct):
+            for b in distinct[i + 1 :]:
+                self.assertNotEqual(a, b)
 
 
 if __name__ == "__main__":
