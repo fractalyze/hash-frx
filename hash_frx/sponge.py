@@ -245,6 +245,13 @@ class Sponge:
                 f"fills the capacity), got {self.rate} + {self.out} != "
                 f"{self._permutation.width}"
             )
+        # Zero absorbed blocks leave the state at its zero initialization, so
+        # the digest is the zero prefix (Plonky3's PaddingFreeSponge on an
+        # empty iterator; the digest-feedback mode chains nothing either).
+        # Static, so no marker or permute is emitted for a constant result —
+        # without this the absorb gather slices a length-0 input and fails.
+        if input.shape[0] == 0:
+            return fnp.zeros(self.out, dtype=input.dtype)
         return _hash_body(self, input, sponge_type)
 
 

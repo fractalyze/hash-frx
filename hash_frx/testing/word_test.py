@@ -25,7 +25,16 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.testing.fusion_ready import assert_fusion_ready
-from hash_frx.word import BYTES_PER_WORD, pack_le, roll, rotr, split, unpack_le
+from hash_frx.word import (
+    BYTES_PER_WORD,
+    pack_be,
+    pack_le,
+    roll,
+    rotr,
+    split,
+    unpack_be,
+    unpack_le,
+)
 
 
 class RotrTest(parameterized.TestCase):
@@ -169,6 +178,19 @@ class LoweringTest(absltest.TestCase):
         for name, (fn, arg) in cases.items():
             with self.subTest(primitive=name):
                 assert_fusion_ready(fn, arg)
+
+
+class ZeroRowsTest(absltest.TestCase):
+    """A leading batch axis of 0 packs and unpacks to well-shaped emptiness
+    (#211): the word count comes from the static trailing axis, never from a
+    `-1` a zero-sized total would make ambiguous."""
+
+    def test_pack_and_unpack_keep_zero_rows(self) -> None:
+        empty = fnp.zeros((0, 3, 8), dtype=fnp.uint8)
+        for pack, unpack in [(pack_le, unpack_le), (pack_be, unpack_be)]:
+            words = pack(empty)
+            self.assertEqual(words.shape, (0, 3, 2))
+            self.assertEqual(np.asarray(unpack(words)).shape, (0, 3, 8))
 
 
 if __name__ == "__main__":
