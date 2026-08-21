@@ -275,13 +275,30 @@ class Sha256BytesMarkerTest(parameterized.TestCase):
             np.asarray(sha256.sha256_bytes(fnp.asarray(msg))),
         )
 
-    def test_digest_routes_by_the_recognizer_flag(self) -> None:
-        # `digest` must not emit a marker the pinned plugin cannot claim: with
-        # `_BYTES_EMITTER_AVAILABLE` false the wire carries the blocks marker
-        # only. Flipping the flag is what moves the wire — this is the test
-        # that makes that flip deliberate.
-        msg = np.zeros((1, 64), dtype=np.uint8)
-        txt = frx.jit(sha256.digest).lower(msg).as_text()
+    def test_digest_routes_by_recognizer_and_scale(self) -> None:
+        # `digest` must not emit a marker the pinned plugin cannot claim, and
+        # on a backend whose emitter charges a per-call-site premium for the
+        # bytes arm it must not pay that where the packing it retires is
+        # trivial (#197). Moving the wire takes the flag, the backend, and the
+        # scale — this is the test that makes each of them deliberate.
+        small = np.zeros((1, 64), dtype=np.uint8)
+        txt = frx.jit(sha256.digest).lower(small).as_text()
+        gated = frx.default_backend() in sha256._COMPILE_GATED_BACKENDS
+        if sha256._routes_to_bytes_marker() and not gated:
+            # Ungated backend: the bytes arm is the cheaper form at every size,
+            # so nothing holds a small batch back from it.
+            self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
+        else:
+            self.assertIn(sha256.SHA256_MARKER, txt)
+            self.assertNotIn(sha256.SHA256_BYTES_MARKER, txt)
+
+        # At the threshold — the smallest batch that reaches the bytes marker
+        # even on a gated backend, in the Merkle-leaf shape that motivates it
+        # (#178).
+        at_gate = np.zeros(
+            (sha256._BYTES_MARKER_MIN_BYTES // 1024, 1024), dtype=np.uint8
+        )
+        txt = frx.jit(sha256.digest).lower(at_gate).as_text()
         if sha256._routes_to_bytes_marker():
             self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
         else:

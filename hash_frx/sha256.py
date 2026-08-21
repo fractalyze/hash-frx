@@ -75,6 +75,38 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 # from the bytes operand, retiring the padded-words materialization.
 _BYTES_EMITTER_AVAILABLE = True
 
+# Where the bytes marker costs more to COMPILE than it saves, and the batch
+# size below which `digest` therefore stays on the blocks marker. Both forms
+# produce identical bytes; they split only by cost, and the split is a
+# property of one emitter rather than of the hardware.
+#
+# The CPU emitter packs 16 digest rows into SIMD lanes and instantiates the
+# bytes arm's per-byte padding assembly (a two-body `scf.if`, a clamp and a
+# select per byte) once PER LANE, where the blocks arm reads pre-packed words.
+# Measured at one call site: 18.9k lines of LLVM IR against the blocks arm's
+# 6.8k, ~2.7x, which is ~1.4x the compile wall per call site. The GPU emitter
+# has no lane replication — 7.6k against 7.0k, ~1.08x — and there the bytes
+# arm is uniformly cheaper to compile as well as to run, so gating it would
+# only give up both wins.
+#
+# So a traced program with thousands of small digest sites doubled its compile
+# wall on the routing flip alone, on the CPU leg (fractalyze/hash-frx#197: 416s,
+# back to 195s with the routing restored on the same wheel). Above the
+# threshold the padded-words materialization the bytes arm retires is what
+# dominates instead — ~1.16 GB written and re-read at a Merkle-leaf-scale batch
+# (2^20 x 1 KiB, #178).
+#
+# The threshold is a separator between those two consumer classes, NOT a
+# measured crossover: the classes sit decades apart in message bytes (~10^2 vs
+# ~10^9), so it only has to fall between them, and the compile cost it trades
+# away is paid once while the runtime saving is paid per execution. Nothing
+# finer is claimed, and nothing real sits near the value.
+#
+# Both the tuple and the threshold retire together once the emitter stops
+# replicating that assembly per lane.
+_COMPILE_GATED_BACKENDS = ("cpu",)
+_BYTES_MARKER_MIN_BYTES = 1 << 20
+
 
 def _routes_to_dedicated_emitter() -> bool:
     """Whether the pin *and* the backend both carry the SHA-256 emitter. Read
@@ -86,6 +118,17 @@ def _routes_to_dedicated_emitter() -> bool:
 def _routes_to_bytes_marker() -> bool:
     """Whether `digest` should emit the raw-bytes marker on this backend."""
     return _BYTES_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+
+
+def _bytes_marker_earns_its_compile(nbytes: int) -> bool:
+    """Whether the bytes marker is worth its compile cost for a batch carrying
+    `nbytes` message bytes in total, on this backend. Only the backends whose
+    emitter pays a per-call-site premium for it are gated; everywhere else the
+    marker is the cheaper form at every size (rationale on
+    `_COMPILE_GATED_BACKENDS`)."""
+    if frx.default_backend() not in _COMPILE_GATED_BACKENDS:
+        return True
+    return nbytes >= _BYTES_MARKER_MIN_BYTES
 
 
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
@@ -378,9 +421,12 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
 
     Byte-identical to the FIPS 180-4 standard per message. The device
     compression is emitted as one name-routed marker; which one depends on the
-    pinned plugin: the raw-bytes form (`sha256_bytes`) where its recognizer
-    exists, else the blocks form with the padded words packed here — the two
-    produce identical bytes, split only by where the padding runs.
+    pinned plugin and, where that plugin's emitter charges a per-call-site
+    premium for it, on the batch scale: the raw-bytes form (`sha256_bytes`)
+    where its recognizer exists and it earns its compile cost, else the blocks
+    form with the padded words packed here — the two produce identical bytes,
+    split only by where the padding runs and what it costs to emit (rationale
+    on `_COMPILE_GATED_BACKENDS`).
 
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash inside
     its own `@jit` or `vmap` without reaching past the seam for
@@ -390,7 +436,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     length instead, it never reads the message at all.
     """
     msg = fnp.asarray(msg, dtype=fnp.uint8)
-    if _routes_to_bytes_marker():
+    if _routes_to_bytes_marker() and _bytes_marker_earns_its_compile(msg.size):
         return sha256_bytes(msg)
     return sha256_merkle_damgard(INITIAL_STATE, _padded_words(msg))
 
