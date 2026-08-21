@@ -268,6 +268,25 @@ py_library(
 )
 
 py_test(
+    name = "blake2s_test",
+    # Compile-heavy relative to its arithmetic, like the family's other
+    # unrolled digests: the vector rows and the differential sweep each
+    # compile the 80-G unrolled body once per (batch, length) aval, and the
+    # GPU leg repeats it.
+    size = "large",
+    srcs = ["blake2s_test.py"],
+    deps = [
+        ":jit_cache",
+        "//hash_frx:blake2s",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "ripemd160_test",
     # Compile-heavy relative to its arithmetic: the vector rows and the
     # differential sweep each compile the unrolled 160-step digest body once
