@@ -280,7 +280,15 @@ class Blake3Stream:
         `inline=` answer: that one has to splice back in to keep one composite
         per hash, and there is no composite here to keep.
         """
-        msg = fnp.asarray(data, dtype=fnp.uint8).reshape(-1)
+        msg = fnp.asarray(data)
+        # Coercing instead would hash a truncation of what the caller passed and
+        # return a well-formed digest of the wrong message — an int32 payload
+        # silently narrows mod 256, a [B, L] one silently flattens into a single
+        # stream. Same reason `keccak.streaming.ShakeAbsorb.absorb` rejects both.
+        if msg.ndim != 1:
+            raise ValueError(f"data must be 1-D uint8 [L], got ndim={msg.ndim}")
+        if msg.dtype != fnp.uint8:
+            raise TypeError(f"data must be uint8, got {msg.dtype}")
         length = msg.shape[0]
         if length == 0:
             return self

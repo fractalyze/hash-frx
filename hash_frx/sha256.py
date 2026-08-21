@@ -30,7 +30,7 @@ from frx import Array
 from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import host_digest
+from hash_frx.byte_hash import device_message, host_digest
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_be, rotr, unpack_be
 
@@ -389,7 +389,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     buffer holding the message, so the message had to be concrete. Built from the
     length instead, it never reads the message at all.
     """
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     if _routes_to_bytes_marker():
         return sha256_bytes(msg)
     return sha256_merkle_damgard(INITIAL_STATE, _padded_words(msg))

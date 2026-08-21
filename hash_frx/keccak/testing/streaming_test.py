@@ -33,6 +33,7 @@ from hash_frx.keccak.byte_hashes import (
     SHAKE128_RATE,
     SHAKE256_RATE,
 )
+from hash_frx.keccak.sponge import KeccakSponge
 from hash_frx.keccak.streaming import (
     ShakeAbsorb,
     ShakeSqueeze,
@@ -258,6 +259,30 @@ class SqueezePermutationCountTest(parameterized.TestCase):
             'stablehlo.composite "hash_frx.perm.keccak_f"'
         ) + text.count('stablehlo.composite "zorch.fused_region"')
         self.assertEqual(emitted, want)
+
+
+class ShakeInitValidationTest(absltest.TestCase):
+    """`shake_init` shares the one-shot sponge's parameter checks (#215).
+
+    Before, a rate of 0 returned a well-formed garbage state, a rate of 7 failed
+    deep inside the packer, and a suffix with bit 7 set silently became a
+    different domain — differently in each path, since the one-shot tail ORs the
+    `0x80` terminator while the traced block XORs it.
+    """
+
+    def test_rejects_a_rate_that_is_not_a_positive_lane_multiple(self) -> None:
+        for rate in (0, -8, 7):
+            with self.assertRaisesRegex(ValueError, "rate"):
+                shake_init(rate)
+
+    def test_rejects_a_suffix_that_collides_with_the_terminator(self) -> None:
+        for suffix in (0x80, 0x9F, 0xFF):
+            with self.assertRaisesRegex(ValueError, "suffix"):
+                shake_init(SHAKE128_RATE, suffix)
+
+    def test_the_one_shot_sponge_rejects_the_same_suffix(self) -> None:
+        with self.assertRaisesRegex(ValueError, "suffix"):
+            KeccakSponge(rate=SHAKE128_RATE, suffix=0x9F, output_size=32)
 
 
 if __name__ == "__main__":

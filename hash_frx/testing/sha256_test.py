@@ -304,5 +304,15 @@ class EmptyBatchTest(absltest.TestCase):
             self.assertEqual(got.dtype, np.uint8)
 
 
+class MessageRankTest(absltest.TestCase):
+    """The row routes its message through the seam's rank check (#215): a
+    single message is `B = 1`, not a bare `[L]`, and the miss used to surface
+    from inside the marked region's trace instead of at the call."""
+
+    def test_a_1d_message_is_rejected_at_the_seam(self) -> None:
+        with self.assertRaisesRegex(ValueError, "2-D uint8"):
+            sha256.digest(fnp.zeros(64, dtype=fnp.uint8))
+
+
 if __name__ == "__main__":
     absltest.main()

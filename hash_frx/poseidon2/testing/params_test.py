@@ -9,7 +9,10 @@ import numpy as np
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
-from hash_frx.poseidon2.params import Poseidon2Params
+from hash_frx.poseidon2.params import (
+    Poseidon2Params,
+    default_external_matrix,
+)
 
 
 def _good(**over: Any) -> Poseidon2Params:
@@ -68,6 +71,37 @@ class Poseidon2ParamsValueEqualityTest(absltest.TestCase):
     def test_differs_on_constant_arrays(self) -> None:
         ones = fnp.ones((4, 16), dtype=F)
         self.assertNotEqual(_good(), _good(external_constants_initial=ones))
+
+
+class DtypeSpellingTest(absltest.TestCase):
+    """`F` and `np.dtype(F)` name one dtype but hash differently (#215).
+
+    They compare equal, so equality alone never caught this: as jit cache keys
+    they are two entries, and a consumer that spelled the dtype the other way
+    silently re-traced every call. `dtype` is normalized to the scalar type,
+    which is also the spelling that stays callable for the zero comparisons in
+    `__post_init__` — `np.dtype(F)(0)` raises.
+    """
+
+    def test_both_spellings_normalize_to_one_key(self) -> None:
+        scalar = _good()
+        wrapped = _good(dtype=np.dtype(F))
+        self.assertIs(wrapped.dtype, F)
+        self.assertEqual(scalar, wrapped)
+        self.assertEqual(hash(scalar), hash(wrapped))
+
+
+class DefaultExternalMatrixWidthTest(absltest.TestCase):
+    """The width-4 default is refused, not served (#215): the formula
+    degenerates to `2 * M4` there, where canonical Poseidon2 is plain `M4`, so
+    a default would hand back a different permutation than the references."""
+
+    def test_width_four_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "width >= 8"):
+            default_external_matrix(4, F)
+
+    def test_width_eight_still_builds(self) -> None:
+        self.assertEqual(default_external_matrix(8, F).shape, (8, 8))
 
 
 if __name__ == "__main__":

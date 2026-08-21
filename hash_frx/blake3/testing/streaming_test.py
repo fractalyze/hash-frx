@@ -23,6 +23,7 @@ both.
 from __future__ import annotations
 
 import frx
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
@@ -191,6 +192,22 @@ class PytreeThreadingTest(absltest.TestCase):
         # A whole-hash marker here would mean the resumable path fell back to
         # the one region that cannot express it.
         self.assertNotIn(f'"{blake3.BLAKE3_MARKER}"', text)
+
+
+class AbsorbValidationTest(absltest.TestCase):
+    """`absorb` rejects what it cannot hash rather than coercing it (#215).
+
+    Coercing returned a well-formed digest of a *different* message: an int32
+    payload narrows mod 256, a `[B, L]` one flattens into a single stream.
+    """
+
+    def test_rejects_a_payload_that_is_not_bytes(self) -> None:
+        with self.assertRaisesRegex(TypeError, "uint8"):
+            blake3_stream_init().absorb(fnp.asarray([1, 2], dtype=fnp.int32))
+
+    def test_rejects_a_batched_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "1-D"):
+            blake3_stream_init().absorb(fnp.zeros((2, 4), dtype=fnp.uint8))
 
 
 if __name__ == "__main__":

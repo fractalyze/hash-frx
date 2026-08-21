@@ -34,6 +34,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
@@ -93,6 +94,21 @@ class ByteHash(Protocol):
         the authority does not move with it.
         """
         ...
+
+
+def device_message(msg: ArrayLike) -> Array:
+    """A message as the uint8 `[B, L]` batch every device row hashes.
+
+    The rank is checked at the seam so a caller holding the wrong one is told
+    so eagerly, rather than from inside the trace of a marked region — where it
+    surfaces as a reshape or concatenate error naming neither the seam nor the
+    rank. A 1-D message is the common miss: a single message is `B = 1`, not a
+    bare `[L]`.
+    """
+    message = fnp.asarray(msg, dtype=fnp.uint8)
+    if message.ndim != 2:
+        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
+    return message
 
 
 def host_digest(

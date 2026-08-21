@@ -355,5 +355,16 @@ class EmptyBatchTest(absltest.TestCase):
             self.assertEqual(got.dtype, np.uint8)
 
 
+class HostXofSizeTest(absltest.TestCase):
+    """A host XOF refuses the zero-length output its device sibling refuses
+    (#215) — otherwise the pair disagrees on what counts as a hash."""
+
+    def test_zero_output_is_rejected_on_both_rows(self) -> None:
+        with self.assertRaisesRegex(ValueError, "digest_size"):
+            HostShake128(0)
+        with self.assertRaisesRegex(ValueError, "output_size"):
+            Shake128(0)
+
+
 if __name__ == "__main__":
     absltest.main()

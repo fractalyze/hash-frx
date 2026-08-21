@@ -68,6 +68,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
+from hash_frx.byte_hash import device_message
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import Pair, add64, rotr64, xor64
@@ -438,7 +439,7 @@ def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
     message (`_padding_tail`), which is the same property `sha256.digest`
     states.
     """
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     full = blake2b_bytes(
         fnp.asarray(_initial_state(digest_size)),
         msg,

@@ -51,6 +51,7 @@ import numpy as np
 from frx import Array, lax
 from frx.typing import ArrayLike
 
+from hash_frx.byte_hash import device_message
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import rotr64
@@ -347,7 +348,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     message (`_padding_tail`), which is the same property `sha256.digest`
     states.
     """
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     return ascon_hash256_bytes(msg)
 
 

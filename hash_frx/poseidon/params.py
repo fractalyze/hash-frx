@@ -51,6 +51,12 @@ class PoseidonParams:
     mds: Array
 
     def __post_init__(self) -> None:
+        # `F` and `np.dtype(F)` name one dtype but hash differently (they only
+        # compare equal), so an unnormalized field makes two jit cache keys out
+        # of one parameterization and silently re-traces. The scalar type is the
+        # canonical spelling — `np.dtype(x).type` round-trips — and it is the
+        # one that stays callable for the zero comparisons below.
+        object.__setattr__(self, "dtype", np.dtype(self.dtype).type)
         if self.alpha < 1:
             raise ValueError(f"alpha must be a positive int, got {self.alpha}")
         if self.full_rounds < 1 or self.full_rounds % 2 != 0:
@@ -189,6 +195,12 @@ class SparsePoseidonParams:
     partial_col: Array
 
     def __post_init__(self) -> None:
+        # `F` and `np.dtype(F)` name one dtype but hash differently (they only
+        # compare equal), so an unnormalized field makes two jit cache keys out
+        # of one parameterization and silently re-traces. The scalar type is the
+        # canonical spelling — `np.dtype(x).type` round-trips — and it is the
+        # one that stays callable for the zero comparisons below.
+        object.__setattr__(self, "dtype", np.dtype(self.dtype).type)
         if self.alpha < 1:
             raise ValueError(f"alpha must be a positive int, got {self.alpha}")
         if self.half_full_rounds < 1:

@@ -57,6 +57,7 @@ from hash_frx.keccak.byte_hashes import (
     SHAKE_SUFFIX,
 )
 from hash_frx.keccak.permutation import KeccakF1600
+from hash_frx.keccak.sponge import validate_sponge_params
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
 
 _PERMUTE = KeccakF1600().permute
@@ -237,6 +238,7 @@ class ShakeSqueeze:
 
 def shake_init(rate: int, suffix: int = SHAKE_SUFFIX) -> ShakeAbsorb:
     """A fresh incremental sponge at `rate` bytes with `suffix` domain bits."""
+    validate_sponge_params(rate, suffix)
     return ShakeAbsorb(
         state=fnp.zeros(_STATE_WIDTH, dtype=fnp.uint32),
         pending=fnp.zeros(rate, dtype=fnp.uint8),

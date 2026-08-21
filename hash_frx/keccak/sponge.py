@@ -61,6 +61,33 @@ KECCAK_SPONGE_MARKER = "hash_frx.digest.keccak_sponge"
 KECCAK_SPONGE_MARKER_VERSION = 1
 
 
+def validate_sponge_params(rate: int, suffix: int) -> None:
+    """Reject a rate or domain suffix the sponge cannot represent.
+
+    Shared by the one-shot `KeccakSponge` and the incremental `shake_init`,
+    which is not only de-duplication: the two spell the pad terminator
+    differently (`|= 0x80` on the host tail here, `^ 0x80` on the traced block
+    there), so a suffix with bit 7 set produced *different digests* from the
+    two paths. That bit belongs to `pad10*1`'s trailing 1 — FIPS 202 section
+    5.1 — and no standard suffix uses it (SHA-3 `0x06`, SHAKE `0x1F`, cSHAKE
+    `0x04`, Keccak `0x01`), so it is rejected rather than defined.
+    """
+    if rate <= 0 or rate % BYTES_PER_WORD:
+        raise ValueError(
+            f"rate ({rate}) must be a positive multiple of " f"{BYTES_PER_WORD} bytes"
+        )
+    if rate >= KeccakF1600.width * BYTES_PER_WORD:
+        raise ValueError(
+            f"rate ({rate} bytes) leaves no capacity in a "
+            f"{KeccakF1600.width * BYTES_PER_WORD}-byte state"
+        )
+    if not 0 <= suffix < 0x80:
+        raise ValueError(
+            f"suffix ({suffix:#x}) must be a byte below 0x80: bit 7 carries "
+            "pad10*1's trailing 1 (FIPS 202 section 5.1)"
+        )
+
+
 @lru_cache(maxsize=None)
 def _padding_tail(length: int, rate: int, suffix: int) -> np.ndarray:
     """What FIPS 202 section 5.1 appends to a `length`-byte message: uint8 [P].
@@ -197,18 +224,7 @@ class KeccakSponge:
     output_size: int
 
     def __post_init__(self) -> None:
-        if self.rate <= 0 or self.rate % BYTES_PER_WORD:
-            raise ValueError(
-                f"rate ({self.rate}) must be a positive multiple of "
-                f"{BYTES_PER_WORD} bytes"
-            )
-        if self.rate >= KeccakF1600.width * BYTES_PER_WORD:
-            raise ValueError(
-                f"rate ({self.rate} bytes) leaves no capacity in a "
-                f"{KeccakF1600.width * BYTES_PER_WORD}-byte state"
-            )
-        if not 0 <= self.suffix <= 0xFF:
-            raise ValueError(f"suffix ({self.suffix:#x}) must be one byte")
+        validate_sponge_params(self.rate, self.suffix)
         if self.output_size < 1:
             raise ValueError(f"output_size ({self.output_size}) must be >= 1")
 
