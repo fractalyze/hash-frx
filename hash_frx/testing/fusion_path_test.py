@@ -47,7 +47,14 @@ from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.ripemd160 import Ripemd160
 from hash_frx.sha256 import HostSha256, Sha256
-from hash_frx.sha512 import HostSha512, Sha512
+from hash_frx.sha512 import (
+    HostSha384,
+    HostSha512,
+    HostSha512_256,
+    Sha384,
+    Sha512,
+    Sha512_256,
+)
 from hash_frx.sponge import Sponge, SpongeParams
 from hash_frx.vision import vision as vision_mod
 from hash_frx.vision.params import vision_mark32_params
@@ -109,6 +116,10 @@ class DeviceCellTest(absltest.TestCase):
             (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
             (Grostl256(), _MATRIX[grostl_mod]),
             (Sha512(), _MATRIX[sha512_mod]),
+            # The truncated variants read the sha512 module's switch — one
+            # family row serves all three (the h0-as-operand design).
+            (Sha384(), _MATRIX[sha512_mod]),
+            (Sha512_256(), _MATRIX[sha512_mod]),
             (AsconHash256(), _MATRIX[ascon_mod]),
             (Ripemd160(), _MATRIX[ripemd160_mod]),
             (Blake2b(), _MATRIX[blake2b_mod]),
@@ -144,6 +155,8 @@ class HostCellTest(absltest.TestCase):
         for row in (
             HostSha256(),
             HostSha512(),
+            HostSha384(),
+            HostSha512_256(),
             HostSha3_256(),
             HostBlake3(),
             HostBlake2b(),

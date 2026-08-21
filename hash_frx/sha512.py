@@ -31,6 +31,12 @@ bytes) and returns uint8 `[B, 64]` digests, big-endian (standard SHA-512 output
 order). Length `L` is static, so the padding is data-independent: it is a host
 constant built from the length and concatenated on, which is what lets `msg`
 itself be traced. Requires no x64; all arithmetic is uint32.
+
+The FIPS 180-4 truncated variants ride the same machinery: `sha384_digest`
+(§6.5) and `sha512_256_digest` (§6.7) start the chain from their own §5.3
+initial hash values and keep the leftmost 48/32 bytes — a different `h0`
+operand on the SAME blocks marker, the truncation a caller-side slice, so no
+new wire name exists and a recognizer serving SHA-512 serves both for free.
 """
 from __future__ import annotations
 
@@ -212,6 +218,37 @@ _Kd = fnp.asarray(_K)
 # the standard start for a full digest, and the resume point a streaming hash
 # broadcasts from.
 INITIAL_STATE = fnp.asarray(_H0)  # uint32 [16]
+
+# The truncated variants' initial hash values, transcribed from the same §5.3
+# family: SHA-384 (§5.3.4 — sqrt of the 9th..16th primes, the way _H64 is the
+# first eight) and SHA-512/256 (§5.3.6 — the SHA-512/t generation function:
+# SHA-512 with the ⊕a5…a5 initial state over the ASCII string "SHA-512/256").
+# Everything else — padding, schedule, rounds, K — is SHA-512's own (§6.5/§6.7),
+# which is why a variant is a different `h0` OPERAND on the same blocks marker
+# plus a caller-side output truncation, and no new wire name exists for either.
+_H384_64 = (
+    0xCBBB9D5DC1059ED8,
+    0x629A292A367CD507,
+    0x9159015A3070DD17,
+    0x152FECD8F70E5939,
+    0x67332667FFC00B31,
+    0x8EB44A8768581511,
+    0xDB0C2E0D64F98FA7,
+    0x47B5481DBEFA4FA4,
+)
+_H512_256_64 = (
+    0x22312194FC2BF72C,
+    0x9F555FA3C84C64C2,
+    0x2393B86B6F53B151,
+    0x963877195940EABD,
+    0x96283EE2A88EFFE3,
+    0xBE5E1E2553863992,
+    0x2B0199FC2C85B8AA,
+    0x0EB72DDC81C52CA2,
+)
+
+INITIAL_STATE_384 = fnp.asarray(_pairs(_H384_64))  # uint32 [16]
+INITIAL_STATE_512_256 = fnp.asarray(_pairs(_H512_256_64))  # uint32 [16]
 
 
 # The 64-bit `(lo, hi)` half-pair helpers — `rotr64`, `add64`, the variadic
@@ -435,6 +472,33 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     """
     msg = fnp.asarray(msg, dtype=fnp.uint8)
     return sha512_merkle_damgard(INITIAL_STATE, _padded_words(msg))
+
+
+def sha384_digest(msg: ArrayLike) -> fnp.ndarray:
+    """SHA-384 (FIPS 180-4 §6.5) of a batch: uint8 [B, L] -> [B, 48].
+
+    SHA-512's compression chain from the §5.3.4 initial state, keeping the
+    leftmost 384 bits — the variant differs in nothing else, so it rides the
+    same `hash_frx.digest.sha512` blocks marker with its IV as the `h0`
+    operand, and the truncation is a caller-side slice OUTSIDE the marker (the
+    marker's wire contract is untouched; a recognizer serving SHA-512 serves
+    this for free, which is what `h0`-as-operand was designed to buy). Traced
+    or concrete, like `digest` — and since `h0`'s AVAL is the same uint32 [16]
+    for every variant, all three share one trace of the chain per message
+    shape."""
+    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    return sha512_merkle_damgard(INITIAL_STATE_384, _padded_words(msg))[:, :48]
+
+
+def sha512_256_digest(msg: ArrayLike) -> fnp.ndarray:
+    """SHA-512/256 (FIPS 180-4 §6.7) of a batch: uint8 [B, L] -> [B, 32].
+
+    The §5.3.6 initial state on the same blocks marker, truncated to 256 bits
+    by the caller-side slice — `sha384_digest`'s arrangement at the other
+    §5.3 table. The 64-bit-word road to a length-extension-safe 256-bit
+    digest (truncation hides the final state, unlike SHA-512 itself)."""
+    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    return sha512_merkle_damgard(INITIAL_STATE_512_256, _padded_words(msg))[:, :32]
 
 
 # ---------------------------------------------------------------------------
@@ -675,7 +739,118 @@ class HostSha512:
         return hash(type(self))
 
 
+# ---------------------------------------------------------------------------
+# The truncated variants' rows (§6.5 SHA-384, §6.7 SHA-512/256) — the same
+# four-way split as above, one device + one host row per variant. Each class is
+# param-free (the output length is the VARIANT, fixed by its IV table, not a
+# parameter a caller picks — the SHAKE contrast), so value identity is by type
+# like `Sha512`'s, and the distinct types are what keep a family holding
+# several rows from colliding.
+# ---------------------------------------------------------------------------
+class Sha384:
+    """`ByteHash` for device SHA-384 — `sha384_digest`, i.e. the
+    `hash_frx.digest.sha512` marker from the §5.3.4 initial state with the
+    48-byte truncation outside. The fusion story is therefore `Sha512`'s,
+    read off the same module flags: GENERIC everywhere today, and the day a
+    sha512 emitter lands this row flips with it, for free."""
+
+    digest_size = 48
+
+    def __init__(self) -> None:
+        # Per instance, not per class — the `Sha512.__init__` rationale.
+        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+
+    def digest(self, msg: ArrayLike) -> Array:
+        return sha384_digest(msg)
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return True
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
+class Sha512_256:
+    """`ByteHash` for device SHA-512/256 — `sha512_256_digest` on the shared
+    marker, the §5.3.6 initial state, the 32-byte truncation outside. The
+    64-bit-word answer to a length-extension-safe 256-bit digest."""
+
+    digest_size = 32
+
+    def __init__(self) -> None:
+        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+
+    def digest(self, msg: ArrayLike) -> Array:
+        return sha512_256_digest(msg)
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return True
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
+class HostSha384:
+    """`ByteHash` for host SHA-384 over `hashlib.sha384` — a guaranteed
+    `hashlib` constructor, so the row ships unconditionally like
+    `HostSha512`: the fast path for a strictly-sequential byte caller (TLS
+    transcripts, JWT PS384/ES384 verification one signature at a time)."""
+
+    digest_size = 48
+    fusion_path = FusionPath.HOST
+
+    def digest(self, msg: ArrayLike) -> np.ndarray:
+        return host_digest(
+            lambda row: hashlib.sha384(row).digest(), self.digest_size, msg
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return True
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
+class HostSha512_256:
+    """`ByteHash` for host SHA-512/256 over `hashlib.new("sha512_256")`.
+
+    Not a guaranteed constructor: the name reaches `hashlib` through OpenSSL,
+    which carries SHA-512/256 in its DEFAULT provider (probed 2026-08-21 —
+    the opposite of RIPEMD-160's legacy-provider retreat that forced that
+    family's host partner testonly), so the row ships; on an OpenSSL built
+    without it, `hashlib.new` raises its own unsupported-algorithm error at
+    the first digest."""
+
+    digest_size = 32
+    fusion_path = FusionPath.HOST
+
+    def digest(self, msg: ArrayLike) -> np.ndarray:
+        return host_digest(
+            lambda row: hashlib.new("sha512_256", row).digest(),
+            self.digest_size,
+            msg,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return True
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_marker: type[ByteHash] = Sha512
     _bh_host: type[ByteHash] = HostSha512
+    _bh_384: type[ByteHash] = Sha384
+    _bh_host_384: type[ByteHash] = HostSha384
+    _bh_512_256: type[ByteHash] = Sha512_256
+    _bh_host_512_256: type[ByteHash] = HostSha512_256
