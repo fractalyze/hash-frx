@@ -20,8 +20,8 @@ Like `Poseidon`, the whole permute is one straight-line function (rounds
 unrolled, linear layers via the normal-form helpers, no reduce/dot/gather) so it
 lowers to a single kernel under the generic `zorch.fused_region` marker.
 
-There is also a dedicated `hash_frx.sparse_poseidon` name-routed marker — mirroring
-`hash_frx.poseidon2` — whose emitter (`SparsePoseidonFusion`, in the Fractalyze XLA
+There is also a dedicated `hash_frx.perm.poseidon_sparse` name-routed marker — mirroring
+`hash_frx.perm.poseidon2` — whose emitter (`SparsePoseidonFusion`, in the Fractalyze XLA
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
@@ -76,7 +76,7 @@ _U64_MAX = 2**64 - 1
 
 # Whether the pinned Fractalyze XLA plugin ships the dedicated
 # `SparsePoseidonFusion` emitter. When True, `permute` emits the dedicated
-# `hash_frx.sparse_poseidon` marker; when False it falls back to the generic
+# `hash_frx.perm.poseidon_sparse` marker; when False it falls back to the generic
 # `zorch.fused_region` marker (which fuses the same body to one kernel), because
 # emitting a marker the plugin cannot recognize fails every compile with
 # `custom op 'stablehlo.composite' is unknown`.

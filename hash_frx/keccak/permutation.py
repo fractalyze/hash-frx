@@ -20,7 +20,7 @@ become constant arrays rather than branches, and pi is a static reorder built
 from slices — a runtime lane permutation would lower to a gather and split the
 kernel.
 
-`permute` marks itself with `hash_frx.keccak_f` where that emitter can actually
+`permute` marks itself with `hash_frx.perm.keccak_f` where that emitter can actually
 be reached and the generic `zorch.fused_region` where it cannot — which takes
 both `_DEDICATED_EMITTER_AVAILABLE` (does the pinned plugin carry it) and
 `_EMITTER_BACKENDS` (does this backend), since the Keccak emitters are GPU-only.
@@ -82,8 +82,9 @@ KECCAK_F_MARKER_VERSION = 1
 # pin rather than being left optimistic: emitting an unrecognized *name* is
 # byte-neutral (the composite inlines and the fusion is silently lost), but
 # a `DEDICATED` fusion path also routes a `Sponge` over this permutation to
-# `hash_frx.sponge_hash` carrying `permutation="keccak_f"`, which a plugin without
-# the arm rejects outright as an unknown permutation — a hard compile failure, not
+# `hash_frx.digest.field_sponge` carrying `permutation="keccak_f"`, which a
+# plugin without the arm rejects outright as an unknown permutation — a hard
+# compile failure, not
 # a fallback. Nothing here builds that `Sponge` (the byte hashes go through
 # `KeccakSponge` and its own marker), so today only the first applies; the second
 # is what makes the flag a pin question rather than a preference.

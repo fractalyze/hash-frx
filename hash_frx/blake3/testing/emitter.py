@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Whether the backend under test has the BLAKE3 fusion emitter.
 
-A marked `hash_frx.blake3` call produces the same bytes either way, so nothing
+A marked `hash_frx.digest.blake3` call produces the same bytes either way, so nothing
 about correctness reads this. What it decides is *cost*: with no emitter the
 marker inlines and XLA codegens the whole unrolled hash, and that compile is
 super-linear in the compression count — measured on the wheel that first carried

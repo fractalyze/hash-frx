@@ -13,9 +13,10 @@ refuses an absorb-mode flag for the same reason.
 
 `rate`/`out` are the free params on `SpongeParams` (capacity = width - rate). A
 `DEDICATED`-path permutation lowers the whole absorb to one
-`hash_frx.sponge_hash` region (assembled here over the permutation's fused-region
-ABI); a non-fused one runs the `while_loop` absorb over `permute`. Both read the
-absorb length at runtime, so concrete and symbolic `n` lower the same way.
+`hash_frx.digest.field_sponge` region (assembled here over the permutation's
+fused-region ABI); a non-fused one runs the `while_loop` absorb over `permute`.
+Both read the absorb length at runtime, so concrete and symbolic `n` lower the
+same way.
 """
 
 from __future__ import annotations
@@ -125,9 +126,9 @@ def _fused_hash(
     out: int,
     sponge_type: SpongeType,
 ) -> Array:
-    """Absorb+squeeze as ONE `hash_frx.sponge_hash` region over a dedicated-fusion
-    permutation. `fused_region_over` rebuilds `permute` from the ABI operands —
-    the emitter's operand contract names the round constants there — so the
+    """Absorb+squeeze as ONE `hash_frx.digest.field_sponge` region over a
+    dedicated-fusion permutation. `fused_region_over` rebuilds `permute` from
+    the ABI operands — the emitter's operand contract names them there — so the
     fallback HLO matches the generic path. Caller gates on
     `fusion_path.is_one_kernel`."""
 
@@ -152,7 +153,7 @@ def _fused_hash(
 
 @dataclass(frozen=True)
 class SpongeParams:
-    """Free parameters of a padding-free sponge.
+    """Free parameters of a sponge hash, whichever `SpongeType` it runs.
 
     rate : field elements absorbed per permutation (capacity = width - rate).
     out  : field elements squeezed (the digest size).
@@ -175,8 +176,9 @@ class Sponge:
     """Sponge hash over a fixed-width Permutation.
 
     `hash(input, sponge_type=...)` is the one entry point (one call = one function
-    = one fused `hash_frx.sponge_hash` kernel). The permutation supplies only its
-    arithmetic — `permute` and its fused-region ABI; the construction lives here.
+    = one fused `hash_frx.digest.field_sponge` kernel). The permutation supplies
+    only its arithmetic — `permute` and its fused-region ABI; the construction
+    lives here.
     """
 
     def __init__(self, permutation: Permutation, params: SpongeParams) -> None:
@@ -225,7 +227,7 @@ class Sponge:
         """Absorb `input` (1-D) and squeeze the first `out` lanes: (n,) -> (out,).
 
         `sponge_type` picks the construction (see `SpongeType`). A
-        `DEDICATED`-path permutation lowers to one `hash_frx.sponge_hash`
+        `DEDICATED`-path permutation lowers to one `hash_frx.digest.field_sponge`
         region; a non-fused one runs the `while_loop` absorb. Both read the absorb
         length at runtime, so symbolic `n` lowers like a concrete one.
         """
@@ -262,7 +264,7 @@ class Sponge:
 # leaf hashes. The sponge (permutation + rate + out, compared by value) and the
 # construction are the static key — together they fully determine the
 # decomposition; `inline=True` splices the cached jaxpr into the enclosing trace,
-# so the emitted module (one `hash_frx.sponge_hash` marker per hash on the
+# so the emitted module (one `hash_frx.digest.field_sponge` marker per hash on the
 # dedicated path) is unchanged and a recognizing emitter still sees the composite
 # form. Same hoist as `hash_frx.poseidon2.poseidon2._permute_body`.
 #
@@ -271,8 +273,8 @@ class Sponge:
 # can see it.
 @partial(frx.jit, static_argnames=("sponge", "sponge_type"), inline=True)
 def _hash_body(sponge: Sponge, input: Array, sponge_type: SpongeType) -> Array:
-    # Dedicated-fusion → one `hash_frx.sponge_hash` region (built here); else the
-    # generic `while_loop` absorb over `permute`.
+    # Dedicated-fusion → one `hash_frx.digest.field_sponge` region (built here);
+    # else the generic `while_loop` absorb over `permute`.
     perm = sponge._permutation
     if perm.fusion_path.is_one_kernel:
         return _fused_hash(perm, input, sponge.rate, sponge.out, sponge_type)

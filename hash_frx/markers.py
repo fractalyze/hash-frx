@@ -4,7 +4,7 @@
 A marker names the KERNEL that lowers — the fusible unit — not the taxonomy:
 an axis-B construction (Merkle–Damgård, Tree, Sponge, Duplex) is a schedule
 over a unit, so it gets no namespace of its own. A construction lives baked
-into a ``DIGEST`` name (`hash_frx.sha256` IS Merkle–Damgård, the sponge
+into a ``DIGEST`` name (`hash_frx.digest.sha256` IS Merkle–Damgård, the sponge
 markers ARE Sponge) and/or as a composite attribute (the sponge mode rides as
 ``construction=<mode>``); Duplex is stateful, so it has no whole-hash marker
 at all — each step is a ``PERM``. Three kinds cover every kernel:
@@ -14,7 +14,7 @@ at all — each step is a ``PERM``. Three kinds cover every kernel:
   streaming compressions. The `Compression` *class* — a truncated permutation
   — has no marker of its own: its unit IS the permute, so it rides ``PERM``.
 - ``DIGEST`` — a whole hash: arbitrary input to a digest, construction baked
-  in. `hash_frx.sponge_hash` (the field sponge) sits here too — field-level
+  in. `hash_frx.digest.field_sponge` (the field sponge) sits here too — field-level
   rather than byte-level, but a whole hash all the same.
 
 **Namespace rule.** Every marker is spelled ``hash_frx.<kind>.<name>``:
@@ -84,7 +84,7 @@ MARKERS: tuple[Marker, ...] = (
     # hard-fails on an operand-ABI mismatch instead of declining.
     Marker("hash_frx.digest.sha256_bytes", 1, MarkerKind.DIGEST),
     # SHA-512, the 64-bit SHA-2 sibling: blocks-shaped only — no raw-bytes
-    # sibling until a recognizer ships for one (`hash_frx.sha512` notes the
+    # sibling until a recognizer ships for one (`hash_frx.digest.sha512` notes the
     # deliberate absence).
     Marker("hash_frx.digest.sha512", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.keccak_sponge", 1, MarkerKind.DIGEST),

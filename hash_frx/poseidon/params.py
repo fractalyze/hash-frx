@@ -22,10 +22,18 @@ class PoseidonParams:
     """Fully-free parameter surface of a classic Poseidon permutation.
 
     The core treats `dtype` as opaque and names no field/scheme/zkVM. Classic
-    Poseidon (ark-sponge / HorizenLabs reference style) is the symmetric round
-    function: every round is `ARC -> S-box -> dense MDS`, with the S-box applied
-    to all lanes in a *full* round and to the last lane only in a *partial*
-    round. The rounds split full/partial/full — `full_rounds/2` full, then
+    Poseidon is the symmetric round function: every round is
+    `ARC -> S-box -> dense MDS`, with the S-box applied to all lanes in a *full*
+    round and to a single lane in a *partial* round.
+
+    **Which lane is a convention, and this one follows ark-sponge 0.3: the
+    last.** HorizenLabs, circomlib, Plonky3 and ark-crypto-primitives 0.5 all
+    apply it to lane 0. The two are related by reversing the lane order, so a
+    consumer matching a circomlib or EVM parameter set has to conjugate the MDS
+    and the round constants rather than pass them through — the surface to make
+    that a parameter is on the redesign epic.
+
+    The rounds split full/partial/full — `full_rounds/2` full, then
     `partial_rounds` partial, then `full_rounds/2` full — and the dense MDS runs
     on *every* round.
 
@@ -275,7 +283,7 @@ class SparsePoseidonParams:
         return h
 
     # Canonical-int views of the four matrices — the form the dedicated
-    # `hash_frx.sparse_poseidon` emitter carries as marker attributes (flattened
+    # `hash_frx.perm.poseidon_sparse` emitter carries as marker attributes (flattened
     # row-major). Canonical ints come from a numpy object cast, which Montgomery-
     # decodes without needing frx x64. The attribute encoding caps the field at a
     # u64 (see `_select_fused_region_name`).

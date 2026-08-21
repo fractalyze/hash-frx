@@ -37,7 +37,7 @@ also why the SHAKEs take no default where BLAKE3's rows do.
 
 **`fusion_path` is `HOST` on the host rows, and on the device rows it is
 `DEDICATED` or `GENERIC` per what the running backend can reach**, because the
-whole padded absorb and squeeze lowers to one `hash_frx.keccak_sponge` kernel
+whole padded absorb and squeeze lowers to one `hash_frx.digest.keccak_sponge` kernel
 only where that emitter exists. The switch is
 `keccak.permutation._routes_to_dedicated_emitter`, which the device rows read
 through `KeccakF1600`; it asks both whether the pinned plugin carries the

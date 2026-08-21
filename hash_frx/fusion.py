@@ -19,11 +19,11 @@ primitive. This one keeps `zorch.` because it is generic rather than owned:
 `zorch`'s sumcheck, constraint-eval and jagged regions emit it alongside the
 hashes here, so neither prefix describes it.
 
-The operand list is as much a wire ABI as the name, and it is not only what is
-passed here: `lax.composite` lifts every array the decomposition materialises on
-the host into an operand *ahead* of these, one per call site. So a marked body
-threads its constants as operands or counts them on device (`iota`) — the rule,
-its two remedies, and what it cost to learn are in
+The operand list is as much a wire ABI as the name: a name-routed emitter reads
+its constants positionally, so a marked body threads them as operands or counts
+them on device (`iota`) — a constant left inside the decomposition is one the
+emitter cannot find. The rule, its two remedies, and the stronger reason it used
+to carry (a `lax.composite` operand lift that frx#218 retired) are in
 `docs/reference/conventions.md`.
 
 The decomposition must be straight-line element-wise — no loops, reductions, or

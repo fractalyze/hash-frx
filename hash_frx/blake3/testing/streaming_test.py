@@ -175,7 +175,7 @@ class PytreeThreadingTest(absltest.TestCase):
         )
 
     def test_the_node_finishing_hops_are_marked(self) -> None:
-        # Counted, not found: a resumable state cannot reach `hash_frx.blake3`,
+        # Counted, not found: a resumable state cannot reach `hash_frx.digest.blake3`,
         # so every node it finishes has to carry its own region, and an
         # `assertIn` passes with one of them marked and the rest inline — which
         # is exactly the state this replaced. Three hops finish a node (the

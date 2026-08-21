@@ -4,7 +4,7 @@ The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
 (`fused_region`): XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
 compiler pattern match. With the standard external matrix the region is named
-`hash_frx.poseidon2`, the permutation shape riding as `composite.attributes`
+`hash_frx.perm.poseidon2`, the permutation shape riding as `composite.attributes`
 (`width`/`external_rounds`/`internal_rounds`/`alpha`), and routes to XLA's
 dedicated, params-driven Poseidon2Fusion emitter; a non-standard external
 matrix falls back to the generic
@@ -182,7 +182,7 @@ def _permutation_body(
     marker attribute (a scalar constant survives `lax.scan`, where an operand is
     hoisted).
 
-    The decomposition every `hash_frx.poseidon2` region runs, spliced inline (the
+    The decomposition every `hash_frx.perm.poseidon2` region runs, spliced inline (the
     generic marker's single-kernel requirement allows no call). A batch is
     `vmap(permute)`, which lowers to the same marker over a batched operand."""
     p = perm._p

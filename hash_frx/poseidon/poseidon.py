@@ -3,8 +3,8 @@
 The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
 (`fused_region`): XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
-compiler pattern match. The region is named `hash_frx.poseidon` (distinct from
-`hash_frx.poseidon2`), the permutation shape riding as `composite.attributes`
+compiler pattern match. The region is named `hash_frx.perm.poseidon` (distinct from
+`hash_frx.perm.poseidon2`), the permutation shape riding as `composite.attributes`
 (`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to XLA's
 dedicated, params-driven Poseidon emitter where the pin and the backend carry
 it — elsewhere the generic `zorch.fused_region` marker stands in, correct but
@@ -88,7 +88,7 @@ class Poseidon:
         self._mds_rows = params.mds_rows
         # Classic Poseidon has no free-form fallback of its own — the only
         # routing question is whether the pin and the backend carry the
-        # dedicated `hash_frx.poseidon` emitter.
+        # dedicated `hash_frx.perm.poseidon` emitter.
         name = (
             POSEIDON_MARKER if _routes_to_dedicated_emitter() else FUSED_REGION_MARKER
         )

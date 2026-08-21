@@ -28,18 +28,25 @@ Python reviewer would prefer for a lowering that stays one kernel.
   internal `jit` — `lax.select`, not `fnp.where`. The wrapper lowers to a call
   inside the body, which the single-kernel rewriter rejects. A nested `@jit` is
   the same failure, so a marked body sits under exactly one `@jit` boundary.
-- **No array the decomposition materialises on the host survives as a
-  non-operand.** `lax.composite` lifts every such array into a composite operand
-  placed *ahead* of the declared ones, one copy per call site and with no
-  trace-time deduplication — so the emitter's operand ABI silently becomes a
-  function of the input shape. It is not only round constants: an IV, an index or
-  counter table, a padding tail, a rotation-offset grid all lift the same way.
-  Two remedies, and every marked body needs one of them per constant:
-  **thread it as an explicit operand** (`sha256.compress`'s round-constant table,
-  `blake3.Mode.iv`), or **compute it on device** — `fnp.arange`/`iota` is an
-  index the kernel counts rather than a value the program carries
-  (`blake3._counters`). Measured, before either was applied to BLAKE3: 3 operands
-  at a 64-byte message and 23 at a 2049-byte one.
+- **A constant a name-routed emitter reads is an explicit operand.** The
+  emitter's operand ABI is positional and fixed: it reads the round-constant
+  table at the index its recognizer declares, so a constant left inside the
+  decomposition is one the emitter cannot find, and a constant threaded in the
+  wrong order is one it misreads. Two remedies, and every marked body needs one
+  of them per constant: **thread it as an explicit operand**
+  (`sha256.compress`'s round-constant table, `blake3.Mode.iv`), or **compute it
+  on device** — `fnp.arange`/`iota` is an index the kernel counts rather than a
+  value the program carries (`blake3._counters`).
+
+  This rule used to carry a second, stronger reason that no longer holds:
+  `lax.composite` once lifted *every* host-materialised array into an operand
+  ahead of the declared ones, one per call site, so the ABI became a function of
+  the input shape whether the author threaded the constant or not — BLAKE3
+  measured 3 operands at a 64-byte message and 23 at a 2049-byte one. frx#218
+  stopped the lift; a closed-over array now stays inline in the decomposition.
+  The threading rule survives on the emitter-ABI reason alone, and
+  `poseidon/linear.py` and `poseidon/sparse.py` are where the new behavior is
+  relied on.
 
 None of this is enforced by the type system, and none of it changes an output
 byte. [Testing](#testing) is where the enforcement is.
