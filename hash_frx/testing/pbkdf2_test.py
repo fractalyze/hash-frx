@@ -20,6 +20,7 @@ constant independent of c (nothing unrolls), with the loop visible as a
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import hmac as py_hmac
 from unittest import mock
@@ -42,7 +43,6 @@ _SHA512 = Hmac(Sha512(), 128)
 
 def _rows(*items: bytes) -> np.ndarray:
     """Equal-length byte strings as a uint8 [B, L] batch."""
-    assert len({len(i) for i in items}) == 1
     return np.stack([np.frombuffer(i, dtype=np.uint8) for i in items])
 
 
@@ -75,14 +75,17 @@ class Pbkdf2VectorTest(absltest.TestCase):
 class Pbkdf2DifferentialTest(parameterized.TestCase):
     @parameterized.product(
         profile=("sha256", "sha512"),
-        iterations=(1, 2, 37),
-        dk_len=(16, 64, 100),
+        case=((1, 64), (2, 16), (37, 100)),
     )
-    def test_matches_hashlib(self, profile: str, iterations: int, dk_len: int) -> None:
+    def test_matches_hashlib(self, profile: str, case: tuple[int, int]) -> None:
         # The free oracle, batched: three independent per-row derivations in
-        # lockstep must equal three scalar hashlib runs. dk_len sweeps
-        # truncation (16), one exact SHA-512 block (64), and a multi-block T
-        # chain (100).
+        # lockstep must equal three scalar hashlib runs. The hand-picked
+        # (c, dk_len) pairs cover each axis value once per profile — zero /
+        # one / many loop trips × exact-block / truncation / multi-block T —
+        # rather than the full product: the axes don't interact (blocks are
+        # independent chains, c is uniform across them), and every cell is
+        # its own trace + XLA compile of the whole loop module.
+        iterations, dk_len = case
         mac = {"sha256": _SHA256, "sha512": _SHA512}[profile]
         pws = _rows(b"password-a", b"password-b", b"password-c")
         salts = _rows(b"salt-0001", b"salt-0002", b"salt-0003")
@@ -130,27 +133,21 @@ class Pbkdf2DifferentialTest(parameterized.TestCase):
 
     def test_a_hash_without_a_profile_runs_generic(self) -> None:
         # BLAKE2s has no midstate profile, so the loop body is the seam
-        # HMAC; held to a plain-Python PBKDF2 over `hmac.new` (hashlib's
-        # pbkdf2_hmac only speaks openssl digest names).
-        def py_pbkdf2(pw: bytes, salt: bytes, c: int, dk: int) -> bytes:
-            def prf(m: bytes) -> bytes:
-                return py_hmac.new(pw, m, hashlib.blake2s).digest()
+        # HMAC; held to a plain-Python single-block PBKDF2 over `hmac.new`
+        # (hashlib's pbkdf2_hmac only speaks openssl digest names). One
+        # block suffices — the multi-block T chain on the generic path is
+        # already pinned by the agreement test above.
+        def prf(pw: bytes, m: bytes) -> bytes:
+            return py_hmac.new(pw, m, hashlib.blake2s).digest()
 
-            out = b""
-            i = 1
-            while len(out) < dk:
-                u = prf(salt + i.to_bytes(4, "big"))
-                t = u
-                for _ in range(c - 1):
-                    u = prf(u)
-                    t = bytes(a ^ b for a, b in zip(t, u))
-                out += t
-                i += 1
-            return out[:dk]
+        u = t = prf(b"pw", b"salt" + (1).to_bytes(4, "big"))
+        for _ in range(7):
+            u = prf(b"pw", u)
+            t = bytes(a ^ b for a, b in zip(t, u))
 
         mac = Hmac(Blake2s(), 64)
-        got = np.asarray(pbkdf2(mac, _rows(b"pw"), _rows(b"salt"), 8, 40))
-        self.assertEqual(bytes(got[0]), py_pbkdf2(b"pw", b"salt", 8, 40))
+        got = np.asarray(pbkdf2(mac, _rows(b"pw"), _rows(b"salt"), 8, 32))
+        self.assertEqual(bytes(got[0]), t)
 
 
 class Pbkdf2LoweringTest(absltest.TestCase):
@@ -162,7 +159,7 @@ class Pbkdf2LoweringTest(absltest.TestCase):
         pw, salt = _rows(b"pw"), _rows(b"salt")
 
         def lowered(c: int) -> str:
-            fn = lambda p, s: pbkdf2(_SHA256, p, s, c, 32)  # noqa: E731
+            fn = functools.partial(pbkdf2, _SHA256, iterations=c, dk_len=32)
             return frx.jit(fn).lower(fnp.asarray(pw), fnp.asarray(salt)).as_text()
 
         low8, low64 = lowered(8), lowered(64)
@@ -189,7 +186,7 @@ class Pbkdf2SurfaceTest(absltest.TestCase):
         # The construction holds the seam's traced-or-concrete property: a
         # consumer can derive under its own @jit.
         pw, salt = fnp.asarray(_rows(b"pw")), fnp.asarray(_rows(b"salt"))
-        fn = lambda p, s: pbkdf2(_SHA256, p, s, 8, 32)  # noqa: E731
+        fn = functools.partial(pbkdf2, _SHA256, iterations=8, dk_len=32)
         np.testing.assert_array_equal(
             np.asarray(frx.jit(fn)(pw, salt)), np.asarray(fn(pw, salt))
         )

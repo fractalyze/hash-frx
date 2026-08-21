@@ -24,14 +24,21 @@ bytes)`: the first block of each side is `K0 ⊕ ipad` / `K0 ⊕ opad`, FIXED
 across all c iterations, so the fast path precomputes the two midstates once
 (`compress(INITIAL_STATE, K0 ⊕ pad)`) and each iteration resumes the
 Merkle–Damgård chain from them — one compression per side. The per-hash
-wiring lives in `_MIDSTATE_PROFILES`, populated for the hashes that export
-midstate machinery (`sha256` / `sha512`: `compress`, `block_to_words`,
-`serialize_digest`, `INITIAL_STATE` are public exactly for callers building
-their own blocks); the profiles use the UNMARKED chain because the batched
-`K0` makes the midstates per-row, and the `*_merkle_damgard` markers take a
-batch-shared `h0`. A hash without a profile runs the seam-generic
-`Hmac.mac` in the loop body instead — identical bytes, four compressions per
-iteration (the pad blocks re-hashed each time).
+wiring lives in `_MIDSTATE_PROFILES`, populated for the full-length SHA-2
+rows (`sha256` / `sha512`: `compress`, `block_to_words`, `serialize_digest`,
+`INITIAL_STATE` are public exactly for callers building their own blocks);
+the profiles use the UNMARKED chain because the batched `K0` makes the
+midstates per-row, and the `*_merkle_damgard` markers take a batch-shared
+`h0`. The table lives here rather than on the seam, for the reason
+`hmac.py` keeps `block_size` off the `ByteHash` Protocol: midstate
+resumption means something only to this construction's hot loop, and a
+shape with one caller stays with the caller. The truncated variants
+(`Sha384` / `Sha512_256`) export the same machinery but carry no entry —
+their digest is a SLICE of the serialized state, which this profile shape
+does not model — and a hash without an entry runs the seam-generic HMAC
+body in the loop instead: identical bytes, four compressions per iteration
+(the pad blocks re-hashed each time), the §4 key processing still hoisted
+outside the trip count.
 
 **Host rows are refused.** The c-chain must trace (`fori_loop`), and a host
 row's `digest` reads bytes eagerly — it cannot thread a traced carry. A
@@ -58,8 +65,6 @@ from frx.typing import ArrayLike
 
 from hash_frx import sha256, sha512
 from hash_frx.hmac import Hmac
-from hash_frx.sha256 import Sha256
-from hash_frx.sha512 import Sha512
 
 # The FIPS 198-1 §4 pad bytes, restated from `hmac.py`'s private constants:
 # two spec literals a reviewer checks against the standard either way (the
@@ -78,46 +83,37 @@ class _MidstateProfile(NamedTuple):
     compress: Callable[[Array, Array], Array]  # (state [B,W], words) -> state
     block_to_words: Callable[[Array], Array]  # uint8 [B, n*block] -> words
     serialize_digest: Callable[[Array], Array]  # state [B, W] -> uint8 digest
+    padding_tail: Callable[[int], np.ndarray]  # the module's own MD tail
     block_size: int  # the hash's block in bytes
-    length_bytes: int  # the MD length field's width in bytes
 
 
 # Keyed by the DEVICE row type: the fast path needs traced per-row states, so
 # only device rows qualify, and only the modules that ship the machinery have
-# entries. Everything else takes the generic seam path below.
+# entries. Everything else takes the generic seam path below. `padding_tail`
+# is each module's own (module-private) tail builder rather than a
+# restatement here: the fast path finishes a resumed block with the hash's
+# padding at the TOTAL length — the length field counts the already-absorbed
+# pad block, which is the whole trick — and re-deriving the rule at this
+# altitude would read as generic over any MD hash when it is SHA-2's
+# (RIPEMD-160's length field is little-endian).
 _MIDSTATE_PROFILES: dict[type, _MidstateProfile] = {
-    Sha256: _MidstateProfile(
+    sha256.Sha256: _MidstateProfile(
         sha256.INITIAL_STATE,
         sha256.compress,
         sha256.block_to_words,
         sha256.serialize_digest,
+        sha256._padding_tail,
         block_size=64,
-        length_bytes=8,
     ),
-    Sha512: _MidstateProfile(
+    sha512.Sha512: _MidstateProfile(
         sha512.INITIAL_STATE,
         sha512.compress,
         sha512.block_to_words,
         sha512.serialize_digest,
+        sha512._padding_tail,
         block_size=128,
-        length_bytes=16,
     ),
 }
-
-
-def _md_tail(total_len: int, block: int, length_bytes: int) -> np.ndarray:
-    """The Merkle–Damgård tail for a `total_len`-byte message under the
-    SHA-2 padding rule (`0x80 ‖ 0x00* ‖ bit length`), host-built: what the
-    fast path appends to the digest-sized payload so one resumed compression
-    finishes the hash — the length field counts the already-absorbed pad
-    block too, which is the whole trick."""
-    nblocks = (total_len + length_bytes) // block + 1
-    tail = np.zeros(nblocks * block - total_len, dtype=np.uint8)
-    tail[0] = 0x80
-    tail[-length_bytes:] = np.frombuffer(
-        (total_len * 8).to_bytes(length_bytes, "big"), dtype=np.uint8
-    )
-    return tail
 
 
 def pbkdf2(
@@ -158,10 +154,16 @@ def pbkdf2(
     # The batch is whatever the operands' leading axes broadcast to; a
     # mismatched pair fails here, at the boundary (the hkdf_expand rule).
     batch = int(np.broadcast_shapes(password.shape[:1], salt.shape[:1])[0])
-    password = fnp.broadcast_to(password, (batch, password.shape[1]))
     salt = fnp.broadcast_to(salt, (batch, salt.shape[1]))
 
     h_len = mac.digest_size
+    # FIPS 198-1 §4's key processing, hoisted OUTSIDE the trip count for both
+    # bodies — inside the loop it would run per iteration, ×c at runtime
+    # (including a full H(K) digest for a longer-than-block password).
+    k0 = fnp.broadcast_to(mac.block_key(password), (batch, mac.block_size))
+    k_ipad = k0 ^ fnp.uint8(_IPAD)
+    k_opad = k0 ^ fnp.uint8(_OPAD)
+
     profile = _MIDSTATE_PROFILES.get(type(mac.byte_hash))
     if profile is not None and profile.block_size != mac.block_size:
         # A mis-parameterized Hmac (wrong block for its hash) must not
@@ -170,11 +172,18 @@ def pbkdf2(
         profile = None
 
     if profile is None:
-        # Seam-generic body: HMAC per iteration through `mac` — the pad
-        # blocks re-hashed every round (four compressions instead of two).
-        # `k0` is processed once here; only the digest calls ride the loop.
+        # Seam-generic body: the two digest calls ride the loop with the pad
+        # blocks re-hashed every round — four compressions per iteration
+        # instead of two, the price of staying behind the seam.
         def hmac_u(u: Array) -> Array:
-            return fnp.asarray(mac.mac(password, u), dtype=fnp.uint8)
+            inner = fnp.asarray(
+                mac.byte_hash.digest(fnp.concatenate([k_ipad, u], axis=1)),
+                dtype=fnp.uint8,
+            )
+            return fnp.asarray(
+                mac.byte_hash.digest(fnp.concatenate([k_opad, inner], axis=1)),
+                dtype=fnp.uint8,
+            )
 
     else:
         # Midstate fast path: the two pad blocks are fixed across the chain,
@@ -182,29 +191,19 @@ def pbkdf2(
         # every iteration — one compression per side. The in-chain message
         # is always exactly hLen bytes after its pad block, so the MD tail
         # is one host constant.
-        k0 = fnp.broadcast_to(mac.block_key(password), (batch, mac.block_size))
         state0 = fnp.broadcast_to(
             profile.initial_state, (batch, profile.initial_state.shape[0])
         )
-        inner_mid = profile.compress(
-            state0, profile.block_to_words(k0 ^ fnp.uint8(_IPAD))
-        )
-        outer_mid = profile.compress(
-            state0, profile.block_to_words(k0 ^ fnp.uint8(_OPAD))
-        )
-        tail = fnp.asarray(
-            _md_tail(mac.block_size + h_len, profile.block_size, profile.length_bytes)
-        )
+        inner_mid = profile.compress(state0, profile.block_to_words(k_ipad))
+        outer_mid = profile.compress(state0, profile.block_to_words(k_opad))
+        tail = fnp.asarray(profile.padding_tail(mac.block_size + h_len))
         tail_rows = fnp.broadcast_to(tail, (batch, tail.shape[0]))
 
         def resumed(mid: Array, payload: Array) -> Array:
             words = profile.block_to_words(
                 fnp.concatenate([payload, tail_rows], axis=1)
             )
-            return fnp.asarray(
-                profile.serialize_digest(profile.compress(mid, words)),
-                dtype=fnp.uint8,
-            )
+            return profile.serialize_digest(profile.compress(mid, words))
 
         def hmac_u(u: Array) -> Array:
             return resumed(outer_mid, resumed(inner_mid, u))
@@ -217,12 +216,12 @@ def pbkdf2(
     blocks = []
     n = -(-dk_len // h_len)
     for i in range(1, n + 1):  # §5.2's block index, static and small
-        idx = fnp.asarray(np.frombuffer(i.to_bytes(4, "big"), dtype=np.uint8)[None, :])
+        idx_rows = fnp.broadcast_to(
+            fnp.asarray(np.frombuffer(i.to_bytes(4, "big"), dtype=np.uint8)),
+            (batch, 4),
+        )
         u1 = fnp.asarray(
-            mac.mac(
-                password,
-                fnp.concatenate([salt, fnp.broadcast_to(idx, (batch, 4))], axis=1),
-            ),
+            mac.mac(password, fnp.concatenate([salt, idx_rows], axis=1)),
             dtype=fnp.uint8,
         )
         _, t = frx.lax.fori_loop(1, iterations, body, (u1, u1))
