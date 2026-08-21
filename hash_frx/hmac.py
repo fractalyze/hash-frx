@@ -63,26 +63,20 @@ class Hmac:
         self.block_size = block_size
         self.digest_size = byte_hash.digest_size
 
-    def mac(self, key: ArrayLike, msg: ArrayLike) -> Array | np.ndarray:
-        """`HMAC(key, msg)` per message: msg uint8 `[B, L]`, key uint8 `[K]`
-        (shared by the batch) or `[B, K]` (per message) -> uint8
-        `[B, digest_size]`, the underlying hash's output order.
+    def block_key(self, key: ArrayLike) -> Array:
+        """FIPS 198-1 §4's `K0`: the key hashed down when longer than one
+        block, then zero-padded to exactly one block — uint8 `[1, block_size]`
+        for a shared `[K]` key, `[B, block_size]` for per-message keys. `K` is
+        static, so which arm runs is decided at trace time.
 
-        `K` is static, so which arm of the §4 key processing runs — hash down
-        when longer than the block, then zero-pad to it — is decided at trace
-        time; `msg` and `key` may both be tracers when the hash is a device
-        row.
-        """
+        Split out of `mac` because PBKDF2 (RFC 8018) precomputes its
+        ipad/opad midstates from `K0` directly — §4's key processing is the
+        shared prefix of both constructions."""
         key = fnp.asarray(key, dtype=fnp.uint8)
-        msg = fnp.asarray(msg, dtype=fnp.uint8)
-        if msg.ndim != 2:
-            raise ValueError(f"msg must be uint8 [B, L], got shape {msg.shape}")
         if key.ndim == 1:
             key = key[None, :]
         if key.ndim != 2:
             raise ValueError(f"key must be [K] or [B, K], got shape {key.shape}")
-        # FIPS 198-1 §4: K0 = H(K) when K is longer than the block, then
-        # zero-padded to exactly one block.
         if key.shape[1] > self.block_size:
             key = fnp.asarray(self.byte_hash.digest(key), dtype=fnp.uint8)
         if key.shape[1] < self.block_size:
@@ -90,7 +84,19 @@ class Hmac:
                 (key.shape[0], self.block_size - key.shape[1]), dtype=fnp.uint8
             )
             key = fnp.concatenate([key, pad], axis=1)
-        k0 = fnp.broadcast_to(key, (msg.shape[0], self.block_size))
+        return key
+
+    def mac(self, key: ArrayLike, msg: ArrayLike) -> Array | np.ndarray:
+        """`HMAC(key, msg)` per message: msg uint8 `[B, L]`, key uint8 `[K]`
+        (shared by the batch) or `[B, K]` (per message) -> uint8
+        `[B, digest_size]`, the underlying hash's output order.
+
+        `msg` and `key` may both be tracers when the hash is a device row.
+        """
+        msg = fnp.asarray(msg, dtype=fnp.uint8)
+        if msg.ndim != 2:
+            raise ValueError(f"msg must be uint8 [B, L], got shape {msg.shape}")
+        k0 = fnp.broadcast_to(self.block_key(key), (msg.shape[0], self.block_size))
         inner = self.byte_hash.digest(
             fnp.concatenate([k0 ^ fnp.uint8(_IPAD), msg], axis=1)
         )
