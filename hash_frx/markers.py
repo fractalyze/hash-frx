@@ -94,4 +94,5 @@ MARKERS: tuple[Marker, ...] = (
     Marker("hash_frx.digest.ascon_hash256", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.ripemd160", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.blake2b", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.digest.blake2s", 1, MarkerKind.DIGEST),
 )

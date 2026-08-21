@@ -41,6 +41,7 @@ py_test(
     # initialize without the plugin wheels in runfiles.
     deps = [
         "//hash_frx",
+        "//hash_frx:blake2s",
         "//hash_frx:markers",
         "//hash_frx:ripemd160",
         "//hash_frx:sha256",
@@ -63,6 +64,7 @@ py_test(
     size = "medium",
     srcs = ["fusion_path_test.py"],
     deps = [
+        "//hash_frx:blake2s",
         "//hash_frx:byte_hash",
         "//hash_frx:compression",
         "//hash_frx:duplex_sponge",
