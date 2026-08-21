@@ -78,6 +78,15 @@ py_library(
     deps = [requirement("frx")],
 )
 
+# `word.py`'s 64-bit sibling: the `(lo, hi)` uint32 half-pair helpers the
+# 64-bit-word hashes share (SHA-512's Σ/σ chain, BLAKE2b's G).
+py_library(
+    name = "word64",
+    srcs = ["word64.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
+)
+
 # Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash plus the `Sha256` /
 # `HostSha256` ByteHash implementations. A standalone hash, not a Permutation; no
 # zk_dtypes / x64 dependency.
@@ -106,6 +115,7 @@ py_library(
         ":byte_hash",
         ":fusion",
         ":word",
+        ":word64",
         requirement("frx"),
         requirement("numpy"),
     ],
