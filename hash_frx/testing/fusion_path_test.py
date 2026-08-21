@@ -28,6 +28,8 @@ from hash_frx import sha256 as sha256_mod
 from hash_frx import sha512 as sha512_mod
 from hash_frx.ascon import ascon as ascon_mod
 from hash_frx.ascon.ascon import AsconHash256
+from hash_frx.blake2b import blake2b as blake2b_mod
+from hash_frx.blake2b.blake2b import Blake2b
 from hash_frx.blake2b.byte_hashes import HostBlake2b
 from hash_frx.blake3 import byte_hashes as blake3_rows
 from hash_frx.blake3.byte_hashes import Blake3, HostBlake3
@@ -55,8 +57,8 @@ from hash_frx.vision.vision import Vision
 # per family. Keccak's arms are GPU-only; the rest run wherever the
 # ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
 # Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
-# Vision, Grøstl, Ascon and RIPEMD-160, for which no plugin ships an emitter
-# at all.
+# Vision, Grøstl, Ascon, RIPEMD-160 and BLAKE2b, for which no plugin ships an
+# emitter at all.
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
@@ -69,6 +71,7 @@ _MATRIX = {
     grostl_mod: (),
     ascon_mod: (),
     ripemd160_mod: (),
+    blake2b_mod: (),
 }
 
 
@@ -108,6 +111,7 @@ class DeviceCellTest(absltest.TestCase):
             (Sha512(), _MATRIX[sha512_mod]),
             (AsconHash256(), _MATRIX[ascon_mod]),
             (Ripemd160(), _MATRIX[ripemd160_mod]),
+            (Blake2b(), _MATRIX[blake2b_mod]),
         )
         for impl, backends in rows:
             with self.subTest(impl=type(impl).__name__):
