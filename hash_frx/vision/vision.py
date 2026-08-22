@@ -49,6 +49,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    routing,
 )
 from hash_frx.vision.linear import apply_linearized_affine, apply_matrix
 from hash_frx.vision.params import VisionParams
@@ -82,10 +83,9 @@ _EMITTER_BACKENDS: tuple[str, ...] = ()
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry a Vision emitter. Read per
-    construction so importing does not initialize a backend; the lookup behind
-    `frx.default_backend()` is memoized."""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 class Vision:

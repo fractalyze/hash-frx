@@ -38,8 +38,8 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import device_message
-from hash_frx.fusion import FusionPath, fused_region
+from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import roll
 
 if TYPE_CHECKING:
@@ -75,10 +75,9 @@ _EMITTER_BACKENDS: tuple[str, ...] = ()
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry a Grøstl emitter. Read per
-    construction so importing does not initialize a backend; the lookup behind
-    `frx.default_backend()` is memoized."""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 _BLOCK = 64  # ℓ = 512 bits: the state/message-block size for n ≤ 256 (§3.1)
@@ -462,7 +461,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     return grostl256_bytes(msg)
 
 
-class Grostl256:
+class Grostl256(DeviceRow):
     """`ByteHash` for device Grøstl-256 — `digest` runs the batch through the
     `hash_frx.digest.grostl256` marker. No plugin recognizes that name yet, so
     `fusion_path` reads `GENERIC` on every backend today: the marker inlines,
@@ -477,25 +476,10 @@ class Grostl256:
     digest_size = GROSTL256_DIGEST_SIZE
 
     def __init__(self) -> None:
-        # Read per instance rather than pinned on the class: the emitter
-        # switch is a property of the pin and the backend, and a value read at
-        # import would pin the answer before anything could vary it.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
-
-    def __eq__(self, other: object) -> bool:
-        # By type, because Grøstl-256 is parameterless — the `Sha256` form,
-        # stated there: `type(other) is not type(self)` rather than
-        # `isinstance`, which is asymmetric under subclassing and blocks
-        # Python's reflected-`__eq__` fallback.
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
-
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 if TYPE_CHECKING:

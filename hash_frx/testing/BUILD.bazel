@@ -18,8 +18,8 @@ py_library(
     ],
 )
 
-# Deliberately absl + //hash_frx and nothing else, and deliberately no
-# GPU_PLUGIN_DEPS. Its central case asserts that importing the package imports
+# Deliberately absl + the bare package init and nothing else, and deliberately
+# no GPU_PLUGIN_DEPS. Its central case asserts that importing the package imports
 # no hash and therefore initializes no backend; a dep that pulled a family into
 # the process would not fail the build, it would just quietly make that case
 # untrue. The half of the public-API guard that DOES resolve every export is
@@ -29,9 +29,41 @@ py_test(
     size = "small",
     srcs = ["package_test.py"],
     deps = [
-        "//hash_frx",
+        "//hash_frx:package_init",
         requirement("absl_py"),
     ],
+)
+
+# The re-layering gate: lowered StableHLO, byte for byte, across a refactor that
+# is supposed to move code and nothing else. Ships as a library because the
+# steps that consume it live in each family's own test package.
+py_library(
+    name = "lowering_golden",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "lowering_golden.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("frx")],
+)
+
+# The gate's own gate. Every case is a wire-surface change the byte-exactness
+# suites cannot see — a renamed marker, a reordered operand, a bumped version, a
+# dropped attr, a lost composite — made deliberately against a marked region
+# built for the purpose, plus the negative case that a renamed entry function
+# must NOT fire.
+py_test(
+    name = "lowering_golden_test",
+    size = "small",
+    srcs = ["lowering_golden_test.py"],
+    deps = [
+        ":lowering_golden",
+        "//hash_frx:fusion",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
 )
 
 # Resolves every name in `_EXPORTS` against the module that defines it, so a
@@ -50,6 +82,51 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# Every shipped `ByteHash` row, as one list. testonly library so the
+# conformance suite and any later re-layering step walk the same list.
+# How to enumerate the package's shipped modules, written once. Two completeness
+# guards need it and each had re-derived it; the `relative_to(root)` subtlety is
+# what the second copy dropped.
+py_library(
+    name = "package_sweep",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "package_sweep.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = ["//hash_frx:package_init"],
+)
+
+py_library(
+    name = "rows",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "rows.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = ["//hash_frx"],
+)
+
+# The seam's contract, asserted against all thirty-two rows at once rather than
+# family by family — which is how the #211 and #215 sweeps came to miss SM3 and
+# BLAKE2s. The equality cases are the load-bearing ones: a row's __eq__/__hash__
+# is its jit cache key.
+py_test(
+    name = "row_conformance_test",
+    size = "large",
+    srcs = ["row_conformance_test.py"],
+    deps = [
+        ":package_sweep",
+        ":rows",
+        "//hash_frx",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 # The registry's drift guard. Its completeness case walks the package files
 # that reach runfiles, so what is listed here bounds what the sweep can see.
 # `//hash_frx` now carries the whole package (it has to, for the public
@@ -65,6 +142,7 @@ py_test(
     # the default backend at module load, and the cuda leg refuses to
     # initialize without the plugin wheels in runfiles.
     deps = [
+        ":package_sweep",
         "//hash_frx",
         "//hash_frx:blake2s",
         "//hash_frx:markers",
@@ -90,6 +168,7 @@ py_test(
     size = "medium",
     srcs = ["fusion_path_test.py"],
     deps = [
+        ":rows",
         "//hash_frx:blake2s",
         "//hash_frx:byte_hash",
         "//hash_frx:compression",
@@ -290,7 +369,6 @@ py_library(
     deps = [
         ":ripemd160_reference",
         "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
         requirement("frx"),
         requirement("numpy"),
     ],

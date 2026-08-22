@@ -63,8 +63,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import host_digest
-from hash_frx.fusion import FusionPath
+from hash_frx.byte_hash import DeviceRow, HostRow, host_digest
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.keccak.sponge import KeccakSponge
 
@@ -98,7 +97,7 @@ KECCAK256_SUFFIX = 0x01
 KECCAK256_DIGEST_SIZE = 32
 
 
-class _KeccakHash:
+class _KeccakHash(DeviceRow):
     """The shared body of the device FIPS 202 hashes — one `KeccakSponge` row.
 
     A subclass supplies the row: `_rate` and `_suffix` from FIPS 202 section 6,
@@ -117,22 +116,13 @@ class _KeccakHash:
         )
         # Derived rather than declared, so it cannot disagree with the routing
         # `KeccakSponge.hash` actually takes — the same arrangement
-        # `poseidon2.Poseidon2` uses. Per instance rather than on the class,
-        # because the emitter switch is a property of the pin and a value read at
-        # import would pin the answer before anything could vary it. The seam
-        # types both as plain attributes, so neither can be a read-only property.
-        self.fusion_path = KeccakF1600().fusion_path
+        # `poseidon2.Poseidon2` uses. `DeviceRow` takes the resolved path
+        # precisely so a row that derives it from a delegate goes through the
+        # same door as one that reads a pin-and-backend gate.
+        super().__init__(KeccakF1600().fusion_path)
 
     def digest(self, msg: ArrayLike) -> Array:
         return self._sponge.hash(msg)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self.digest_size == other.digest_size
-
-    def __hash__(self) -> int:
-        return hash((type(self), self.digest_size))
 
 
 class Sha3_256(_KeccakHash):
@@ -194,7 +184,7 @@ class Keccak256(_KeccakHash):
         super().__init__(KECCAK256_DIGEST_SIZE)
 
 
-class _HostKeccak:
+class _HostKeccak(HostRow):
     """The shared body of the host siblings — `hashlib` per message.
 
     The differential partner for the device implementations, and the right choice
@@ -208,8 +198,6 @@ class _HostKeccak:
     other host row in the package.
     """
 
-    fusion_path = FusionPath.HOST
-
     def __init__(self, digest_size: int) -> None:
         # The device rows refuse a zero-length output at the sponge; a host row
         # that accepted it would make the pair disagree on what is a hash.
@@ -222,14 +210,6 @@ class _HostKeccak:
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._hash_one, self.digest_size, msg)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self.digest_size == other.digest_size
-
-    def __hash__(self) -> int:
-        return hash((type(self), self.digest_size))
 
 
 class HostSha3_256(_HostKeccak):

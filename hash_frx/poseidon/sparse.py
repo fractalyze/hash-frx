@@ -54,6 +54,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    routing,
 )
 from hash_frx.linear import apply_matrix
 from hash_frx.poseidon.linear import apply_sparse_partial
@@ -96,9 +97,9 @@ _EMITTER_BACKENDS = ("gpu",)
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend carry the emitter. Read per
-    construction so importing does not initialize a backend."""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 class SparsePoseidon:

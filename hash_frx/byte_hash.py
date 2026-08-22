@@ -96,23 +96,106 @@ class ByteHash(Protocol):
         ...
 
 
-def device_message(msg: ArrayLike) -> Array:
-    """A message as the uint8 `[B, L]` batch every device row hashes.
+class Row:
+    """What every `ByteHash` row repeats: the equality contract.
 
-    The rank is checked at the seam so a caller holding the wrong one is told
-    so eagerly, rather than from inside the trace of a marked region — where it
-    surfaces as a reshape or concatenate error naming neither the seam nor the
-    rank. A 1-D message is the common miss: a single message is `B = 1`, not a
-    bare `[L]`.
+    A row's `__eq__`/`__hash__` is its **jit cache key**. Two instances that
+    compare equal share a trace; two that do not each get their own. Wrong in
+    the lenient direction, one parameterization's compiled executable is served
+    for another's — silently, with the right shape. It was written out
+    thirty-three times in three spellings (`return True`, a `digest_size`
+    comparison, and `_parameters()`), so it is written here instead.
 
-    Checked *before* the conversion, so a wrong rank never reaches a device and
-    the check itself needs no backend — which is what lets the seam's own test
-    stay substrate-free, as a seam test must. `np.ndim` reads `.ndim` where
+    `_parameters` is the one thing a row overrides, and it defaults to the
+    output length because that is what all but the keyed rows key on. A row
+    that gains a further parameter and forgets to name it here does not error:
+    it compares two different keys equal. `row_conformance_test` builds every
+    parameterized row twice, with different parameters, and requires them to
+    differ.
+    """
+
+    # `fusion_path` is deliberately NOT declared here: `DeviceRow` and `HostRow`
+    # each supply their own, and leaving it off is what lets an adapter that has
+    # no fusion path at all — `Hmac` — share the equality contract rather than
+    # keep a thirty-third copy of it.
+    digest_size: int
+
+    def _parameters(self) -> tuple[object, ...]:
+        """Everything two instances of this row compare on, beyond their type.
+
+        The output length is part of the hash rather than a formatting choice —
+        BLAKE2 folds it into the initial state, the Keccak rows read it off a
+        different rate — so two lengths are two hashes. On a fixed-output row it
+        is a class constant and adds nothing the type did not already say.
+        """
+        return (self.digest_size,)
+
+    def __eq__(self, other: object) -> bool:
+        # `type(other) is not type(self)` rather than `isinstance`: isinstance is
+        # asymmetric under subclassing, and returning False instead of
+        # NotImplemented would block Python's reflected-`__eq__` fallback.
+        if type(other) is not type(self):
+            return NotImplemented
+        return self._parameters() == other._parameters()
+
+    def __hash__(self) -> int:
+        return hash((type(self), self._parameters()))
+
+
+class DeviceRow(Row):
+    """A row whose `digest` returns a device `Array`.
+
+    Takes the resolved `FusionPath` rather than a routing gate, because a row
+    has more than one honest way to reach one: most read their family's
+    pin-and-backend gate (`FusionPath.from_routing(...)`), while the Keccak rows
+    derive theirs from `KeccakF1600` so it cannot disagree with the routing
+    `KeccakSponge.hash` actually takes. Both go through this door.
+
+    It is passed in rather than read here, and never pinned on the class,
+    because the emitter switch is a property of the pin and the backend: a value
+    resolved at import would fix the answer before anything could vary it.
+    """
+
+    def __init__(self, fusion_path: FusionPath) -> None:
+        self.fusion_path = fusion_path
+
+
+class HostRow(Row):
+    """A row backed by a host library: `digest` returns `np.ndarray` and can
+    never take a tracer, because it reads the message bytes.
+
+    `fusion_path` is the one legitimate class constant on this seam — a host
+    path is `HOST` on every backend.
+    """
+
+    fusion_path = FusionPath.HOST
+
+
+def _require_batch_rank(msg: ArrayLike) -> None:
+    """Reject anything that is not the seam's uint8 `[B, L]` batch.
+
+    Both front doors call this — `device_message` before converting, and
+    `host_digest` before looping — so the two cannot drift, and neither can the
+    message: at least six tests match it by regex.
+
+    A 1-D message is the common miss: a single message is `B = 1`, not a bare
+    `[L]`. Checked before any conversion, so a wrong rank never reaches a device
+    and the check itself needs no backend — which is what lets the seam's own
+    test stay substrate-free, as a seam test must. `np.ndim` reads `.ndim` where
     there is one (an array, a tracer) and only falls back to converting for a
     plain sequence, so this holds under `jit` too.
     """
     if np.ndim(msg) != 2:
         raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={np.ndim(msg)}")
+
+
+def device_message(msg: ArrayLike) -> Array:
+    """A message as the uint8 `[B, L]` batch every device row hashes.
+
+    The rank is checked before the conversion (`_require_batch_rank`, which
+    carries the reasoning), so a wrong rank never reaches a device.
+    """
+    _require_batch_rank(msg)
     return fnp.asarray(msg, dtype=fnp.uint8)
 
 
@@ -148,6 +231,9 @@ def host_digest(
     never be a tracer. That is the seam's return-type rule above, and returning
     `np.ndarray` is what states it.
     """
+    # Without this the loop below walks the wrong axis and returns one digest
+    # per BYTE — a well-formed answer to a different question (#235).
+    _require_batch_rank(msg)
     rows = np.ascontiguousarray(np.asarray(msg, dtype=np.uint8))  # [B, L]
     out = np.empty((rows.shape[0], digest_size), dtype=np.uint8)
     for i, row in enumerate(rows):

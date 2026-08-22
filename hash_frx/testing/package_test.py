@@ -1,12 +1,16 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Package-integrity guards for accidents tooling keeps reintroducing.
 
-Deliberately light: this target depends on `//hash_frx` and `absl` only, and
+Deliberately light: this target depends on the bare package init and `absl`
+only, and
 every assertion below holds WITHOUT importing a hash. That is not incidental —
 `test_importing_the_package_pulls_no_hash` is the pin on the lazy re-export
 arrangement, and it can only be true in a process where nothing else has already
-imported a family. The counterpart that actually resolves every export lives in
-`public_api_test`, in its own process for exactly that reason.
+imported a family. frx is not in these runfiles at all, which makes the property
+enforced rather than merely asserted: an eager re-export cannot quietly boot a
+backend here, it fails to import. The counterparts that need the package
+resolved — every export, and the submodule-collision rule — live in
+`public_api_test`, which already carries the whole layout.
 """
 
 import ast
@@ -23,19 +27,19 @@ def _type_checking_names() -> set[str]:
     from the source rather than executed — the block never runs, so this is the
     only way to see it. Parsed here rather than in the module so the module owes
     nothing to its own guard."""
-    source = pathlib.Path(hash_frx.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        test = node.test
-        if not (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING"):
-            continue
-        for stmt in ast.walk(node):
-            if isinstance(stmt, ast.ImportFrom):
-                names.update(alias.asname or alias.name for alias in stmt.names)
-    return names
+    tree = ast.parse(pathlib.Path(hash_frx.__file__).read_text(encoding="utf-8"))
+    # The block is top-level, so `tree.body` is the whole search space — walking
+    # the tree would only add ways to match something that is not it.
+    return {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "TYPE_CHECKING"
+        for stmt in node.body
+        if isinstance(stmt, ast.ImportFrom)
+        for alias in stmt.names
+    }
 
 
 class PackageTest(absltest.TestCase):
@@ -68,18 +72,6 @@ class PublicApiSurfaceTest(absltest.TestCase):
         # `_EXPORTS`. A name added to one and not the other type-checks and
         # imports differently, which is the drift this catches.
         self.assertEqual(_type_checking_names(), set(hash_frx._EXPORTS))
-
-    def test_no_export_collides_with_a_submodule(self) -> None:
-        # `from hash_frx import X` prefers the attribute, but importing
-        # `hash_frx.X` anywhere binds the MODULE onto the package — so a name
-        # that is both resolves differently depending on what else has been
-        # imported. `pbkdf2` is the live example: the function cannot be
-        # re-exported while `hash_frx/pbkdf2.py` holds the name.
-        package_dir = pathlib.Path(hash_frx.__file__).parent
-        submodules = {p.stem for p in package_dir.glob("*.py")} | {
-            p.name for p in package_dir.iterdir() if (p / "__init__.py").exists()
-        }
-        self.assertEqual(set(hash_frx._EXPORTS) & submodules, set())
 
     def test_unknown_attribute_still_raises(self) -> None:
         # `__getattr__` must decline rather than invent, or `from hash_frx

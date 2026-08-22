@@ -45,6 +45,7 @@ import enum
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import frx
 from frx import Array
 
 from hash_frx._composite import _Region, composite
@@ -117,6 +118,25 @@ class FusionPath(enum.Enum):
         row returns `Array`, a host row `np.ndarray` — and the return type
         remains the authority (`byte_hash.py`)."""
         return self is not FusionPath.HOST
+
+
+def routing(available: bool, backends: tuple[str, ...]) -> bool:
+    """Whether a dedicated emitter is reachable: the pinned plugin ships it AND
+    this backend is one of the arms it was written for.
+
+    **Call it per construction, never at import.** Reading it at module scope
+    freezes the routing to whichever backend happened to be default when the
+    module loaded, which is wrong the moment a process builds a hash after
+    switching backends. `frx.default_backend()` is memoized, so asking late is
+    cheap.
+
+    The two arguments stay per-family constants because they are per-family
+    facts: `available` flips with the `frx>=` floor in `pyproject.toml` when
+    that emitter lands, and `backends` names the arms it was written for. Only
+    the question is shared. What a `False` answer means for the marker is
+    `FusionPath.from_routing`'s to say.
+    """
+    return available and frx.default_backend() in backends
 
 
 def fused_region(

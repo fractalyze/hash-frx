@@ -30,8 +30,8 @@ from frx import Array
 from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import device_message, host_digest
-from hash_frx.fusion import FusionPath, fused_region
+from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
 
 if TYPE_CHECKING:
@@ -77,18 +77,15 @@ _BYTES_EMITTER_AVAILABLE = True
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry the SHA-256 emitter. Read
-    per construction rather than at import, so the routing cannot be frozen to
-    whichever backend happened to be default when the module loaded; the lookup
-    behind `frx.default_backend()` is memoized. (Reading it late does not by
-    itself keep import backend-free — this module materializes its constants on
-    device at import, which #167 tracks.)"""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 def _routes_to_bytes_marker() -> bool:
-    """Whether `digest` should emit the raw-bytes marker on this backend."""
-    return _BYTES_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether `digest` should emit the raw-bytes marker on this
+    backend (`fusion.routing`)."""
+    return routing(_BYTES_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
@@ -596,7 +593,7 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 # the device path; a batched one pays roughly 5.5x at B=1024 for choosing the
 # host path.
 # ---------------------------------------------------------------------------
-class Sha256:
+class Sha256(DeviceRow):
     """`ByteHash` for device SHA-256 — `digest` runs the batch on the
     `hash_frx.digest.sha256` marker (data-parallel, lowers to one dedicated kernel
     where the pin and the backend route the name, so `fusion_path` reads
@@ -609,29 +606,13 @@ class Sha256:
     digest_size = 32
 
     def __init__(self) -> None:
-        # Read per instance rather than pinned on the class: the emitter switch
-        # is a property of the pin and the backend, and a value read at import
-        # would pin the answer before anything could vary it.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
 
-    def __eq__(self, other: object) -> bool:
-        # By type, because SHA-256 is parameterless — but `type(other) is not
-        # type(self)` rather than `isinstance`, which is asymmetric under
-        # subclassing and blocks Python's reflected-`__eq__` fallback. Every
-        # `ByteHash` agrees on this form; the `Permutation` side spells the
-        # parameterless case with `isinstance`.
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
 
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-class HostSha256:
+class HostSha256(HostRow):
     """`ByteHash` for host SHA-256 — `digest` loops `hashlib` per message on the
     host (eager, no device kernel), so `fusion_path = HOST`. The fast path for a
     strictly-sequential byte challenger: `hashlib` on a small buffer beats a
@@ -645,22 +626,11 @@ class HostSha256:
     against this one."""
 
     digest_size = 32
-    # The one legitimate class constant of the taxonomy: a host row is HOST on
-    # every backend, so nothing here varies with the pin.
-    fusion_path = FusionPath.HOST
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
             lambda row: hashlib.sha256(row).digest(), self.digest_size, msg
         )
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
-
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 if TYPE_CHECKING:

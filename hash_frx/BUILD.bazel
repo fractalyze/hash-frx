@@ -45,6 +45,22 @@ py_library(
     ],
 )
 
+# `__init__.py` alone, with none of the package's dependencies. `package_test`
+# needs exactly this: it imports the package — which, being lazy, pulls no hash —
+# and reads nothing else. Depending on `//hash_frx` there would drag every pip
+# requirement into a 4 ms test's runfiles, measured at +595 MB / +3347 files,
+# larger than the GPU plugin deps `defs.bzl` already calls too expensive to
+# attach reflexively.
+#
+# With frx absent from those runfiles the laziness is enforced rather than
+# merely asserted: an eager re-export cannot quietly initialize a backend here,
+# it fails to import at all.
+py_library(
+    name = "package_init",
+    srcs = ["__init__.py"],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
 # The one place `lax.composite` is spelled — every marker in this package routes
 # through it.
 py_library(

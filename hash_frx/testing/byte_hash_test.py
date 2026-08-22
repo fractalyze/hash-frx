@@ -14,7 +14,7 @@ import numpy as np
 from absl.testing import absltest
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import ByteHash, device_message
+from hash_frx.byte_hash import ByteHash, device_message, host_digest
 from hash_frx.fusion import FusionPath
 
 
@@ -85,8 +85,14 @@ class DeviceMessageTest(absltest.TestCase):
 
     def test_rejects_a_message_that_is_not_a_batch(self) -> None:
         for bad in [np.zeros(8, dtype=np.uint8), np.zeros((1, 2, 3), dtype=np.uint8)]:
-            with self.assertRaisesRegex(ValueError, "2-D uint8"):
-                device_message(bad)
+            with self.subTest(ndim=np.ndim(bad)):
+                with self.assertRaisesRegex(ValueError, "2-D uint8"):
+                    device_message(bad)
+                # The host door has to answer the same call the same way (#235),
+                # and this is the cheap backend-free target to say so in — the
+                # all-rows suite covers it too, at `size = "large"`.
+                with self.assertRaisesRegex(ValueError, "2-D uint8"):
+                    host_digest(lambda b: b"", 1, bad)
 
 
 if __name__ == "__main__":

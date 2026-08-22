@@ -53,6 +53,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    routing,
 )
 from hash_frx.keccak import lane as lanes
 from hash_frx.keccak.lane import Lane
@@ -120,14 +121,9 @@ _EMITTER_BACKENDS = ("gpu",)
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry the Keccak emitters.
-
-    Read per construction rather than at import, so importing this module does
-    not initialize a backend, and so a test can pin either answer. The backend
-    lookup behind `frx.default_backend()` is memoized, so this stays cheap on the
-    per-call construction the byte hashes do.
-    """
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 def _unpack(state: Array) -> Lane:

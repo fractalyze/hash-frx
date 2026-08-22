@@ -43,7 +43,6 @@ py_library(
     deps = [
         ":reference",
         "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
         "//hash_frx/ascon",
         requirement("frx"),
         requirement("numpy"),

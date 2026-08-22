@@ -18,7 +18,10 @@ Implementations MUST define value-based `__eq__`/`__hash__` over their full
 parameter surface: a permutation rides pytree aux, where identity equality
 silently re-traces the enclosing jit zone on every freshly built instance — a
 cost that does not error, it just makes every call slow. A Protocol cannot
-enforce this; each implementation carries it.
+enforce this; each implementation carries it. The `ByteHash` seam no longer
+works this way — its rows inherit the pair from `byte_hash.Row` — so the five
+permutations here are the remaining hand-written copies, and folding them onto a
+shared base is open work rather than a settled difference.
 """
 
 from __future__ import annotations

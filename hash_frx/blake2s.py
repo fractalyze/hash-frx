@@ -62,8 +62,8 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import device_message, host_digest
-from hash_frx.fusion import FusionPath, fused_region
+from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, rotr, unpack_le
 
 if TYPE_CHECKING:
@@ -99,10 +99,9 @@ _EMITTER_BACKENDS: tuple[str, ...] = ()
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry a BLAKE2s emitter. Read
-    per construction so importing does not initialize a backend; the lookup
-    behind `frx.default_backend()` is memoized."""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 _BLOCK = 64  # RFC 7693 §2.1: bb = 64-byte blocks (16 words of 32 bits)
@@ -402,7 +401,7 @@ def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
     return full[:, :digest_size]
 
 
-class Blake2s:
+class Blake2s(DeviceRow):
     """`ByteHash` for device unkeyed BLAKE2s — `digest` runs the batch through
     the `hash_frx.digest.blake2s` marker. No plugin recognizes that name yet,
     so `fusion_path` reads `GENERIC` on every backend today: the marker
@@ -429,34 +428,17 @@ class Blake2s:
                 f"{digest_size}"
             )
         self.digest_size = digest_size
-        # Read per instance rather than pinned on the class: the emitter
-        # switch is a property of the pin and the backend, and a value read
-        # at import would pin the answer before anything could vary it.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg, self.digest_size)  # the module-level marker digest
 
-    def __eq__(self, other: object) -> bool:
-        # By value over `digest_size` (`type(other) is not type(self)` rather
-        # than `isinstance`, which is asymmetric under subclassing and blocks
-        # Python's reflected-`__eq__` fallback) — so a device row never
-        # equals the host row, and swapping substrate re-traces.
-        if type(other) is not type(self):
-            return NotImplemented
-        return self.digest_size == other.digest_size
 
-    def __hash__(self) -> int:
-        return hash((type(self), self.digest_size))
-
-
-class HostBlake2s:
+class HostBlake2s(HostRow):
     """`ByteHash` for host unkeyed BLAKE2s over `hashlib.blake2s` — a
     guaranteed constructor, so the row ships unconditionally: the fast path
     for a strictly-sequential byte caller, free the way the sibling's host
     row was. The output length rides the value surface, same as `Blake2s`."""
-
-    fusion_path = FusionPath.HOST
 
     def __init__(self, digest_size: int = MAX_DIGEST_SIZE) -> None:
         if not 1 <= digest_size <= MAX_DIGEST_SIZE:
@@ -472,14 +454,6 @@ class HostBlake2s:
             self.digest_size,
             msg,
         )
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self.digest_size == other.digest_size
-
-    def __hash__(self) -> int:
-        return hash((type(self), self.digest_size))
 
 
 if TYPE_CHECKING:
