@@ -12,6 +12,12 @@
 # the binary-field dtypes (tower t0..t7 + flat GHASH) in the frontend, which
 # requires zk_dtypes >= 0.0.10.
 #
+# The pin is exact rather than that floor because a bzlmod consumer mirrors it:
+# such a consumer resolves this module's pip dependencies from this lock and its
+# own from its own, and only equal versions keep one zk_dtypes on a test's
+# sys.path. So the pin may run ahead of the floor to satisfy a consumer, and
+# lowering it back to the floor is not a cleanup.
+#
 # The frx pin must satisfy the `frx>=` floor in pyproject.toml (see the
 # rationale there).
 #
@@ -31,4 +37,4 @@ frx==0.10.2.dev20260822125907
 frxlib==0.10.2.dev20260822125907
 frx-cuda12-pjrt==0.10.2.dev20260822125907
 frx-cuda12-plugin==0.10.2.dev20260822125907
-zk-dtypes==0.0.16
+zk-dtypes==0.0.17
