@@ -29,8 +29,9 @@ from typing import Any
 
 import frx
 import frx.numpy as fnp
-from frx import Array, lax
+from frx import Array
 
+from hash_frx.extension.sponge import field_absorb
 from hash_frx.fusion import FusionPath, fused_region_over
 from hash_frx.permutation import Permutation
 
@@ -93,29 +94,34 @@ def _absorb(
     permute: Callable[[Array], Array],
     sponge_type: SpongeType,
 ) -> Array:
-    """Absorb as a ``while_loop`` over ``ceil(n/rate)`` blocks — shared by every
-    `SpongeType` (the mode's `tail_fill`/`set_capacity` are the only per-type
-    pieces). The bound is read at runtime, so concrete and symbolic ``n`` alike."""
+    """Absorb over ``ceil(n/rate)`` blocks and squeeze the first ``out`` lanes —
+    shared by every `SpongeType`, whose `tail_fill`/`set_capacity` are the only
+    per-type pieces.
+
+    The schedule is `extension.sponge.field_absorb`: a ``while_loop``, so the
+    bound is read at runtime and concrete and symbolic ``n`` lower the same way.
+    That loop form is what keeps this construction out of the byte sponges'
+    `absorb_squeeze`, whose counts are static — the two schedules are siblings
+    in `extension/sponge.py` rather than one body with the loop as a parameter.
+
+    The squeeze is a truncation of the final state rather than an iterated read,
+    which is why nothing here needs the byte schedule's permute-between-reads
+    rule."""
     mode = _MODES[sponge_type]
     n = input.shape[0]
     nb = (n + rate - 1) // rate
     lanes = fnp.arange(rate)
 
-    def cond(carry: tuple[Array, Array]) -> Array:
-        return carry[1] < nb
-
-    def body(carry: tuple[Array, Array]) -> tuple[Array, Array]:
-        s, i = carry
+    def merge(s: Array, i: Array) -> Array:
         start = i * rate
         w = fnp.minimum(rate, n - start)
         # Last block reads past n; clamp OOB indices (masked out below).
         block = input[fnp.clip(start + lanes, 0, n - 1)]
         cap = s[:out]  # prior digest (zeros on block 0); snapshot before overwrite
         s = s.at[:rate].set(fnp.where(lanes < w, block, mode.tail_fill(s, rate)))
-        s = mode.set_capacity(s, cap, rate, out)
-        return permute(s), i + 1
+        return mode.set_capacity(s, cap, rate, out)
 
-    state, _ = lax.while_loop(cond, body, (state, fnp.int32(0)))
+    state = field_absorb(state, blocks=nb, absorb=merge, permute=permute)
     return state[:out]
 
 

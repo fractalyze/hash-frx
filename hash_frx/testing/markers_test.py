@@ -16,6 +16,7 @@ from absl.testing import absltest
 
 from hash_frx import blake2s, ripemd160, sha256, sha512, sm3, sponge
 from hash_frx.ascon import ascon
+from hash_frx.ascon import permutation as ascon_permutation
 from hash_frx.blake2b import blake2b
 from hash_frx.blake3 import blake3
 from hash_frx.grostl import grostl
@@ -51,6 +52,8 @@ _MODULE_CONSTANTS = {
     sponge.SPONGE_HASH_MARKER: sponge.SPONGE_HASH_MARKER_VERSION,
     grostl.GROSTL256_MARKER: grostl.GROSTL256_MARKER_VERSION,
     ascon.ASCON_HASH256_MARKER: ascon.ASCON_HASH256_MARKER_VERSION,
+    ascon.ASCON_XOF128_MARKER: ascon.ASCON_XOF128_MARKER_VERSION,
+    ascon_permutation.ASCON_P_MARKER: ascon_permutation.ASCON_P_MARKER_VERSION,
     ripemd160.RIPEMD160_MARKER: ripemd160.RIPEMD160_MARKER_VERSION,
     blake2b.BLAKE2B_MARKER: blake2b.BLAKE2B_MARKER_VERSION,
     blake2s.BLAKE2S_MARKER: blake2s.BLAKE2S_MARKER_VERSION,

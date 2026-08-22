@@ -180,3 +180,94 @@ KAT_VECTORS: tuple[tuple[bytes, str], ...] = (
         "a6f241bea5d16405812c06019d9f72d60132bd7c089c60549b2e56bb01c64f48",
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Ascon-XOF128 (§5.2): the same rate, padding and absorb as Ascon-Hash256, at a
+# different IV and with an arbitrary output length. The IV layout is Table 13's
+# with version 3 and an output length of 0 — "arbitrary" is spelled as a zero
+# length field — so the two differ in this constant and in nothing else.
+# ---------------------------------------------------------------------------
+XOF_IV = 0x0000080000CC0003
+
+# Derived here rather than copied, exactly as `INITIAL_STATE` is, so the device
+# module's transcription meets an independent derivation in `ascon_test`.
+XOF_INITIAL_STATE: tuple[int, ...] = tuple(permutation([XOF_IV, 0, 0, 0, 0]))
+
+
+def ascon_xof128(msg: bytes, output_size: int) -> bytes:
+    """Ascon-XOF128 of `msg`, read out to `output_size` bytes (§5.2).
+
+    Absorb and pad are `ascon_hash256`'s; only the initial state and the number
+    of squeeze blocks differ, and the last block is truncated where the request
+    is not a multiple of the 8-byte rate.
+    """
+    state = list(XOF_INITIAL_STATE)
+    padded = msg + pad(len(msg))
+    for i in range(0, len(padded), RATE):
+        state[0] ^= int.from_bytes(padded[i : i + RATE], "little")
+        state = permutation(state)
+    out = b""
+    while True:
+        out += (state[0] & _MASK64).to_bytes(RATE, "little")
+        if len(out) >= output_size:
+            return out[:output_size]
+        state = permutation(state)
+
+
+# ---------------------------------------------------------------------------
+# Ascon-XOF128 KAT, from the same published record as `KAT_VECTORS` above:
+# the Ascon team's reference implementation
+# (https://github.com/ascon/ascon-c), crypto_hash/asconxof128/
+# LWC_XOF_KAT_128_512.txt, whose `Count = n + 1` row carries the n-byte
+# message `bytes(range(n))` and 64 bytes of output. The rows below are the ones
+# that straddle the 8-byte rate boundary, transcribed from that file; the
+# oracle above was checked against ALL 1025 of its rows while transcribing.
+# ---------------------------------------------------------------------------
+XOF_KAT_VECTORS: tuple[tuple[bytes, str], ...] = (
+    (
+        bytes(range(0)),
+        "473d5e6164f58b39dfd84aacdb8ae42ec2d91fed33388ee0d960d9b3993295c6"
+        "ad77855a5d3b13fe6ad9e6098988373af7d0956d05a8f1665d2c67d1a3ad10ff",
+    ),
+    (
+        bytes(range(1)),
+        "51430e0438ecdf642b393630d977625f5f337656ba58ab1e960784ac32a16e0d"
+        "446405551f5469384f8ea283cf12e64fa72c426bfebaea3aa1529e2c4ab23a2f",
+    ),
+    (
+        bytes(range(7)),
+        "7ae562db37212a9acd2673ecfd5b4f1c5cb2e6f64ebf00aa7f6ef8dc82c448d5"
+        "fe11cd91f4368c37690d79e5de0ca8ad419e1918ce8dab2d42363e9476638a7b",
+    ),
+    (
+        bytes(range(8)),
+        "8d1886f5d3ec4af8d15b44bc62b74da6ea91bc28fb82f9c34079b5ed6e38b6c9"
+        "51803d7dfb3c5e512a0ef5e4060062a6fd067f9c73ef9bee527411bda67fc896",
+    ),
+    (
+        bytes(range(9)),
+        "db3013bfbbd132dc1d3152fd955ed48f7cbb675e9ad2a2fecf92b74c957592e0"
+        "c89959e81c16fd07ead9eeb8e40359c497aa20258b43d87ec69ad0bb0993fd38",
+    ),
+    (
+        bytes(range(15)),
+        "7517d9b0383dc7742e9e1335d97d3f1c5a971416ca4e72bf504e962f80286862"
+        "733ad8f5e60adcc1c5b21e8be99d32bc80d70277b81e709dc56579c37bebc080",
+    ),
+    (
+        bytes(range(16)),
+        "10bfedc5f6442d3e1d8c324878ce1ddf73b01cafc365589283ac4cbb98e48de3"
+        "ceda8a41bb0983d539e4d90f6458c5c781724fad641ed3cdb4779931097440b3",
+    ),
+    (
+        bytes(range(32)),
+        "2e5f3403f4171471cc7934b51982cece8d6628435db70e89880f3be4e0b7b052"
+        "32dfe63c44a836d771337c9c5a2688d1b71ecabe0d5c2006fef36ef3186138ad",
+    ),
+    (
+        bytes(range(64)),
+        "0865c2fa92c71058e79e5c4214f3a1505540411586920536ccee85fbf2940b9f"
+        "0131385ffe92f15f35bd35373f14d8bf11f078d9850096016f857d27575da423",
+    ),
+)

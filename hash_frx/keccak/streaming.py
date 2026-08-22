@@ -51,34 +51,27 @@ import frx.numpy as fnp
 from frx import Array, lax
 from frx.tree_util import register_dataclass
 
+from hash_frx.extension.sponge import squeeze_blocks
 from hash_frx.keccak.byte_hashes import (
     SHAKE128_RATE,
     SHAKE256_RATE,
     SHAKE_SUFFIX,
 )
 from hash_frx.keccak.permutation import KeccakF1600
-from hash_frx.keccak.sponge import validate_sponge_params
+from hash_frx.keccak.sponge import _xor_into_rate, validate_sponge_params
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
 
 _PERMUTE = KeccakF1600().permute
 _STATE_WIDTH = KeccakF1600.width
 
 
-def _blocks_of(nbytes: int, rate: int) -> int:
-    """Blocks a `nbytes` run spans, rounded up."""
-    return -(-nbytes // rate)
-
-
-def _xor_block(state: Array, block: Array) -> Array:
-    """XOR a packed rate block into the state prefix — the unbatched sibling of
-    `sponge._xor_into_rate`, kept here because the streaming state is one row."""
-    n = block.shape[0]
-    return fnp.concatenate([state[:n] ^ block, state[n:]])
-
-
 def _absorb_block(state: Array, block_bytes: Array) -> Array:
-    """XOR one rate block of bytes into the state and permute."""
-    return _PERMUTE(_xor_block(state, pack_le(block_bytes)))
+    """XOR one rate block of bytes into the state and permute.
+
+    `sponge._xor_into_rate` is indexed on the trailing axis, so the unbatched
+    state this carries and the `[B, 50]` one the one-shot sponge absorbs into go
+    through one spelling of the slice-and-concatenate."""
+    return _PERMUTE(_xor_into_rate(state, pack_le(block_bytes)))
 
 
 def _rate_bytes(state: Array, rate: int) -> Array:
@@ -217,7 +210,7 @@ class ShakeSqueeze:
         # unconditionally ran one dead permutation on every other length —
         # notably the whole-block squeeze a rejection sampler loops on — that
         # the traced select kept XLA from removing.
-        upper = _blocks_of(rate - 1 + nbytes, rate)
+        upper = squeeze_blocks(rate - 1 + nbytes, rate)
         nperms = (rate - 1 + nbytes) // rate
         state = self.state
         chain = [state]

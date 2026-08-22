@@ -28,7 +28,7 @@ from hash_frx import sha256 as sha256_mod
 from hash_frx import sha512 as sha512_mod
 from hash_frx import sm3 as sm3_mod
 from hash_frx.ascon import ascon as ascon_mod
-from hash_frx.ascon.ascon import AsconHash256
+from hash_frx.ascon.ascon import AsconHash256, AsconXof128
 from hash_frx.blake2b import blake2b as blake2b_mod
 from hash_frx.blake2b.blake2b import Blake2b
 from hash_frx.blake2s import Blake2s
@@ -123,6 +123,7 @@ class DeviceCellTest(absltest.TestCase):
             (Sha384(), _MATRIX[sha512_mod]),
             (Sha512_256(), _MATRIX[sha512_mod]),
             (AsconHash256(), _MATRIX[ascon_mod]),
+            (AsconXof128(32), _MATRIX[ascon_mod]),
             (Ripemd160(), _MATRIX[ripemd160_mod]),
             (Blake2b(), _MATRIX[blake2b_mod]),
             (Blake2s(), _MATRIX[blake2s_mod]),

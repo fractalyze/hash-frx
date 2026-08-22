@@ -65,6 +65,7 @@ _EXPORTS: dict[str, str] = {
     "Marker": "hash_frx.markers",
     "MarkerKind": "hash_frx.markers",
     # -- primitives: permutations ------------------------------------------
+    "AsconP": "hash_frx.ascon.permutation",
     "KeccakF1600": "hash_frx.keccak.permutation",
     "Poseidon": "hash_frx.poseidon.poseidon",
     "Poseidon2": "hash_frx.poseidon2.poseidon2",
@@ -87,6 +88,7 @@ _EXPORTS: dict[str, str] = {
     "SpongeType": "hash_frx.sponge",
     # -- rows: device (traceable, return `Array`) --------------------------
     "AsconHash256": "hash_frx.ascon.ascon",
+    "AsconXof128": "hash_frx.ascon.ascon",
     "Blake2b": "hash_frx.blake2b.blake2b",
     "Blake2s": "hash_frx.blake2s",
     "Blake3": "hash_frx.blake3.byte_hashes",
@@ -172,6 +174,8 @@ def __dir__() -> list[str]:
 # it equal to `_EXPORTS`.
 if TYPE_CHECKING:
     from hash_frx.ascon.ascon import AsconHash256 as AsconHash256
+    from hash_frx.ascon.ascon import AsconXof128 as AsconXof128
+    from hash_frx.ascon.permutation import AsconP as AsconP
     from hash_frx.blake2b.blake2b import Blake2b as Blake2b
     from hash_frx.blake2b.byte_hashes import HostBlake2b as HostBlake2b
     from hash_frx.blake2s import Blake2s as Blake2s

@@ -239,6 +239,7 @@ py_library(
     deps = [
         ":fusion",
         ":permutation",
+        "//hash_frx/extension:sponge",
         requirement("frx"),
     ],
 )
