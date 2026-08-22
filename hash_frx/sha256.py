@@ -498,6 +498,19 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     return Sha256State(h_new, pending, counts)
 
 
+def _length_field(msg_bytes: Array) -> Array:
+    """FIPS 180-4 §5.1.1's 64-bit message length, in bits, big-endian: uint8 [8].
+
+    Carried as a uint32 half pair off the int32 byte count, because the bit
+    length outgrows a uint32: a count near 2^31 has a bit length near 2^34, so
+    `count * 8` in one word wraps at 512 MiB and encodes a shorter message —
+    the same digest for two different lengths. The high half is the count's top
+    3 bits, the low half the count shifted into place.
+    """
+    count = msg_bytes.astype(fnp.uint32)
+    return unpack_be(fnp.stack([count >> fnp.uint32(29), count << fnp.uint32(3)]))
+
+
 def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     """`SHA256(absorbed ‖ extras[b])` for each row of `extras` (uint8 [B, E], E
     static) — a non-mutating copy of the hash finished at the current length. One
@@ -507,15 +520,30 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     The trailing content is `pending[:pending_len] ‖ extras[b]` (≤ 63 + E bytes),
     so with the `0x80` byte and the 8-byte length it spans at most two blocks; the
     second block is compressed unconditionally and selected away when one suffices.
+
+    `E` is bounded by that layout: `pending_len` is runtime data, so only
+    `E <= 56` (the block minus the length field) fits two blocks at every
+    reachable `pending_len` — a wider tail is rejected rather than silently
+    overlapping the padding. Absorb the prefix and finalize with the remainder.
+
+    The stream counts bytes in an int32, which wraps past 2 GiB — benignly, as
+    it happens: only the length field reads the count, and it reinterprets the
+    wrapped value as a uint32, recovering the right bit pattern. So the real
+    ceiling is 4 GiB (2^32 bytes), where the uint32 itself wraps and two
+    lengths encode alike. Far below FIPS 180-4's 2^61 bytes, and widening the
+    counter rides the batch-polymorphic state rework on the redesign epic.
     """
     batch, e = extras.shape
+    if e > _BLOCK - 8:
+        raise ValueError(
+            f"extras width ({e}) must be <= {_BLOCK - 8}: pending_len is runtime "
+            "data, so a wider tail cannot be guaranteed to fit the two-block "
+            "finalize layout at every offset — absorb the prefix instead"
+        )
     pl = state.pending_len
     content_len = pl + fnp.int32(e)
     msg_bytes = state.total_len + fnp.int32(e)
-    # SHA-256's 64-bit length field; the high 32 bits are zero for any message
-    # below 2**32 bits (512 MiB) — so the length is a uint32 and no x64 is needed.
-    bitlen = msg_bytes.astype(fnp.uint32) * fnp.uint32(8)
-    len_bytes = unpack_be(fnp.stack([fnp.uint32(0), bitlen]))  # [8] big-endian
+    len_bytes = _length_field(msg_bytes)  # [8] big-endian
 
     two_blocks = content_len > fnp.int32(55)  # need a 2nd block for pad + length?
     active_bytes = fnp.where(two_blocks, fnp.int32(128), fnp.int32(64))

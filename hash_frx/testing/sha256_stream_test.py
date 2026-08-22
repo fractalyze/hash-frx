@@ -13,8 +13,9 @@ import hashlib
 import frx
 import frx.numpy as fnp
 import numpy as np
-from absl.testing import absltest
+from absl.testing import absltest, parameterized
 
+from hash_frx import sha256
 from hash_frx.sha256 import (
     Sha256State,
     sha256_stream_absorb,
@@ -117,6 +118,47 @@ class Sha256StreamTest(absltest.TestCase):
 
         got = bytes(np.asarray(run(chunks))[0])
         self.assertEqual(got, hashlib.sha256(msg).digest())
+
+
+class FinalizeBoundsTest(parameterized.TestCase):
+    """The finalize's two boundaries, both silent before (#212).
+
+    `extras` wider than the block minus the length field cannot fit the
+    two-block layout at every runtime `pending_len`, and used to overlap the
+    padding and return a wrong digest with no error. The length field is a
+    64-bit count in bits, and a byte count near 2^31 has a bit length near
+    2^34 — held to `int.to_bytes` across the wrap the one-word form had.
+    """
+
+    @parameterized.parameters((63, 56), (0, 56), (55, 1), (63, 1), (32, 24))
+    def test_widest_extras_still_match_hashlib(self, pending: int, width: int) -> None:
+        state = sha256.sha256_stream_absorb(
+            sha256.sha256_stream_init(), fnp.zeros(pending, dtype=fnp.uint8)
+        )
+        got = np.asarray(
+            sha256.sha256_stream_finalize(state, fnp.zeros((1, width), dtype=fnp.uint8))
+        )[0]
+        want = hashlib.sha256(bytes(pending + width)).digest()
+        self.assertEqual(got.tobytes(), want)
+
+    def test_extras_past_the_layout_are_rejected(self) -> None:
+        state = sha256.sha256_stream_init()
+        with self.assertRaisesRegex(ValueError, "extras width"):
+            sha256.sha256_stream_finalize(state, fnp.zeros((1, 57), dtype=fnp.uint8))
+
+    @parameterized.parameters(0, 1, 55, 1 << 20, (1 << 29) - 1, 1 << 29, (1 << 31) - 1)
+    def test_length_field_matches_the_standard_encoding(self, count: int) -> None:
+        got = np.asarray(sha256._length_field(fnp.int32(count))).tobytes()
+        self.assertEqual(got, (count * 8).to_bytes(8, "big"))
+
+    @parameterized.parameters(1 << 31, (1 << 31) + 12345, (1 << 32) - 1)
+    def test_length_field_survives_the_int32_counter_wrap(self, count: int) -> None:
+        """Past 2 GiB the int32 byte counter is negative, and the encoding is
+        still right: it reinterprets the wrapped value as a uint32, which is
+        the same bit pattern. That is why the ceiling is 4 GiB, not 2."""
+        wrapped = np.asarray(count & 0xFFFFFFFF, dtype=np.uint32).astype(np.int32)
+        got = np.asarray(sha256._length_field(fnp.asarray(wrapped))).tobytes()
+        self.assertEqual(got, (count * 8).to_bytes(8, "big"))
 
 
 if __name__ == "__main__":
