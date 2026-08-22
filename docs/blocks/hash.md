@@ -224,6 +224,19 @@ and what the unit *is* is in the hub's
 narrower: the primitives are written *for* a marker, so the marker is not an
 optimization applied to them afterwards.
 
+A marker's **cost** is the emitter's business, not this layer's. When one
+lowered form compiles or runs worse than another on some backend, the reflex is
+a routing constant here — a size threshold, a list of backends — and
+[#197](https://github.com/fractalyze/hash-frx/issues/197) is the worked example
+of why that is a symptom rather than a fix. The raw-bytes SHA-256 marker cost
+2.14x the blocks marker to compile downstream, because the CPU emitter
+assembled its padded words once per SIMD lane; fixing that where the cost was
+decided ([fractalyze/xla#572](https://github.com/fractalyze/xla/pull/572)) cut
+it to 1.33x and retired the proposed threshold entirely. A constant encoding
+what some backend charges dates instantly, is invisible to the emitter that
+could remove it, and makes this layer carry hardware knowledge it otherwise
+does not need.
+
 ## Out of scope
 
 Domain separation, the choice between a sponge and a compression function for a
