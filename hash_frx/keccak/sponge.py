@@ -45,6 +45,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.byte_hash import device_message
 from hash_frx.fusion import fused_region_over
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
@@ -239,10 +240,7 @@ class KeccakSponge:
         squeeze to one `hash_frx.keccak_sponge` region; otherwise each permute is
         its own marked region and the XOR glue between them stays outside.
         """
-        message = fnp.asarray(msg, dtype=fnp.uint8)
-        if message.ndim != 2:
-            raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
-
+        message = device_message(msg)
         batch, length = message.shape
         tail = _padding_tail(length, self.rate, self.suffix)
         padded = fnp.concatenate(

@@ -265,5 +265,27 @@ class Sm3ByteHashTest(parameterized.TestCase):
         self.assertNotEqual(Sm3(), Sha256())
 
 
+class SeamContractTest(absltest.TestCase):
+    """The two seam invariants SM3 landed alongside and so missed.
+
+    A zero-row batch is a valid batch — the block-count reshape used to spell
+    the count as `-1`, which a zero-sized total makes ambiguous (#211) — and a
+    1-D message is rejected at the seam rather than from inside the marked
+    region's trace, where it surfaced as a concatenate error naming neither
+    (#215).
+    """
+
+    def test_zero_rows_digest_to_zero_rows(self) -> None:
+        rows: list[tuple[ByteHash, int]] = [(sm3.Sm3(), 32), (sm3.HostSm3(), 32)]
+        for hasher, size in rows:
+            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+            self.assertEqual(got.shape, (0, size))
+            self.assertEqual(got.dtype, np.uint8)
+
+    def test_a_1d_message_is_rejected_at_the_seam(self) -> None:
+        with self.assertRaisesRegex(ValueError, "2-D uint8"):
+            sm3.digest(fnp.zeros(64, dtype=fnp.uint8))
+
+
 if __name__ == "__main__":
     absltest.main()

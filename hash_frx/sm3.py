@@ -42,7 +42,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import host_digest
+from hash_frx.byte_hash import device_message, host_digest
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_be, rotl, unpack_be
 
@@ -236,7 +236,7 @@ def block_to_words(blocks: Array) -> Array:
     """uint8 [B, nblocks*64] -> uint32 [B, nblocks, 16] big-endian message
     words (`sha256.block_to_words` at the same parameters)."""
     b = blocks.shape[0]
-    return pack_be(blocks.reshape(b, -1, _BLOCK))
+    return pack_be(blocks.reshape(b, blocks.shape[-1] // _BLOCK, _BLOCK))
 
 
 def _padded_words(msg: Array) -> Array:
@@ -311,7 +311,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     seam: the padding is built from the static length and never reads the
     message (`_padding_tail`), the same property `sha256.digest` states.
     """
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     return sm3_merkle_damgard(INITIAL_STATE, _padded_words(msg))
 
 

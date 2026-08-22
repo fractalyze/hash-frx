@@ -62,7 +62,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import host_digest
+from hash_frx.byte_hash import device_message, host_digest
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_le, roll, rotr, unpack_le
 
@@ -352,7 +352,9 @@ def blake2s_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         padded = fnp.concatenate(
             [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
         )
-        words = pack_le(padded.reshape(b, -1, _BLOCK))  # [B, nblocks, 16]
+        words = pack_le(
+            padded.reshape(b, padded.shape[-1] // _BLOCK, _BLOCK)
+        )  # [B, nblocks, 16]
         state = fnp.broadcast_to(h0, (b, 8))
         iv_a, iv_b = iv[0:4], iv[4:8]
         nblocks = words.shape[1]
@@ -391,7 +393,7 @@ def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
     message (`_padding_tail`), which is the same property `sha256.digest`
     states.
     """
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     full = blake2s_bytes(
         fnp.asarray(_initial_state(digest_size)),
         msg,
