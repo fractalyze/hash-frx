@@ -59,8 +59,8 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import PadRule, Trailer
-from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.extension.md import PadRule, Trailer, chain
+from hash_frx.fusion import FusionPath, routing
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -438,17 +438,16 @@ def sha512_merkle_damgard(h0: Array, blocks: Array) -> Array:
     captured constant would prepend and land at operand 0
     (docs/reference/conventions.md's operand-ABI rule)."""
 
-    def decomposition(h0: Array, k: Array, blocks: Array, **_attrs: object) -> Array:
-        state = fnp.broadcast_to(h0, (blocks.shape[0], 16))
-        return serialize_digest(compress(state, blocks, k))
-
-    return fused_region(
-        decomposition,
+    return chain(
         h0,
-        _Kd,
         blocks,
-        name=SHA512_MARKER,
-        version=SHA512_MARKER_VERSION,
+        constants=_Kd,
+        compress_block=_compress,
+        serialize=serialize_digest,
+        # 8 words of 64 bits, carried as 16 uint32 lo/hi halves — frx has no
+        # native 64-bit lane, so the state is twice as wide as SHA-256's.
+        state_words=16,
+        marker=(SHA512_MARKER, SHA512_MARKER_VERSION),
     )
 
 

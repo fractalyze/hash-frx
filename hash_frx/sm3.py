@@ -49,8 +49,8 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import PadRule, Trailer
-from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.extension.md import PadRule, Trailer, chain
+from hash_frx.fusion import FusionPath, routing
 from hash_frx.word import pack_be, rotl, unpack_be
 
 if TYPE_CHECKING:
@@ -276,20 +276,14 @@ def sm3_merkle_damgard(h0: Array, blocks: Array) -> Array:
     captured constant would prepend and land at operand 0
     (docs/reference/conventions.md's operand-ABI rule)."""
 
-    def decomposition(h0: Array, t: Array, blocks: Array, **_attrs: object) -> Array:
-        state = fnp.broadcast_to(h0, (blocks.shape[0], 8))
-        nblocks = blocks.shape[1]
-        for i in range(nblocks):  # static, small
-            state = _compress(state, blocks[:, i], t)
-        return unpack_be(state)  # big-endian serialization: [B, 32]
-
-    return fused_region(
-        decomposition,
+    return chain(
         h0,
-        _Td,
         blocks,
-        name=SM3_MARKER,
-        version=SM3_MARKER_VERSION,
+        constants=_Td,
+        compress_block=_compress,
+        serialize=unpack_be,
+        state_words=8,
+        marker=(SM3_MARKER, SM3_MARKER_VERSION),
     )
 
 

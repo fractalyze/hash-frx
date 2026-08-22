@@ -26,10 +26,15 @@ function plus four numbers rather than its own transcription of this file.
 from __future__ import annotations
 
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
+import frx.numpy as fnp
 import numpy as np
+from frx import Array
+
+from hash_frx.fusion import fused_region
 
 
 class Trailer(enum.Enum):
@@ -103,3 +108,55 @@ class PadRule:
         )
         tail[-8:] = np.frombuffer(encoded, dtype=np.uint8)
         return tail
+
+
+def chain(
+    h0: Array,
+    blocks: Array,
+    *,
+    constants: Array,
+    compress_block: Callable[[Array, Array, Array], Array],
+    serialize: Callable[[Array], Array],
+    state_words: int,
+    marker: tuple[str, int],
+) -> Array:
+    """The compression chain from midstate `h0` over `blocks`, as one marked
+    region: `[B, nblocks, ...]` -> the serialized final state.
+
+    **The loop is the schedule, so it lives here.** `compress_block` absorbs one
+    block; walking the blocks is Merkle-Damgard's job, not the primitive's, and
+    every family that had its own copy of this wrote the same `for i in
+    range(nblocks)` over a static, small count.
+
+    `h0` is the shared midstate — an initial state for a whole-message digest,
+    or a resumed one, which is what lets a streaming transcript and a batch
+    digest share a single marker. It broadcasts across the batch here rather
+    than being materialized per row.
+
+    **The operand order is the wire ABI.** `[h0, constants, blocks]` is what the
+    recognizing emitters read positionally, so all three are passed explicitly
+    rather than captured: a captured constant is lifted into an unnamed operand
+    ahead of the declared ones and lands at position 0, silently handing the
+    emitter a different message (`hash_frx.fusion` states the rule). That is why
+    `constants` is threaded through untouched — the chain never reads the table,
+    it only has to put it in the right place.
+
+    `marker` is the (name, version) pair the region carries. A whole-hash MD
+    marker is exempt from the generic single-kernel rule the way a permutation's
+    is: a compression is a round loop rather than straight-line, so it takes a
+    name-routed marker an emitter expands. With no emitter wired the marker
+    inlines its decomposition and the bytes are unchanged.
+    """
+    name, version = marker
+
+    def decomposition(
+        h0: Array, constants: Array, blocks: Array, **_attrs: object
+    ) -> Array:
+        state = fnp.broadcast_to(h0, (blocks.shape[0], state_words))
+        for i in range(blocks.shape[1]):  # static, small
+            state = compress_block(state, blocks[:, i], constants)
+        return serialize(state)
+
+    return fused_region(
+        decomposition, h0, constants, blocks, name=name, version=version
+    )

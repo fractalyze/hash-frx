@@ -37,7 +37,7 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import PadRule, Trailer
+from hash_frx.extension.md import PadRule, Trailer, chain
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
 
@@ -317,17 +317,14 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     all three (rather than capturing `_Kd`) keeps that order — a captured
     constant would prepend and land at operand 0."""
 
-    def decomposition(h0: Array, k: Array, blocks: Array, **_attrs: object) -> Array:
-        state = fnp.broadcast_to(h0, (blocks.shape[0], 8))
-        return serialize_digest(compress(state, blocks, k))
-
-    return fused_region(
-        decomposition,
+    return chain(
         h0,
-        _Kd,
         blocks,
-        name=SHA256_MARKER,
-        version=SHA256_MARKER_VERSION,
+        constants=_Kd,
+        compress_block=_compress,
+        serialize=serialize_digest,
+        state_words=8,
+        marker=(SHA256_MARKER, SHA256_MARKER_VERSION),
     )
 
 
