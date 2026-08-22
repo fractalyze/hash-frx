@@ -174,6 +174,12 @@ class MdStream:
         # property, the same one that lets a stream pick up from a midstate.
         # Running both from `h` instead costs min + max compressions — 2N - 1,
         # measured at 31 for a 1000-byte absorb where 16 suffice.
+        #
+        # `keccak.streaming.ShakeAbsorb.absorb` has done this since it was
+        # written, snapshotting the carry mid-fold rather than folding twice.
+        # The MD copies did not, and this one was re-derived rather than read
+        # off it — the two absorbs are close enough that neither should be
+        # changed without looking at the other.
         min_blocks = length // block
         h_new = state.h
         if max_blocks:
