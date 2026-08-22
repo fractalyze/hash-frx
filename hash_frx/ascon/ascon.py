@@ -37,13 +37,13 @@ independently through the shared schedule.
 Contract: `digest(msg)` takes uint8 `[B, L]` and returns uint8 `[B, 32]`
 digests (H0 ‖ H1 ‖ H2 ‖ H3, §5.1 eq. 63). Length `L` is static, so the
 padding is data-independent: a host tail built from the length alone
-(`_padding_tail`), concatenated on — which is what lets `msg` itself be
+(`_PAD`), concatenated on — which is what lets `msg` itself be
 traced. Requires no x64; everything is uint32 halves and uint8 bytes.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -54,11 +54,17 @@ from frx.typing import ArrayLike
 
 from hash_frx.ascon.permutation import WORDS, masks, permutation
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
+from hash_frx.extension.pad import SpongePad
+from hash_frx.extension.sponge import absorb_squeeze, squeeze_blocks
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, split, unpack_le
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
+
+# The sponge state as this hash carries it: the five words as a (lo, hi) pair
+# of uint32 [B, 5] grids, word i in column i.
+_State = tuple[Array, Array]
 
 ASCON_HASH256_MARKER = "hash_frx.digest.ascon_hash256"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI
@@ -112,23 +118,12 @@ _INITIAL_STATE = np.array([split(w) for w in _INITIAL_STATE_WORDS], dtype=np.uin
 _INITIAL_STATEd = fnp.asarray(_INITIAL_STATE)
 
 
-@lru_cache(maxsize=None)
-def _padding_tail(length: int) -> np.ndarray:
-    """What pad(·, 64) (Algorithm 2) appends to a `length`-byte message:
-    uint8 [P].
-
-    The bit 1 then zeros to the next rate boundary — in the little-endian
-    byte convention the byte 0x01 then zero bytes (§A.2: y = x ⊕ (1 ≪ 8n)).
-    Never empty, so a rate-aligned message gains a whole padding block. Every
-    term is a function of the length alone, so the tail is a host constant
-    built *from the length* rather than written *into the message* — which is
-    what lets `digest` take a traced message (the `sha256._padding_tail`
-    arrangement). Shared by the whole batch, since one call hashes messages
-    of one length.
-    """
-    tail = np.zeros(_RATE - length % _RATE, dtype=np.uint8)
-    tail[0] = 0x01
-    return tail
+# The Algorithm 2 pad: the bit 1 then zeros to the next rate boundary, which in
+# the little-endian byte convention is the byte 0x01 then zero bytes (§A.2:
+# y = x ⊕ (1 ≪ 8n)). No trailing bit, unlike FIPS 202's `pad10*1` — the axis
+# `SpongePad` carries, and the reason Ascon's tail and Keccak's are one rule
+# rather than two transcriptions of one shape.
+_PAD = SpongePad(rate=_RATE, head=0x01, final_bit=False)
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
@@ -180,29 +175,49 @@ def ascon_hash256_bytes(msg: Array) -> Array:
         lo = fnp.broadcast_to(init[:, 0], (b, WORDS))
         hi = fnp.broadcast_to(init[:, 1], (b, WORDS))
         m = masks()
-        # Absorbing (§5.1): every 64-bit block XORs into S0 — column 0,
-        # patched by slice + concatenate so the other four words see no op
-        # (the `keccak._patch_lane_zero` spelling and its reasoning) — each
-        # block followed by the permutation. Algorithm 5 defers the last
-        # block's permutation to the squeeze; same schedule.
-        for i in range(padded.shape[-1] // _RATE):  # static, small
-            lo = fnp.concatenate([lo[:, :1] ^ words[:, i, :1], lo[:, 1:]], axis=-1)
-            hi = fnp.concatenate([hi[:, :1] ^ words[:, i, 1:], hi[:, 1:]], axis=-1)
-            lo, hi = permutation(lo, hi, m)
+
+        # Absorbing (§5.1): every 64-bit block XORs into S0 — column 0 of each
+        # half grid, patched by slice + concatenate so the other four words see
+        # no op (the `keccak._patch_lane_zero` spelling and its reasoning).
+        # Algorithm 5 defers the last block's permutation to the squeeze; same
+        # schedule.
+        #
+        # Spelled here rather than through `extension.sponge.merge_into_rate`,
+        # which is the same slice-and-concatenate and which the two Keccak sites
+        # do share. The two families emit it in opposite order: Keccak packs its
+        # block before merging, so the block's ops precede the state slice,
+        # while this one slices S0 first. A helper takes its block as an
+        # argument, so it can only have the one order — and moving either family
+        # to the other's would be a lowering change with no value behind it.
+        def absorb(state: _State, i: int) -> _State:
+            lo, hi = state
+            return (
+                fnp.concatenate([lo[:, :1] ^ words[:, i, :1], lo[:, 1:]], axis=-1),
+                fnp.concatenate([hi[:, :1] ^ words[:, i, 1:], hi[:, 1:]], axis=-1),
+            )
+
         # Squeezing (§5.1): H_0..H_3 read S0 with the permutation between
         # reads; H = H_0 ‖ H_1 ‖ H_2 ‖ H_3 (eq. 63), each word written back
-        # little-endian.
-        h = [lo[:, 0], hi[:, 0]]
-        for _ in range(3):
-            lo, hi = permutation(lo, hi, m)
-            h += [lo[:, 0], hi[:, 0]]
-        return unpack_le(fnp.stack(h, axis=-1))
+        # little-endian. The schedule owns "no permutation after the last
+        # read" — the rule this used to spell by peeling the first read out of
+        # the loop, and Keccak by guarding the permute.
+        squeezed = absorb_squeeze(
+            (lo, hi),
+            blocks=padded.shape[-1] // _RATE,
+            squeezes=squeeze_blocks(ASCON_HASH256_DIGEST_SIZE, _RATE),
+            absorb=absorb,
+            permute=lambda state: permutation(state[0], state[1], m),
+            read=lambda state: (state[0][:, 0], state[1][:, 0]),
+        )
+        return unpack_le(
+            fnp.stack([half for word in squeezed for half in word], axis=-1)
+        )
 
     return fused_region(
         decomposition,
         _INITIAL_STATEd,
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
         name=ASCON_HASH256_MARKER,
         version=ASCON_HASH256_MARKER_VERSION,
     )
@@ -219,7 +234,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash`
     seam: the padding is built from the static length and never reads the
-    message (`_padding_tail`), which is the same property `sha256.digest`
+    message (`_PAD`), which is the same property `sha256.digest`
     states.
     """
     msg = device_message(msg)

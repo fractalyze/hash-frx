@@ -1,10 +1,20 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """How a message becomes a whole number of blocks.
 
-Seven families in this package pad, and until now each padded with its own copy
-of the rule — `_padding_tail` was defined nine times across the tree, the seven
-here plus the two sponges, with six of the seven MD docstrings citing
-`sha256._padding_tail` as the arrangement they reproduce.
+Nine families in this package pad, and until now each padded with its own copy
+of the rule — `_padding_tail` was defined nine times across the tree, with six
+of the seven Merkle-Damgard docstrings citing `sha256._padding_tail` as the
+arrangement they reproduce.
+
+**Two rules, not one, and that split was measured rather than assumed.**
+Merkle-Damgard's `PadRule` and the sponges' `SpongePad` compute the same shape
+of thing — a never-empty fill to the next block boundary — and share three
+lines doing it. Folding the sponges into `PadRule` would need a `head` and a
+`final_bit` axis dead for all seven MD rows, while `reserve`, `big_endian` and
+`Trailer` stay dead for both sponge rows, which `pad_test`'s own axis doctrine
+forbids: each axis changes an outcome, or it is a parameter nobody needs. They
+are siblings here instead, which is where the shared three lines are cheap
+enough to spell twice and the dead axes cost nothing.
 
 **The rule is parameterized against all seven, not generalized from SHA-2.**
 That distinction is what #169 paid for by deferring the byte-sponge seam until a
@@ -137,3 +147,76 @@ def haifa_counter(
     """
     last = index == nblocks - 1
     return (length if last else (index + 1) * block_size), last
+
+
+@dataclass(frozen=True)
+class SpongePad:
+    """How a message becomes a whole number of sponge blocks: `pad10*1`.
+
+    rate      : bytes absorbed per permutation.
+    head      : the byte that opens the padding — a domain-separation suffix
+                with the padding's leading `1` packed into the next bit up
+                (FIPS 202 sections 5.1 and 6), or the bare `1` where the
+                standard defines no domain bits.
+    final_bit : whether the block's last byte also carries the padding's
+                trailing `1`. FIPS 202's `pad10*1` sets it; Ascon's pad
+                (SP 800-232 Algorithm 2) has no trailing bit at all, which is
+                the axis that keeps the two rules one dataclass rather than two.
+
+    The pad is never empty, so a rate-aligned message gains a whole padding
+    block — the standards' rule, and what makes the block count a function of
+    the length alone.
+
+    Host arithmetic over a message LENGTH and never its bytes, like `PadRule`
+    above: the tail is a host constant built *from* the length rather than
+    written *into* the message, which is what lets a `digest` take a traced
+    message.
+
+    Keccak spelled the size as `nblocks * rate - length` for
+    `nblocks = length // rate + 1` and Ascon as `rate - length % rate`; the two
+    reduce to each other, and this is the surviving spelling.
+    """
+
+    rate: int
+    head: int
+    final_bit: bool = True
+
+    def __post_init__(self) -> None:
+        if self.rate < 1:
+            raise ValueError(f"rate ({self.rate}) must be >= 1")
+        if not 0 <= self.head <= 0xFF:
+            raise ValueError(f"head ({self.head:#x}) must be a byte")
+        # Bit 7 belongs to `pad10*1`'s trailing 1 wherever there is one. A head
+        # that sets it would collide on a one-byte pad, where the two ends land
+        # on the same byte — and the two spellings of that byte (`|= 0x80` on a
+        # host tail, `^ 0x80` on a traced block) then disagree, which is a
+        # different digest rather than an error. No standard suffix uses it
+        # (SHA-3 0x06, SHAKE 0x1F, cSHAKE 0x04, Keccak 0x01), so it is rejected.
+        if self.final_bit and self.head >= 0x80:
+            raise ValueError(
+                f"head ({self.head:#x}) must be a byte below 0x80: bit 7 carries "
+                "pad10*1's trailing 1 (FIPS 202 section 5.1)"
+            )
+
+    def blocks(self, length: int) -> int:
+        """Padded blocks a `length`-byte message spans. Never zero: the pad is
+        never empty, so even the empty message absorbs one block."""
+        return length // self.rate + 1
+
+    # Memoized and handed out read-only for the reason `PadRule.tail` states:
+    # keying is by VALUE, so two rows with equal parameters share one entry and
+    # a caller writing through the array would change the other's padding.
+    @lru_cache(maxsize=None)
+    def tail(self, length: int) -> np.ndarray:
+        """The bytes appended to a `length`-byte message: uint8 [P].
+
+        `head ‖ 0x00* ‖ 0x80` where `final_bit`, else `head ‖ 0x00*`. When the
+        message ends one byte short of a block the two ends land on the same
+        byte and it becomes `head | 0x80`, which is the standard's single-byte
+        pad rather than a special case.
+        """
+        tail = np.zeros(self.rate - length % self.rate, dtype=np.uint8)
+        tail[0] = self.head
+        if self.final_bit:
+            tail[-1] |= 0x80
+        return _frozen(tail)

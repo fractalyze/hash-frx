@@ -44,6 +44,7 @@ which is the control-flow boundary the whole schedule exists to avoid.
 
 from __future__ import annotations
 
+import operator
 from dataclasses import dataclass
 from functools import partial
 
@@ -51,6 +52,7 @@ import frx.numpy as fnp
 from frx import Array, lax
 from frx.tree_util import register_dataclass
 
+from hash_frx.extension.sponge import merge_into_rate
 from hash_frx.keccak.byte_hashes import (
     SHAKE128_RATE,
     SHAKE256_RATE,
@@ -70,10 +72,12 @@ def _blocks_of(nbytes: int, rate: int) -> int:
 
 
 def _xor_block(state: Array, block: Array) -> Array:
-    """XOR a packed rate block into the state prefix — the unbatched sibling of
-    `sponge._xor_into_rate`, kept here because the streaming state is one row."""
-    n = block.shape[0]
-    return fnp.concatenate([state[:n] ^ block, state[n:]])
+    """XOR a packed rate block into the state prefix.
+
+    `extension.sponge.merge_into_rate` is rank-agnostic, so the unbatched state
+    this carries and the `[B, 50]` one `keccak.sponge` absorbs into go through
+    one spelling of the slice-and-concatenate."""
+    return merge_into_rate(state, block, operator.xor)
 
 
 def _absorb_block(state: Array, block_bytes: Array) -> Array:

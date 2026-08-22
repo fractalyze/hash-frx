@@ -37,17 +37,19 @@ reordering is needed here (`params.py`).
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache, partial
+from functools import partial
 
 import frx
 import frx.numpy as fnp
-import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import device_message, padded_batch
+from hash_frx.extension import sponge as sponge_ext
+from hash_frx.extension.pad import SpongePad
 from hash_frx.fusion import fused_region_over
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
@@ -91,40 +93,6 @@ def validate_sponge_params(rate: int, suffix: int) -> None:
         )
 
 
-@lru_cache(maxsize=None)
-def _padding_tail(length: int, rate: int, suffix: int) -> np.ndarray:
-    """What FIPS 202 section 5.1 appends to a `length`-byte message: uint8 [P].
-
-    `suffix ‖ 0x00* ‖ 0x80`, where `suffix` carries the domain separation of
-    section 6 (its low bits) and the `10*1` padding opens with the next bit up —
-    which is why the two arrive as one byte rather than two steps.
-
-    A function of the length alone, so it is a host constant built *from* the
-    length rather than written *into* the message. That is what keeps `msg` an
-    operand and lets it be traced, exactly as `sha256._padding_tail` does.
-
-    When the message ends one byte short of a block the two ends land on the same
-    byte and it becomes `suffix | 0x80`, which is the standard's single-byte pad
-    rather than a special case.
-    """
-    nblocks = length // rate + 1
-    tail = np.zeros(nblocks * rate - length, dtype=np.uint8)
-    tail[0] = suffix
-    tail[-1] |= 0x80
-    return tail
-
-
-def _xor_into_rate(state: Array, block: Array) -> Array:
-    """XOR a packed block into the rate prefix, leaving the capacity untouched.
-
-    Written as two static slices and a concatenate rather than `state.at[:n].set`:
-    an in-place update lowers to a scatter, which is a fusion boundary and — on a
-    GPU — one XLA serializes (`docs/reference/conventions.md`).
-    """
-    n = block.shape[-1]
-    return fnp.concatenate([state[:, :n] ^ block, state[:, n:]], axis=-1)
-
-
 def _absorb_squeeze(
     padded: Array,
     rate: int,
@@ -135,26 +103,30 @@ def _absorb_squeeze(
     the state and permute, then emit the rate prefix and permute again until
     `output_size` bytes are out.
 
+    The schedule is `extension.sponge.absorb_squeeze` — shared with Ascon, which
+    transcribed it. What stays here is what is actually Keccak's: the lane state,
+    the little-endian 4-byte packing, and the rate prefix being the contiguous
+    `state[:, :n]` that the halves-interleaved layout was chosen to make true
+    (`params.py`).
+
     Takes `permute` batched over the leading axis rather than reaching for the
     permutation itself, so the same body serves the plain path and the marked
     one — where the permute is rebuilt from the region's ABI operands.
 
-    The absorb's final permutation has already run when the squeeze starts, so
-    the first block is available before any further one. Blocks are collected as
-    elements and unpacked once rather than per block.
+    Blocks are collected as elements and unpacked once rather than per block.
     """
     n = rate // BYTES_PER_WORD
     state = fnp.zeros((padded.shape[0], KeccakF1600.width), dtype=U32)
-    for start in range(0, padded.shape[-1], rate):
-        block = pack_le(padded[:, start : start + rate])
-        state = permute(_xor_into_rate(state, block))
-
-    squeezes = -(-output_size // rate)
-    blocks = []
-    for i in range(squeezes):
-        blocks.append(state[:, :n])
-        if i + 1 < squeezes:
-            state = permute(state)
+    blocks = sponge_ext.absorb_squeeze(
+        state,
+        blocks=padded.shape[-1] // rate,
+        squeezes=sponge_ext.squeeze_blocks(output_size, rate),
+        absorb=lambda s, i: sponge_ext.merge_into_rate(
+            s, pack_le(padded[:, i * rate : (i + 1) * rate]), operator.xor
+        ),
+        permute=permute,
+        read=lambda s: s[:, :n],
+    )
     return unpack_le(fnp.concatenate(blocks, axis=-1))[:, :output_size]
 
 
@@ -242,9 +214,9 @@ class KeccakSponge:
         its own marked region and the XOR glue between them stays outside.
         """
         message = device_message(msg)
-        batch, length = message.shape
-        tail = _padding_tail(length, self.rate, self.suffix)
-        padded = padded_batch(message, fnp.asarray(tail))
+        _batch, length = message.shape
+        pad = SpongePad(rate=self.rate, head=self.suffix)
+        padded = padded_batch(message, fnp.asarray(pad.tail(length)))
 
         # Built per call rather than hoisted: the permutation reads the emitter
         # switch at construction, so a module-level instance would pin the
