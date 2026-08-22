@@ -1,0 +1,139 @@
+# Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
+"""How a message becomes a whole number of blocks.
+
+Seven families in this package pad, and until now each padded with its own copy
+of the rule — `_padding_tail` was defined nine times across the tree, the seven
+here plus the two sponges, with six of the seven MD docstrings citing
+`sha256._padding_tail` as the arrangement they reproduce.
+
+**The rule is parameterized against all seven, not generalized from SHA-2.**
+That distinction is what #169 paid for by deferring the byte-sponge seam until a
+second byte sponge existed: a surface shaped from one implementation encodes
+that implementation's accidents as if they were the family's. Reading all seven
+first is what surfaced these, and only the first would have survived a
+SHA-2-derived design:
+
+- the length field is **little**-endian in RIPEMD-160 and big-endian elsewhere;
+- SHA-512 reserves **16** bytes for a 128-bit length field while writing 8;
+- Grostl's trailer is the **block count**, not the bit length;
+- BLAKE2b/2s have no trailer and no 0x80 at all — HAIFA carries the length as a
+  counter into the compression, so their padding is a zero-fill to the block,
+  and `haifa_counter` below is the other half of that arrangement.
+
+Host arithmetic over a message LENGTH and never its bytes, so this module pulls
+no frx: it is what lets a padding rule be read, and tested, without a device.
+The schedule that feeds the padded blocks to a compression is `md.py`.
+"""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass
+from functools import lru_cache
+
+import numpy as np
+
+
+def _frozen(tail: np.ndarray) -> np.ndarray:
+    """Mark a memoized tail read-only before it is shared."""
+    tail.setflags(write=False)
+    return tail
+
+
+class Trailer(enum.Enum):
+    """What the last 8 bytes of the padding encode.
+
+    `NONE` is HAIFA: no strengthening bytes at all, because the length reaches
+    the compression as a counter operand instead of through the message.
+    """
+
+    BIT_LENGTH = "bit_length"  # SHA-2, RIPEMD-160, SM3
+    BLOCK_COUNT = "block_count"  # Grostl, which counts blocks rather than bits
+    NONE = "none"  # BLAKE2's HAIFA padding
+
+
+@dataclass(frozen=True)
+class PadRule:
+    """How a message becomes a whole number of blocks.
+
+    block_size : bytes per block.
+    trailer    : what the final 8 bytes encode, or `NONE` for HAIFA.
+    reserve    : bytes the length field must fit in when sizing the last block.
+                 8 everywhere except SHA-512, whose standard reserves 16 for a
+                 128-bit field it never fills past 64 bits.
+    big_endian : byte order of the trailer. RIPEMD-160 is the little-endian one.
+    """
+
+    block_size: int
+    trailer: Trailer
+    reserve: int = 8
+    big_endian: bool = True
+
+    def __post_init__(self) -> None:
+        if self.block_size <= 0 or self.block_size % 8:
+            raise ValueError(
+                f"block_size must be a positive multiple of 8, got {self.block_size}"
+            )
+        if self.trailer is not Trailer.NONE and self.reserve < 8:
+            raise ValueError(
+                f"a trailer needs at least 8 reserved bytes, got {self.reserve}"
+            )
+
+    # Memoized because all seven families memoized their own copy: a digest
+    # rebuilds the tail on every trace otherwise, and the rule is a frozen
+    # dataclass over four hashable fields, so keying on `self` is sound.
+    #
+    # That keying is by VALUE, which makes the sharing wider than it looks:
+    # SHA-256's rule and SM3's are equal, so they share one entry. The array is
+    # therefore handed out read-only — a caller that wrote through it would
+    # change another family's padding, silently and everywhere after.
+    @lru_cache(maxsize=None)
+    def tail(self, length: int) -> np.ndarray:
+        """The bytes appended to a `length`-byte message, built from the length
+        alone.
+
+        Data-independent by construction, which is what lets `digest` take a
+        traced message: the tail is a host constant threaded through the marked
+        region as an operand, never something read off the message.
+        """
+        if self.trailer is Trailer.NONE:
+            # HAIFA: zero-fill to a block, and a whole empty block for the empty
+            # message, since the compression still has to run once.
+            if length == 0:
+                return _frozen(np.zeros(self.block_size, dtype=np.uint8))
+            return _frozen(np.zeros(-length % self.block_size, dtype=np.uint8))
+
+        nblocks = (length + self.reserve) // self.block_size + 1
+        tail = np.zeros(nblocks * self.block_size - length, dtype=np.uint8)
+        tail[0] = 0x80
+        value = length * 8 if self.trailer is Trailer.BIT_LENGTH else nblocks
+        encoded = (
+            int(value).to_bytes(8, "big")
+            if self.big_endian
+            else int(value).to_bytes(8, "little")
+        )
+        tail[-8:] = np.frombuffer(encoded, dtype=np.uint8)
+        return _frozen(tail)
+
+
+def haifa_counter(
+    index: int, nblocks: int, length: int, block_size: int
+) -> tuple[int, bool]:
+    """BLAKE2's per-block `(t, last)`: bytes hashed through the end of block
+    `index`, and whether it is the final one.
+
+    HAIFA is Merkle-Damgard with the length fed to the compression rather than
+    into the message, which is why these rows pad with a bare zero fill
+    (`Trailer.NONE`) — and why the count here is the TRUE message length on the
+    final block rather than the padded one. RFC 7693 §3.2 counts a full block
+    per interior block; §3.3 has the final block report the real length, so the
+    zero pad is never counted. Getting that wrong is a wrong digest on exactly
+    the messages whose length is not a block multiple.
+
+    Shared by BLAKE2b and BLAKE2s, whose copies were identical down to the
+    comment. Not folded into a general bytes-in chain: measured across the four
+    bytes-in families, such a helper would share three lines out of forty to
+    fifty-six and need five callbacks to do it, so the loop stays where it reads.
+    """
+    last = index == nblocks - 1
+    return (length if last else (index + 1) * block_size), last

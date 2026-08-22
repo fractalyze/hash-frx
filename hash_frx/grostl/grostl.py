@@ -23,13 +23,13 @@ reaches the body (`_sbox` carries the circuit's provenance).
 Contract: `digest(msg)` takes uint8 `[B, L]` and returns uint8 `[B, 32]`
 digests (the trailing-256-bit truncation of Ω, spec section 3.3). Length `L`
 is static, so the padding is data-independent: a host tail built from the
-length alone (`_padding_tail`), concatenated on — which is what lets `msg`
+length alone (`_PAD`), concatenated on — which is what lets `msg`
 itself be traced. Requires no x64; everything is uint8.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -38,7 +38,8 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
+from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import roll
 
@@ -109,25 +110,9 @@ _IVd = fnp.asarray(_IV)
 _RC_Pd = fnp.asarray(_RC_P)
 _RC_Qd = fnp.asarray(_RC_Q)
 
-
-@lru_cache(maxsize=None)
-def _padding_tail(length: int) -> np.ndarray:
-    """What §3.6 appends to a `length`-byte message: uint8 [P].
-
-    `0x80 ‖ 0x00* ‖ toByte(t, 8)` where `t` is the 512-bit **block count of
-    the padded message** — (N + w + 65)/ℓ in the spec's bit-level terms, NOT
-    the bit length a SHA-2-shaped reading expects. Every term is a function of
-    the length alone, so the tail is a host constant built *from the length*
-    rather than written *into the message* — which is what lets `digest` take
-    a traced message (the `sha256._padding_tail` arrangement).
-
-    Shared by the whole batch, since one call hashes messages of one length.
-    """
-    nblocks = (length + 8) // _BLOCK + 1  # room for the 0x80 byte + the count
-    tail = np.zeros(nblocks * _BLOCK - length, dtype=np.uint8)
-    tail[0] = 0x80
-    tail[-8:] = np.frombuffer(np.uint64(nblocks).byteswap().tobytes(), dtype=np.uint8)
-    return tail
+# How this family pads, as the axes `extension/md.py` names.
+# Grøstl v2.0.1 §3.1 — the trailer counts BLOCKS, not bits.
+_PAD = PadRule(64, Trailer.BLOCK_COUNT)
 
 
 def _to_state(block: Array) -> Array:
@@ -422,9 +407,7 @@ def grostl256_bytes(msg: Array) -> Array:
         iv: Array, rc_p: Array, rc_q: Array, msg: Array, tail: Array, **_attrs: object
     ) -> Array:
         b = msg.shape[0]
-        padded = fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
-        )
+        padded = padded_batch(msg, tail)
         h = fnp.broadcast_to(iv, (b, _BLOCK))
         for i in range(padded.shape[-1] // _BLOCK):  # static, small
             h = _compress(h, padded[:, i * _BLOCK : (i + 1) * _BLOCK], rc_p, rc_q)
@@ -438,7 +421,7 @@ def grostl256_bytes(msg: Array) -> Array:
         _RC_Pd,
         _RC_Qd,
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
         name=GROSTL256_MARKER,
         version=GROSTL256_MARKER_VERSION,
     )
@@ -455,7 +438,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash` seam:
     the padding is built from the static length and never reads the message
-    (`_padding_tail`), which is the same property `sha256.digest` states.
+    (`_PAD`), which is the same property `sha256.digest` states.
     """
     msg = device_message(msg)
     return grostl256_bytes(msg)

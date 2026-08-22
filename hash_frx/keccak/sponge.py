@@ -47,7 +47,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import device_message
+from hash_frx.byte_hash import device_message, padded_batch
 from hash_frx.fusion import fused_region_over
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
@@ -244,10 +244,7 @@ class KeccakSponge:
         message = device_message(msg)
         batch, length = message.shape
         tail = _padding_tail(length, self.rate, self.suffix)
-        padded = fnp.concatenate(
-            [message, fnp.broadcast_to(fnp.asarray(tail), (batch, tail.shape[0]))],
-            axis=-1,
-        )
+        padded = padded_batch(message, fnp.asarray(tail))
 
         # Built per call rather than hoisted: the permutation reads the emitter
         # switch at construction, so a module-level instance would pin the

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -30,7 +30,15 @@ from frx import Array
 from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.byte_hash import (
+    DeviceRow,
+    HostRow,
+    device_message,
+    host_digest,
+    padded_batch,
+)
+from hash_frx.extension.md import MdStream, chain
+from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
 
@@ -176,25 +184,9 @@ _H0 = np.array(
 
 _Kd = fnp.asarray(_K)
 
-
-@lru_cache(maxsize=None)
-def _padding_tail(length: int) -> np.ndarray:
-    """What FIPS 180-4 §5.1.1 appends to a `length`-byte message: uint8 [P].
-
-    `0x80 ‖ 0x00* ‖ toByte(8·length, 8)`, and every term is a function of the
-    length alone. So the tail is a host constant built *from the length* rather
-    than written *into the message* — which is what lets `digest` take a traced
-    message: the padding never has to read one.
-
-    Shared by the whole batch, since one call hashes messages of one length.
-    """
-    nblocks = (length + 8) // 64 + 1  # room for the 0x80 byte + 8-byte length
-    tail = np.zeros(nblocks * 64 - length, dtype=np.uint8)
-    tail[0] = 0x80
-    tail[-8:] = np.frombuffer(
-        np.uint64(length * 8).byteswap().tobytes(), dtype=np.uint8
-    )
-    return tail
+# How this family pads, as the axes `extension/md.py` names.
+# FIPS 180-4 §5.1.1.
+_PAD = PadRule(64, Trailer.BIT_LENGTH)
 
 
 def _compress(state: Array, w16: Array, k: Array) -> Array:
@@ -261,12 +253,8 @@ def _padded_words(msg: Array, tail: Array | None = None) -> Array:
     so its marked region captures nothing.
     """
     if tail is None:
-        tail = fnp.asarray(_padding_tail(msg.shape[-1]))
-    return block_to_words(
-        fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
-        )
-    )
+        tail = fnp.asarray(_PAD.tail(msg.shape[-1]))
+    return block_to_words(padded_batch(msg, tail))
 
 
 def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array:
@@ -320,17 +308,13 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     all three (rather than capturing `_Kd`) keeps that order — a captured
     constant would prepend and land at operand 0."""
 
-    def decomposition(h0: Array, k: Array, blocks: Array, **_attrs: object) -> Array:
-        state = fnp.broadcast_to(h0, (blocks.shape[0], 8))
-        return serialize_digest(compress(state, blocks, k))
-
-    return fused_region(
-        decomposition,
+    return chain(
         h0,
-        _Kd,
         blocks,
-        name=SHA256_MARKER,
-        version=SHA256_MARKER_VERSION,
+        constants=_Kd,
+        compress_block=_compress,
+        serialize=serialize_digest,
+        marker=(SHA256_MARKER, SHA256_MARKER_VERSION),
     )
 
 
@@ -353,7 +337,7 @@ def sha256_bytes(msg: Array) -> Array:
     than at `L`, so the streaming path stays on the blocks marker.
 
     Operands are explicit in the recognizer's positional ABI order
-    [h0, k, msg, tail]. `tail` is `_padding_tail(L)` passed as an operand
+    [h0, k, msg, tail]. `tail` is `_PAD.tail(L)` passed as an operand
     rather than captured (a captured constant would prepend at operand 0);
     it is derivable from the static L — a recognizing emitter reads it
     rather than re-deriving it — and load-bearing for the inlined
@@ -370,7 +354,7 @@ def sha256_bytes(msg: Array) -> Array:
         INITIAL_STATE,
         _Kd,
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
         name=SHA256_BYTES_MARKER,
         version=SHA256_BYTES_MARKER_VERSION,
     )
@@ -452,53 +436,8 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     the new pending block. The block loop is a Python-unrolled, active-count-masked
     schedule over STATIC slices (never a traced-index gather / scan-carry scatter)
     — the CPU-safe pattern `transcript.DuplexTranscript` uses."""
-    length = data.shape[0]
-    pl = state.pending_len
-    combined_src = fnp.concatenate([state.pending, data.astype(fnp.uint8)])  # [64+L]
-    new_len = pl + fnp.int32(length)
-    active_blocks = new_len // _BLOCK
-    max_blocks = (_BLOCK - 1 + length) // _BLOCK  # static upper bound
 
-    # Drop the pending buffer's invalid gap [pending_len:64] from the stream: for
-    # stream position j, source index is j while j < pending_len, else shifted to
-    # skip past the gap.
-    total_slots = (max_blocks + 1) * _BLOCK
-    pos = fnp.arange(total_slots, dtype=fnp.int32)
-    src_idx = pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl)
-    src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
-    combined = combined_src[src_idx]  # [total_slots], valid prefix [0:new_len]
-
-    # Fold the newly-complete blocks through the marked chain. The live block
-    # count depends on pending_len by AT MOST one — (pl + L) // 64 spans
-    # {L // 64, (63 + L) // 64} — so run the chain at both static candidate
-    # counts and select; the discarded candidate is the only one that ever sees
-    # the gap-shifted junk tail block.
-    h = state.h
-    min_blocks = length // _BLOCK
-    if max_blocks == 0:
-        h_new = h
-    else:
-        words = block_to_words(
-            combined[: max_blocks * _BLOCK].reshape(1, max_blocks * _BLOCK)
-        )  # [1, max_blocks, 16]
-        h_hi = deserialize_digest(sha256_merkle_damgard(h, words))[0]
-        if min_blocks == max_blocks:
-            h_new = h_hi
-        else:
-            h_lo = (
-                deserialize_digest(sha256_merkle_damgard(h, words[:, :min_blocks]))[0]
-                if min_blocks > 0
-                else h
-            )
-            h_new = fnp.where(active_blocks == max_blocks, h_hi, h_lo)
-
-    tail_len = new_len - active_blocks * _BLOCK
-    tail = frx.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
-    slot = fnp.arange(_BLOCK, dtype=fnp.int32)
-    pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
-    # One fused counter update: [pending_len', total_len'] = [tail_len, total+L].
-    counts = fnp.stack([tail_len, state.counts[1] + fnp.int32(length)])
-    return Sha256State(h_new, pending, counts)
+    return _STREAM.absorb(state, data)
 
 
 def _length_field(msg_bytes: Array) -> Array:
@@ -512,6 +451,19 @@ def _length_field(msg_bytes: Array) -> Array:
     """
     count = msg_bytes.astype(fnp.uint32)
     return unpack_be(fnp.stack([count >> fnp.uint32(29), count << fnp.uint32(3)]))
+
+
+# The incremental schedule, with this family's pieces plugged in. `chain` is
+# the same marked region `digest` runs, so the streaming path and the batch
+# digest go through ONE marker rather than two.
+_STREAM = MdStream(
+    pad=_PAD,
+    block_to_words=block_to_words,
+    deserialize=deserialize_digest,
+    chain=sha256_merkle_damgard,
+    make_state=Sha256State,
+    length_field=_length_field,
+)
 
 
 def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
@@ -536,49 +488,8 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     lengths encode alike. Far below FIPS 180-4's 2^61 bytes, and widening the
     counter rides the batch-polymorphic state rework on the redesign epic.
     """
-    batch, e = extras.shape
-    if e > _BLOCK - 8:
-        raise ValueError(
-            f"extras width ({e}) must be <= {_BLOCK - 8}: pending_len is runtime "
-            "data, so a wider tail cannot be guaranteed to fit the two-block "
-            "finalize layout at every offset — absorb the prefix instead"
-        )
-    pl = state.pending_len
-    content_len = pl + fnp.int32(e)
-    msg_bytes = state.total_len + fnp.int32(e)
-    len_bytes = _length_field(msg_bytes)  # [8] big-endian
 
-    two_blocks = content_len > fnp.int32(55)  # need a 2nd block for pad + length?
-    active_bytes = fnp.where(two_blocks, fnp.int32(128), fnp.int32(64))
-
-    pos = fnp.arange(128, dtype=fnp.int32)
-    # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:64].
-    combined_src = fnp.concatenate(
-        [fnp.broadcast_to(state.pending, (batch, _BLOCK)), extras.astype(fnp.uint8)],
-        axis=1,
-    )  # [B, 64+E]
-    src_idx = fnp.clip(
-        pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl), 0, _BLOCK + e - 1
-    )
-    content = combined_src[:, src_idx]  # [B, 128]
-
-    is_content = (pos < content_len)[None, :]
-    is_pad80 = (pos == content_len)[None, :]
-    len_start = active_bytes - fnp.int32(8)
-    is_len = ((pos >= len_start) & (pos < active_bytes))[None, :]
-    len_val = len_bytes[fnp.clip(pos - len_start, 0, 7)][None, :]
-    region = fnp.where(
-        is_content,
-        content,
-        fnp.where(is_pad80, fnp.uint8(0x80), fnp.where(is_len, len_val, fnp.uint8(0))),
-    )  # [B, 128]
-
-    # Both finalize shapes ride the marked chain from the shared midstate; the
-    # 1-vs-2-block choice is data-dependent, so emit both and select.
-    words = block_to_words(region)  # [B, 2, 16]
-    d2 = sha256_merkle_damgard(state.h, words)
-    d1 = sha256_merkle_damgard(state.h, words[:, :1])
-    return fnp.where(two_blocks, d2, d1)
+    return _STREAM.finalize(state, extras)
 
 
 # ---------------------------------------------------------------------------

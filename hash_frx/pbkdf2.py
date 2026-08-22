@@ -102,7 +102,7 @@ _MIDSTATE_PROFILES: dict[type, _MidstateProfile] = {
         sha256.compress,
         sha256.block_to_words,
         sha256.serialize_digest,
-        sha256._padding_tail,
+        sha256._PAD.tail,
         block_size=64,
     ),
     sha512.Sha512: _MidstateProfile(
@@ -110,7 +110,7 @@ _MIDSTATE_PROFILES: dict[type, _MidstateProfile] = {
         sha512.compress,
         sha512.block_to_words,
         sha512.serialize_digest,
-        sha512._padding_tail,
+        sha512._PAD.tail,
         block_size=128,
     ),
 }

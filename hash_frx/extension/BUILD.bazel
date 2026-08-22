@@ -1,0 +1,32 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# How a message becomes whole blocks. Host arithmetic over a message LENGTH and
+# never its bytes, so this carries numpy and nothing else — seven families need
+# the padding rule and four of them need nothing else from `extension/`, so
+# making them take frx to get it was 536 MB of runfiles for a host `np.zeros`.
+py_library(
+    name = "pad",
+    srcs = [
+        "__init__.py",
+        "pad.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [requirement("numpy")],
+)
+
+# The schedules that feed the padded blocks to a compression: the one-shot
+# marked region and the incremental midstate. Device code, hence frx.
+py_library(
+    name = "md",
+    srcs = [
+        "__init__.py",
+        "md.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":pad",
+        "//hash_frx:fusion",
+        requirement("frx"),
+    ],
+)

@@ -37,7 +37,7 @@ independently through the shared schedule.
 
 Contract: `digest(msg, digest_size)` takes uint8 `[B, L]` and returns uint8
 `[B, digest_size]` little-endian digests (RFC 7693 §3.3). `L` is static, so
-the zero pad is data-independent (`_padding_tail`), which is what lets `msg`
+the zero pad is data-independent (`_PAD`), which is what lets `msg`
 itself be traced. `digest_size` is 1..32 and rides the VALUE surface — RFC
 7693 folds it into the initial state through the parameter block, so
 `Blake2s(digest_size=16)` is a different hash from `Blake2s(32)`, not one
@@ -62,7 +62,14 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.byte_hash import (
+    DeviceRow,
+    HostRow,
+    device_message,
+    host_digest,
+    padded_batch,
+)
+from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, rotr, unpack_le
 
@@ -176,20 +183,9 @@ def _initial_state(digest_size: int) -> np.ndarray:
     return out
 
 
-@lru_cache(maxsize=None)
-def _padding_tail(length: int) -> np.ndarray:
-    """What RFC 7693 §3.3 appends to a `length`-byte message: uint8 [P] of
-    zeros, P = (−length) mod 64 — the final block zero-padded to the block
-    boundary, plus the special case that an unkeyed empty message still
-    processes one all-zero block (dd = 1). No 0x80 marker and no length
-    field: the length enters through the `t` counter instead (HAIFA), which
-    is what makes the tail all zeros — and empty at a block multiple, where
-    the operand rides zero-length. A function of the static length alone, so
-    `digest` can take a traced message (the `sha256._padding_tail`
-    arrangement)."""
-    if length == 0:
-        return np.zeros(_BLOCK, dtype=np.uint8)
-    return np.zeros((-length) % _BLOCK, dtype=np.uint8)
+# How this family pads, as the axes `extension/md.py` names.
+# RFC 7693 §3.3 — HAIFA, so the length rides the counter and the padding is a zero fill.
+_PAD = PadRule(64, Trailer.NONE)
 
 
 def _fold_counter(row: Array, t_lo: int, t_hi: int, ff: int) -> Array:
@@ -348,9 +344,7 @@ def blake2s_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         h0: Array, iv: Array, msg: Array, tail: Array, **_attrs: object
     ) -> Array:
         b, ll = msg.shape
-        padded = fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
-        )
+        padded = padded_batch(msg, tail)
         words = pack_le(
             padded.reshape(b, padded.shape[-1] // _BLOCK, _BLOCK)
         )  # [B, nblocks, 16]
@@ -358,11 +352,7 @@ def blake2s_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         iv_a, iv_b = iv[0:4], iv[4:8]
         nblocks = words.shape[1]
         for i in range(nblocks):  # static, small
-            last = i == nblocks - 1
-            # t = bytes hashed through the end of this block (§3.2): a full
-            # block's worth per interior block, the true length on the final
-            # one (§3.3) — the zero pad is never counted.
-            t = ll if last else (i + 1) * _BLOCK
+            t, last = haifa_counter(i, nblocks, ll, _BLOCK)
             state = _compress(state, iv_a, iv_b, words[:, i], t, last)
         return unpack_le(state)  # little-endian serialization: [B, 32]
 
@@ -389,14 +379,14 @@ def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash`
     seam: the zero pad is built from the static length and never reads the
-    message (`_padding_tail`), which is the same property `sha256.digest`
+    message (`_PAD`), which is the same property `sha256.digest`
     states.
     """
     msg = device_message(msg)
     full = blake2s_bytes(
         fnp.asarray(_initial_state(digest_size)),
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
     )
     return full[:, :digest_size]
 

@@ -1,0 +1,19 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_test")
+
+# Vectors read off the seven hand-written `_padding_tail` functions before they
+# were deleted, plus one case per `PadRule` axis. Deps `:pad` rather than `:md`,
+# which is the point of the split: the padding is host arithmetic, so this test
+# needs neither frx nor a device, and taking them would have cost 536 MB of
+# runfiles — above the GPU-plugin figure `defs.bzl` calls too expensive to
+# attach reflexively.
+py_test(
+    name = "pad_test",
+    size = "small",
+    srcs = ["pad_test.py"],
+    deps = [
+        "//hash_frx/extension:pad",
+        requirement("absl_py"),
+        requirement("numpy"),
+    ],
+)

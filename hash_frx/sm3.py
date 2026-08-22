@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -42,8 +42,16 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
-from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.byte_hash import (
+    DeviceRow,
+    HostRow,
+    device_message,
+    host_digest,
+    padded_batch,
+)
+from hash_frx.extension.md import chain
+from hash_frx.extension.pad import PadRule, Trailer
+from hash_frx.fusion import FusionPath, routing
 from hash_frx.word import pack_be, rotl, unpack_be
 
 if TYPE_CHECKING:
@@ -129,27 +137,9 @@ _Td = fnp.asarray(_T)
 # accepts backend initialization at import, as its named sibling does).
 INITIAL_STATE = fnp.asarray(_H0)  # uint32 [8]
 
-
-@lru_cache(maxsize=None)
-def _padding_tail(length: int) -> np.ndarray:
-    """What GB/T 32905 §5.2 appends to a `length`-byte message: uint8 [P].
-
-    `0x80 ‖ 0x00* ‖ toByte(8·length, 8)`, padding to 64-byte blocks —
-    byte-for-byte FIPS 180-4 §5.1.1's rule, i.e. `sha256._padding_tail`
-    exactly, restated because the two standards happen to agree rather than
-    because one defers to the other. Every term is a function of the length
-    alone, so the tail is a host constant built *from the length* rather than
-    written *into the message* — what lets `digest` take a traced message.
-
-    Shared by the whole batch, since one call hashes messages of one length.
-    """
-    nblocks = (length + 8) // _BLOCK + 1  # room for the 0x80 byte + the length
-    tail = np.zeros(nblocks * _BLOCK - length, dtype=np.uint8)
-    tail[0] = 0x80
-    tail[-8:] = np.frombuffer(
-        np.uint64(length * 8).byteswap().tobytes(), dtype=np.uint8
-    )
-    return tail
+# How this family pads, as the axes `extension/md.py` names.
+# GB/T 32905 §4.2, byte-for-byte FIPS 180-4 §5.1.1's rule.
+_PAD = PadRule(64, Trailer.BIT_LENGTH)
 
 
 def _p0(x: Array) -> Array:
@@ -242,12 +232,8 @@ def _padded_words(msg: Array) -> Array:
     """A uint8 [B, L] batch padded and packed: uint32 [B, nblocks, 16]. A
     concatenation and a reshape, so it holds a tracer as readily as a
     concrete array (the `sha256._padded_words` arrangement)."""
-    tail = fnp.asarray(_padding_tail(msg.shape[-1]))
-    return block_to_words(
-        fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
-        )
-    )
+    tail = fnp.asarray(_PAD.tail(msg.shape[-1]))
+    return block_to_words(padded_batch(msg, tail))
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
@@ -281,20 +267,13 @@ def sm3_merkle_damgard(h0: Array, blocks: Array) -> Array:
     captured constant would prepend and land at operand 0
     (docs/reference/conventions.md's operand-ABI rule)."""
 
-    def decomposition(h0: Array, t: Array, blocks: Array, **_attrs: object) -> Array:
-        state = fnp.broadcast_to(h0, (blocks.shape[0], 8))
-        nblocks = blocks.shape[1]
-        for i in range(nblocks):  # static, small
-            state = _compress(state, blocks[:, i], t)
-        return unpack_be(state)  # big-endian serialization: [B, 32]
-
-    return fused_region(
-        decomposition,
+    return chain(
         h0,
-        _Td,
         blocks,
-        name=SM3_MARKER,
-        version=SM3_MARKER_VERSION,
+        constants=_Td,
+        compress_block=_compress,
+        serialize=unpack_be,
+        marker=(SM3_MARKER, SM3_MARKER_VERSION),
     )
 
 
@@ -308,7 +287,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash`
     seam: the padding is built from the static length and never reads the
-    message (`_padding_tail`), the same property `sha256.digest` states.
+    message (`_PAD`), the same property `sha256.digest` states.
     """
     msg = device_message(msg)
     return sm3_merkle_damgard(INITIAL_STATE, _padded_words(msg))

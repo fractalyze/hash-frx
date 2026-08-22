@@ -51,7 +51,7 @@ import numpy as np
 from frx import Array, lax
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import rotr64
@@ -296,9 +296,7 @@ def ascon_hash256_bytes(msg: Array) -> Array:
 
     def decomposition(init: Array, msg: Array, tail: Array, **_attrs: object) -> Array:
         b = msg.shape[0]
-        padded = fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
-        )
+        padded = padded_batch(msg, tail)
         # Blocks as (lo, hi) uint32 pairs, packed little-endian (§A.1):
         # [B, nblocks, 2], [..., 0] the low half.
         words = pack_le(padded.reshape(b, padded.shape[-1] // _RATE, _RATE))

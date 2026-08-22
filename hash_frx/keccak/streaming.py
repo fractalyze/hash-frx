@@ -137,6 +137,9 @@ class ShakeAbsorb:
         # One pass to the upper bound. `active` is `min_blocks` or `max_blocks`
         # and nothing else, and the `min_blocks` answer is the state partway
         # through this chain — so snapshot it rather than folding twice.
+        # `extension.md.MdStream.absorb` runs the same schedule over a
+        # compression function and reaches the same result a different way
+        # (chain the prefix, then continue); the two are worth reading together.
         state = self.state
         lower = state
         for i in range(max_blocks):

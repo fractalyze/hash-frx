@@ -17,6 +17,7 @@ py_library(
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx:word",
+        "//hash_frx/extension:pad",
         requirement("frx"),
         requirement("numpy"),
     ],
