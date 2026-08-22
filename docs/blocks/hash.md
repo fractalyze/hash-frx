@@ -32,13 +32,16 @@ several independent axes, and one config object holding two of them is not reuse
 sibling: `digest(uint8[B, L]) -> uint8[B, digest_size]`, byte-identical to the
 hash's standard. A consumer reads `digest_size` and calls `digest`.
 
-There is deliberately no byte-side `Sponge` seam. The one byte sponge in the
-package ([`keccak/sponge.py`](../../hash_frx/keccak/sponge.py)) stays
-Keccak-bound: a surface generalized from a single implementation encodes that
-implementation's accidents as the family's, so the generalization waits until
-a second byte sponge (Ascon) exists to shape it against — and nothing queued
-before then needs it (Vision rides the field `Sponge`; BLAKE2b and Grøstl are
-plain `ByteHash` rows).
+There is not yet a byte-side `Sponge` seam. The one was deliberately deferred —
+a surface generalized from a single implementation encodes that implementation's
+accidents as the family's — until a second byte sponge existed to shape it
+against. Ascon ([`ascon/`](../../hash_frx/ascon)) is that second sponge, so the
+condition is met and the generalization is the open work item, not the wait:
+[`keccak/sponge.py`](../../hash_frx/keccak/sponge.py) and
+[`ascon/ascon.py`](../../hash_frx/ascon/ascon.py) currently carry the same
+schedule (pad, pack, XOR into the rate, permute, squeeze the prefix) with the
+pad rule, the initial state and the state layout as the family-specific
+residue.
 
 The split is load-bearing because the two have no common surface below `digest`.
 A byte hash's internal construction differs per family — Merkle–Damgård chains a
@@ -99,21 +102,26 @@ The cost of an unfused streaming call is real and worth stating so nobody
 re-derives it. Because the padding choice is data-dependent, both
 `sha256_stream_absorb` and `sha256_stream_finalize` compress every candidate
 block count and select, so an absorb followed by a finalize emits **3**
-composites and roughly 818 StableHLO ops of glue. The sponge side pays the same
-way: at SHAKE128's rate, `absorb` and `finalize` are one marked Keccak-f each and
-`squeeze(168 B)` — a sampler's whole loop body — is **two**.
+composites and roughly 818 StableHLO ops of glue at a message inside one block —
+a longer absorb adds a candidate and its composite (a 70-byte one is 4).
 
 Two independent costs hide in that count, and only one of them is a marker's to
 remove. A marker removes the launch overhead *around* the work; it does not
-remove work the schedule speculates. `squeeze(n)` emits
-`ceil((rate - 1 + n) / rate)` permutations because `offset` is traced, so a
-whole-block squeeze runs two permutations where one would do, and a kernel handed
-a traced offset still computes both candidates and selects. That half is a type's
-to remove instead: a squeezer restricted to whole rate blocks holds the offset
-statically at zero, so the output is the rate prefix and the next state is one
-permutation, with no `dynamic_slice` and no chain-select. The structural half is
-the one to measure first — a marker judged against a 2x handicap flatters
-itself.
+remove work the schedule speculates: a kernel handed a traced offset still
+computes both candidates and selects. On the sponge side, that speculation is
+what a whole-block squeezer removes — it holds the offset statically at zero, so
+the output is the rate prefix with no `dynamic_slice` and no chain-select over
+the carried state.
+
+What it does *not* remove is a permutation, and the earlier claim that it did
+was an off-by-one rather than a property of the traced offset. `squeeze(n)`
+sized its permutation chain by the block count its *byte* stream needs,
+`ceil((rate - 1 + n) / rate)`, but the carried state can only reach
+`floor((rate - 1 + n) / rate)` — the trailing permute was live only at
+`n ≡ 1 (mod rate)`. Corrected, a whole-block squeeze is one permutation with the
+offset still traced. So the structural half is smaller than it looked, and the
+lesson stands in a different form: measure the schedule before crediting the
+marker, and check that the schedule is the one you think it is.
 
 ## Two implementations of one standard
 

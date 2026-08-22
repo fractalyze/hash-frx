@@ -41,11 +41,11 @@ does not move — only `stack_len` does, which is what the state's invariance
 needs.
 
 **The marked region here is the compression, not the hash.** The
-`hash_frx.blake3` composite spans a whole hash — chunks, tree and root output —
+`hash_frx.digest.blake3` composite spans a whole hash — chunks, tree and root output —
 which is exactly what a resumable state does not hold, so it cannot serve this
 path. What a resumable state does repeat is the compression, the way a sponge
 repeats its permutation and a streaming SHAKE rides that marker on every block.
-So `_compress1` carries `hash_frx.blake3_compress`, and the three hops that
+So `_compress1` carries `hash_frx.compress.blake3`, and the three hops that
 finish one node ride it: the absorb path's block, the subtree merge, and
 finalize's stack fold. The two traced counts above stay outside it.
 
@@ -104,8 +104,8 @@ def _compress1(
     Marked here rather than in `compress`: a stream repeats this compression the
     way a sponge repeats its permutation, so this is the region a streaming
     consumer needs, while marking `compress` itself would nest a composite
-    inside `hash_frx.blake3` and `hash_frx.blake3_parent`, whose emitters read a
-    plain body.
+    inside `hash_frx.digest.blake3` and `hash_frx.compress.blake3_parent`,
+    whose emitters read a plain body.
 
     Name-routed, not generic. The generic rewriter declines a body with no
     live-width operand — it would otherwise route to a LoopFusion whose indexed

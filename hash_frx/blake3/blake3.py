@@ -73,7 +73,7 @@ from hash_frx.word import pack_le, unpack_le
 U32 = fnp.uint32
 
 BLAKE3_MARKER = "hash_frx.digest.blake3"
-# Marker revision riding as `composite.version`, the way `hash_frx.sha256`
+# Marker revision riding as `composite.version`, the way `hash_frx.digest.sha256`
 # carries one: a contract change stages through it rather than through a rename,
 # which the recognizer would not accept and which would silently lose fusion.
 BLAKE3_MARKER_VERSION = 1
@@ -81,7 +81,7 @@ BLAKE3_MARKER_VERSION = 1
 # A Merkle parent is a different construction, so it takes a name of its own
 # rather than an attribute on the one above.
 #
-# The pull to reuse `hash_frx.blake3` is real — the operands have the same
+# The pull to reuse `hash_frx.digest.blake3` is real — the operands have the same
 # shapes, and `non_root` is precedent for selecting a variant by attribute. It
 # is wrong, and silently: a recognizer matches by NAME, so a shipped emitter
 # that predates the attribute recognizes the marker anyway, ignores what it
@@ -96,13 +96,13 @@ BLAKE3_PARENT_MARKER = "hash_frx.compress.blake3_parent"
 BLAKE3_PARENT_MARKER_VERSION = 1
 
 # The compression on its own, for the one consumer the two markers above cannot
-# reach: a resumable state. `hash_frx.blake3` spans chunks, tree and root
+# reach: a resumable state. `hash_frx.digest.blake3` spans chunks, tree and root
 # output, so a stream — which holds a chunk CV, a subtree stack, a counter and a
 # partial block, and is mid-tree by definition — can never be a call of it.
 # SHA-256 needs no equivalent because its whole resumable state is one chaining
-# value, which `hash_frx.sha256` already takes as an operand; a sponge needs
+# value, which `hash_frx.digest.sha256` already takes as an operand; a sponge needs
 # none because its state *is* the permutation's, so streaming rides
-# `hash_frx.keccak_f`. BLAKE3 is the only row here whose existing marker
+# `hash_frx.perm.keccak_f`. BLAKE3 is the only row here whose existing marker
 # granularity a streaming consumer cannot hit, which is what this closes.
 BLAKE3_COMPRESS_MARKER = "hash_frx.compress.blake3"
 BLAKE3_COMPRESS_MARKER_VERSION = 1
@@ -772,7 +772,7 @@ def unmarked_hash(msg: ArrayLike, mode: Mode, out_len: int) -> Array:
     """A whole BLAKE3 hash with no marker on it: uint8 `[B, L]` -> `[B, out_len]`.
 
     The tree and its root output, which is the entire hash — every mode, every
-    length. `tree_hash` is this under the `hash_frx.blake3` composite, and an
+    length. `tree_hash` is this under the `hash_frx.digest.blake3` composite, and an
     unrecognized composite inlines to exactly this, so the two are one
     implementation rather than two spellings that could drift.
 
@@ -853,14 +853,14 @@ def tree_hash(
     msg: Array, key_words: Array, *, out_len: int, flags: int, non_root: bool = False
 ) -> Array:
     """A whole BLAKE3 hash — chunks, tree and root output — as the name-routed
-    `hash_frx.blake3` composite: uint8 `[B, L]` -> uint8 `[B, out_len]`.
+    `hash_frx.digest.blake3` composite: uint8 `[B, L]` -> uint8 `[B, out_len]`.
 
     All three modes route through here, because all three are this one
     construction under a different key and flag (spec section 2.3), so a
     recognizing emitter implements the hash once rather than once per mode.
     BLAKE3 is a tree of chained compressions rather than a straight-line body, so
     it takes a name-routed marker (exempt from the generic single-kernel rule,
-    the way `hash_frx.poseidon2` and `hash_frx.sha256` are); with no emitter
+    the way `hash_frx.perm.poseidon2` and `hash_frx.digest.sha256` are); with no emitter
     wired the composite inlines its decomposition and the bytes are unchanged.
 
     **The operand ABI**, positional, and the whole of what an emitter reads:
@@ -947,7 +947,7 @@ def tree_hash(
 
 @partial(frx.jit, inline=True, static_argnames=("flags",))
 def parent_hash(pairs: Array, key_words: Array, *, flags: int) -> Array:
-    """One non-root `PARENT` compression as the `hash_frx.blake3_parent`
+    """One non-root `PARENT` compression as the `hash_frx.compress.blake3_parent`
     composite: uint8 `[B, 64]` -> uint8 `[B, 32]`.
 
     A Merkle tree built on BLAKE3's tree semantics hashes its leaves through

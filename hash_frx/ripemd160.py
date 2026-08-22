@@ -88,8 +88,11 @@ _EMITTER_BACKENDS: tuple[str, ...] = ()
 
 def _routes_to_dedicated_emitter() -> bool:
     """Whether the pin *and* the backend both carry a RIPEMD-160 emitter. Read
-    per construction so importing does not initialize a backend; the lookup
-    behind `frx.default_backend()` is memoized."""
+    per construction rather than at import, so the routing cannot be frozen to
+    whichever backend happened to be default when the module loaded; the lookup
+    behind `frx.default_backend()` is memoized. (Reading it late does not by
+    itself keep import backend-free — this module materializes its constants on
+    device at import, which #167 tracks.)"""
     return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
 
 

@@ -32,7 +32,7 @@ reading the row it was handed carries.
 
 **`fusion_path` derives from the pin and the backend, like Keccak's.** Every
 row routes through [`blake3.tree_hash`](blake3.py), the name-routed
-`hash_frx.blake3` composite, and the pinned plugin recognizes that name on the
+`hash_frx.digest.blake3` composite, and the pinned plugin recognizes that name on the
 CPU and GPU compilers (fractalyze/xla#499, #507) — so the rows read `DEDICATED`
 on both legs, and hardcoding the answer instead is exactly how the flag went
 stale for two pins after the emitter shipped. A backend without the arm —

@@ -6,12 +6,14 @@ FIPS 202 section 4 over `KeccakF1600`. One sponge parameterized by
 that table rather than three constructions (`byte_hashes.py`), and Keccak-256 is a
 fourth row rather than a code change.
 
-**Keccak-f[1600]-local, deliberately.** The permutation is bound here rather than
-taken as a `Permutation`, because nothing else in the package needs a
-byte-oriented sponge and the seam would buy generality with no second consumer.
-Keccak-p[1600, 12] — TurboSHAKE, KangarooTwelve — would only need the round count
-to vary, so widening this to take a permutation is the change to make when one of
-them arrives, not before.
+**Keccak-f[1600]-local, for now.** The permutation is bound here rather than
+taken as a `Permutation`, because when this was written nothing else in the
+package needed a byte-oriented sponge and the seam would have bought generality
+with no second consumer. Ascon is that second consumer now
+([`ascon/ascon.py`](../ascon/ascon.py) re-implements this schedule), so widening
+this to take a permutation is open work rather than a deferral; Keccak-p[1600,
+12] — TurboSHAKE, KangarooTwelve — would ride the same widening with only the
+round count to vary.
 
 **Not `hash_frx.sponge.Sponge`.** That one absorbs by *overwriting* the rate
 lanes, pads not at all, and squeezes by truncating the final state, and it takes
@@ -53,7 +55,7 @@ from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
 U32 = fnp.uint32
 
 # The whole padded absorb + squeeze as one region a dedicated emitter expands.
-# Not `hash_frx.sponge_hash`: that marker's `construction` attr switches between
+# Not `hash_frx.digest.field_sponge`: that marker's `construction` attr switches between
 # two sponges that share an input domain and an absorb, and this one shares
 # neither (bytes rather than field elements, XOR rather than overwrite, an
 # iterated squeeze rather than a truncation). Reusing it would re-merge what the
@@ -171,7 +173,7 @@ def _absorb_squeeze(
 # region's attributes and its loop bounds.
 @partial(frx.jit, static_argnames=("perm", "rate", "output_size"), inline=True)
 def _fused_hash(perm: KeccakF1600, padded: Array, rate: int, output_size: int) -> Array:
-    """The padded absorb and the squeeze as ONE `hash_frx.keccak_sponge` region
+    """The padded absorb and the squeeze as ONE `hash_frx.digest.keccak_sponge` region
     over a dedicated-fusion permutation. Caller gates on
     `fusion_path.is_one_kernel`.
 
@@ -209,15 +211,14 @@ class KeccakSponge:
     what the seam needs of anything riding as pytree aux, and safe here precisely
     because no field is an `Array`.
 
-    Deliberately Keccak-bound rather than a generic byte sponge over any
-    `Permutation`: with one byte sponge in the package there is no second
-    implementation to shape a shared seam against, and a surface generalized
-    from a single instance encodes that instance's accidents (the XOR absorb,
-    the multi-rate padding split, the 4-byte lane packing) as if they were the
-    family's. Generalizing is deferred until a second byte sponge (Ascon)
-    lands and pays for the seam — none of the queued hashes needs it before
-    then: Vision rides the field `Sponge`, BLAKE2b and Grøstl are plain
-    `ByteHash` rows.
+    Keccak-bound rather than a generic byte sponge over any `Permutation`: a
+    surface generalized from a single instance encodes that instance's
+    accidents (the XOR absorb, the multi-rate padding split, the 4-byte lane
+    packing) as if they were the family's, so the seam waited for a second
+    implementation to shape it against. Ascon is that implementation, and
+    `ascon.ascon_hash256_bytes` currently repeats this schedule rather than
+    sharing it — the residue that stays family-specific is the pad rule, the
+    initial state, and the state layout.
     """
 
     rate: int
@@ -237,7 +238,7 @@ class KeccakSponge:
         every loop bound below is static, so nothing here reads a message byte.
 
         A `DEDICATED`-path permutation lowers the whole padded absorb and
-        squeeze to one `hash_frx.keccak_sponge` region; otherwise each permute is
+        squeeze to one `hash_frx.digest.keccak_sponge` region; otherwise each permute is
         its own marked region and the XOR glue between them stays outside.
         """
         message = device_message(msg)

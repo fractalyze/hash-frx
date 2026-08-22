@@ -78,8 +78,11 @@ _BYTES_EMITTER_AVAILABLE = True
 
 def _routes_to_dedicated_emitter() -> bool:
     """Whether the pin *and* the backend both carry the SHA-256 emitter. Read
-    per construction so importing does not initialize a backend; the lookup
-    behind `frx.default_backend()` is memoized."""
+    per construction rather than at import, so the routing cannot be frozen to
+    whichever backend happened to be default when the module loaded; the lookup
+    behind `frx.default_backend()` is memoized. (Reading it late does not by
+    itself keep import backend-free — this module materializes its constants on
+    device at import, which #167 tracks.)"""
     return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
 
 
@@ -204,9 +207,12 @@ def _compress(state: Array, w16: Array, k: Array) -> Array:
 
     The 64-round compression and the message schedule are fused into ONE
     `fori_loop` carrying a [B, 16] shift-register window: round t uses the oldest
-    word `w[:,0]`, appends the freshly-scheduled `w[t+16]`, and shifts. Only
-    *static* column slices are used (no dynamic array indexing), so XLA keeps the
-    window + a..h fusion-/register-friendly — critical for GPU throughput.
+    word `w[:,0]`, appends the freshly-scheduled `w[t+16]`, and shifts. The
+    window is read by *static* column slices only, so XLA keeps it and a..h
+    fusion-/register-friendly — critical for GPU throughput. The one dynamic
+    index is `k[t]` into the round-constant operand, which the name-routed
+    emitter reads directly and the generic single-kernel rule exempts (a
+    name-routed body may loop and gather; see the fusion contract).
     """
 
     def round_t(t: Array, carry: tuple) -> tuple:
@@ -303,12 +309,12 @@ def deserialize_digest(digest: Array) -> Array:
 def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     """The SHA-256 compression chain from midstate `h0` (uint32 [8], shared by
     the batch) over `blocks` (uint32 [B, nblocks, 16]) -> uint8 [B, 32]
-    serialized final state, as the name-routed `hash_frx.sha256` composite. SHA-256
-    is Merkle-Damgard (a 64-round compression, not straight-line), so it takes the
-    name-routed marker (exempt from the generic single-kernel rule, the way
-    `hash_frx.poseidon2` is) and routes to the dedicated Sha256Fusion emitter; with
-    no emitter wired the marker inlines its decomposition, so the bytes are
-    unchanged.
+    serialized final state, as the name-routed `hash_frx.digest.sha256`
+    composite. SHA-256 is Merkle-Damgard (a 64-round compression, not
+    straight-line), so it takes the name-routed marker (exempt from the generic
+    single-kernel rule, the way `hash_frx.perm.poseidon2` is) and routes to the
+    dedicated Sha256Fusion emitter; with no emitter wired the marker inlines its
+    decomposition, so the bytes are unchanged.
 
     `h0 = INITIAL_STATE` is a whole-message digest; any other midstate resumes a
     stream (`deserialize_digest` of the result is the next midstate), so the
@@ -592,7 +598,7 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 # ---------------------------------------------------------------------------
 class Sha256:
     """`ByteHash` for device SHA-256 — `digest` runs the batch on the
-    `hash_frx.sha256` marker (data-parallel, lowers to one dedicated kernel
+    `hash_frx.digest.sha256` marker (data-parallel, lowers to one dedicated kernel
     where the pin and the backend route the name, so `fusion_path` reads
     `DEDICATED` there and `GENERIC` elsewhere).
 

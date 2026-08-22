@@ -206,9 +206,9 @@ def _composite(fn: object, *args: frx.Array, marker: str = BLAKE3_MARKER) -> _Co
     artifact the XLA emitter reads — operand order included, which is the half of
     the ABI a name and a version do not carry.
 
-    The name is matched with its quotes, so `hash_frx.blake3` does not also
-    match `hash_frx.blake3_parent` — the two are separate markers precisely so
-    that a recognizer of one cannot claim the other.
+    The name is matched with its quotes, so `hash_frx.compress.blake3` does not
+    also match `hash_frx.compress.blake3_parent` — the two are separate markers
+    precisely so that a recognizer of one cannot claim the other.
     """
     text = frx.jit(fn).lower(*args).as_text()
     lines = [ln for ln in text.splitlines() if f'stablehlo.composite "{marker}"' in ln]
@@ -799,7 +799,7 @@ _DECOMPOSITION_LENGTHS = (0, 1, BLOCK_LEN, 129) + (
 
 
 class MarkerTest(parameterized.TestCase):
-    """The `hash_frx.blake3` marker: that it is emitted, and what it carries.
+    """The `hash_frx.digest.blake3` marker: that it is emitted, and what it carries.
 
     A marker is a wire ABI shared with the Fractalyze XLA emitter, and losing it
     is silent — an unrecognized or absent marker inlines and computes the same
@@ -1063,7 +1063,7 @@ class ParentDigestTest(absltest.TestCase):
     def test_it_does_not_ride_the_message_marker(self) -> None:
         # The load-bearing case, and the reason this is a name rather than an
         # attribute. A recognizer matches by name and ignores attributes it does
-        # not know, so a parent riding `hash_frx.blake3` would be claimed by any
+        # not know, so a parent riding `hash_frx.digest.blake3` would be claimed by any
         # shipped message emitter and silently hashed as a 64-byte message —
         # observed doing exactly that on frx 0.10.2.dev20260813075049. Under its
         # own name an emitter that has not learned it simply inlines the

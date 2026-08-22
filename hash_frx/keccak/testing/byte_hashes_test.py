@@ -237,7 +237,7 @@ class SeamConformanceTest(absltest.TestCase):
 
     def test_only_the_device_rows_report_a_dedicated_fusion(self) -> None:
         # Pinned rather than left to the docstring: a device row lowers the whole
-        # padded absorb and squeeze to one `hash_frx.keccak_sponge` kernel
+        # padded absorb and squeeze to one `hash_frx.digest.keccak_sponge` kernel
         # wherever that emitter can be reached, and a host row never lowers at
         # all.
         #
