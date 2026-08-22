@@ -23,19 +23,19 @@ def _type_checking_names() -> set[str]:
     from the source rather than executed — the block never runs, so this is the
     only way to see it. Parsed here rather than in the module so the module owes
     nothing to its own guard."""
-    source = pathlib.Path(hash_frx.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        test = node.test
-        if not (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING"):
-            continue
-        for stmt in ast.walk(node):
-            if isinstance(stmt, ast.ImportFrom):
-                names.update(alias.asname or alias.name for alias in stmt.names)
-    return names
+    tree = ast.parse(pathlib.Path(hash_frx.__file__).read_text(encoding="utf-8"))
+    # The block is top-level, so `tree.body` is the whole search space — walking
+    # the tree would only add ways to match something that is not it.
+    return {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "TYPE_CHECKING"
+        for stmt in node.body
+        if isinstance(stmt, ast.ImportFrom)
+        for alias in stmt.names
+    }
 
 
 class PackageTest(absltest.TestCase):

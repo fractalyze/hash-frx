@@ -71,7 +71,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.blake3 import blake3
 from hash_frx.byte_hash import DeviceRow, HostRow, host_digest
-from hash_frx.fusion import routing
+from hash_frx.fusion import FusionPath, routing
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
@@ -113,14 +113,10 @@ class _Blake3Hash(DeviceRow):
         if output_size < 1:
             raise ValueError(f"output_size must be at least 1, got {output_size}")
         self.digest_size = output_size
-        super().__init__(_routes_to_dedicated_emitter)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def _read(self, msg: ArrayLike) -> Array:
         raise NotImplementedError
-
-    def _parameters(self) -> tuple[object, ...]:
-        """Everything two instances of this row compare on."""
-        return (self.digest_size,)
 
     def digest(self, msg: ArrayLike) -> Array:
         return self._read(msg)
@@ -216,10 +212,6 @@ class _HostBlake3Hash(HostRow):
 
     def _read(self, msg: ReadableBuffer) -> bytes:
         raise NotImplementedError
-
-    def _parameters(self) -> tuple[object, ...]:
-        """Everything two instances of this row compare on."""
-        return (self.digest_size,)
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._read, self.digest_size, msg)

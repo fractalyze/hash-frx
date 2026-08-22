@@ -53,7 +53,7 @@ from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
-from hash_frx.fusion import fused_region, routing
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -709,7 +709,7 @@ class Sha512(DeviceRow):
     digest_size = 64
 
     def __init__(self) -> None:
-        super().__init__(_routes_to_dedicated_emitter)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
@@ -727,8 +727,6 @@ class HostSha512(HostRow):
     and not merely the differential oracle."""
 
     digest_size = 64
-    # The one legitimate class constant of the taxonomy: a host row is HOST on
-    # every backend, so nothing here varies with the pin.
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
@@ -754,7 +752,7 @@ class Sha384(DeviceRow):
     digest_size = 48
 
     def __init__(self) -> None:
-        super().__init__(_routes_to_dedicated_emitter)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return sha384_digest(msg)
@@ -768,7 +766,7 @@ class Sha512_256(DeviceRow):
     digest_size = 32
 
     def __init__(self) -> None:
-        super().__init__(_routes_to_dedicated_emitter)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return sha512_256_digest(msg)

@@ -45,16 +45,17 @@ def _marked(state, *, name=_NAME, version=1, swap=False, **attrs):  # type: igno
 
 
 class GateBitesTest(absltest.TestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.state = fnp.asarray(_STATE)
-        self.golden = lowering_text(lambda s: _marked(s), self.state)
+    @classmethod
+    def setUpClass(cls) -> None:
+        # Immutable and identical across all eight methods; lowering it once
+        # rather than per method is most of this target's runtime.
+        super().setUpClass()
+        cls.state = fnp.asarray(_STATE)
+        cls.golden = lowering_text(lambda s: _marked(s), cls.state)
 
     def test_identical_lowering_passes(self) -> None:
         # The gate is useless if it cannot recognize the unchanged program.
-        assert_lowering_unchanged(
-            self, lambda s: _marked(s), self.state, golden=self.golden
-        )
+        assert_lowering_unchanged(lambda s: _marked(s), self.state, golden=self.golden)
 
     def test_a_renamed_entry_function_still_passes(self) -> None:
         # frx names the module after the traced callable, so a rename or a
@@ -64,7 +65,7 @@ class GateBitesTest(absltest.TestCase):
             return _marked(s)
 
         assert_lowering_unchanged(
-            self, digest_under_a_new_name, self.state, golden=self.golden
+            digest_under_a_new_name, self.state, golden=self.golden
         )
 
     def test_marker_rename_fails(self) -> None:
@@ -72,7 +73,6 @@ class GateBitesTest(absltest.TestCase):
         # inlines unrecognized and computes identical bytes on a slower path.
         with self.assertRaises(self.failureException) as caught:
             assert_lowering_unchanged(
-                self,
                 lambda s: _marked(s, name="hash_frx.perm.renamed"),
                 self.state,
                 golden=self.golden,
@@ -84,7 +84,7 @@ class GateBitesTest(absltest.TestCase):
         # two operands keeps the bytes and breaks the ABI.
         with self.assertRaises(self.failureException):
             assert_lowering_unchanged(
-                self, lambda s: _marked(s, swap=True), self.state, golden=self.golden
+                lambda s: _marked(s, swap=True), self.state, golden=self.golden
             )
 
     def test_version_bump_fails(self) -> None:
@@ -92,7 +92,7 @@ class GateBitesTest(absltest.TestCase):
         # would ship an ABI change as a refactor.
         with self.assertRaises(self.failureException):
             assert_lowering_unchanged(
-                self, lambda s: _marked(s, version=2), self.state, golden=self.golden
+                lambda s: _marked(s, version=2), self.state, golden=self.golden
             )
 
     def test_dropped_attribute_fails(self) -> None:
@@ -100,16 +100,13 @@ class GateBitesTest(absltest.TestCase):
         # attr that stops being emitted is a routing change.
         golden = lowering_text(lambda s: _marked(s, primitive="fake"), self.state)
         with self.assertRaises(self.failureException):
-            assert_lowering_unchanged(
-                self, lambda s: _marked(s), self.state, golden=golden
-            )
+            assert_lowering_unchanged(lambda s: _marked(s), self.state, golden=golden)
 
     def test_lost_composite_fails(self) -> None:
         # The quietest failure of all: the region stops being marked. Right
         # bytes, no kernel, nothing else notices.
         with self.assertRaises(self.failureException):
             assert_lowering_unchanged(
-                self,
                 lambda s: _region(
                     s, fnp.asarray(np.uint32(7)), fnp.asarray(np.uint32(3))
                 ),
@@ -122,7 +119,7 @@ class GateBitesTest(absltest.TestCase):
         # the message on a real row.
         with self.assertRaises(self.failureException) as caught:
             assert_lowering_unchanged(
-                self, lambda s: _marked(s, version=2), self.state, golden=self.golden
+                lambda s: _marked(s, version=2), self.state, golden=self.golden
             )
         message = str(caught.exception)
         self.assertIn("--- golden", message)

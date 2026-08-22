@@ -31,7 +31,7 @@ from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
-from hash_frx.fusion import fused_region, routing
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
 
 if TYPE_CHECKING:
@@ -606,7 +606,7 @@ class Sha256(DeviceRow):
     digest_size = 32
 
     def __init__(self) -> None:
-        super().__init__(_routes_to_dedicated_emitter)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
@@ -626,8 +626,6 @@ class HostSha256(HostRow):
     against this one."""
 
     digest_size = 32
-    # The one legitimate class constant of the taxonomy: a host row is HOST on
-    # every backend, so nothing here varies with the pin.
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(

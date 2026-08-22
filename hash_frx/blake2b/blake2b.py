@@ -69,7 +69,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
 from hash_frx.byte_hash import DeviceRow, device_message
-from hash_frx.fusion import fused_region, routing
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -476,14 +476,7 @@ class Blake2b(DeviceRow):
                 f"{digest_size}"
             )
         self.digest_size = digest_size
-        super().__init__(_routes_to_dedicated_emitter)
-
-    def _parameters(self) -> tuple[object, ...]:
-        """The output length is part of the hash, not a formatting
-        choice — RFC 7693 folds it into the initial state and the
-        Keccak rows read it out of a different rate — so two lengths
-        are two hashes and must key apart."""
-        return (self.digest_size,)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg, self.digest_size)  # the module-level marker digest

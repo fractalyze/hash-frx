@@ -27,8 +27,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.ascon.ascon import ASCON_HASH256_DIGEST_SIZE
 from hash_frx.ascon.testing.reference import ascon_hash256
-from hash_frx.byte_hash import host_digest
-from hash_frx.fusion import FusionPath
+from hash_frx.byte_hash import HostRow, host_digest
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
@@ -36,7 +35,7 @@ if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
 
-class HostAsconHash256:
+class HostAsconHash256(HostRow):
     """`ByteHash` for host Ascon-Hash256 over the plain-Python oracle.
 
     The loop it runs under is [`byte_hash.host_digest`](../../byte_hash.py),
@@ -47,21 +46,12 @@ class HostAsconHash256:
     digest_size = ASCON_HASH256_DIGEST_SIZE
     # The one legitimate class constant of the taxonomy: a host row is HOST on
     # every backend, so nothing here varies with the pin.
-    fusion_path = FusionPath.HOST
 
     def _hash_one(self, data: ReadableBuffer) -> bytes:
         return ascon_hash256(bytes(data))
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._hash_one, self.digest_size, msg)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
-
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 if TYPE_CHECKING:

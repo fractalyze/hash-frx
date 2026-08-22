@@ -24,7 +24,7 @@ Usage is a capture on the base revision and a comparison on the branch:
     # on the base revision
     golden = lowering_text(sha256.digest, msg)
     # on the branch, in a test
-    assert_lowering_unchanged(self, sha256.digest, msg, golden=golden)
+    assert_lowering_unchanged(sha256.digest, msg, golden=golden)
 
 `lowering_text` is also what a per-row golden should be built from when a
 re-layering step wants one checked in.
@@ -59,9 +59,7 @@ def lowering_text(fn: Callable[..., Any], *args: Any) -> str:
     return normalize(frx.jit(fn).lower(*args).as_text())
 
 
-def assert_lowering_unchanged(
-    test: Any, fn: Callable[..., Any], *args: Any, golden: str
-) -> None:
+def assert_lowering_unchanged(fn: Callable[..., Any], *args: Any, golden: str) -> None:
     """Assert `fn(*args)` still lowers to `golden`.
 
     On failure the message is a unified diff rather than two 4000-line blobs —
@@ -82,4 +80,6 @@ def assert_lowering_unchanged(
             n=2,
         )
     )
-    test.fail(f"lowered StableHLO changed:\n{diff}")
+    # `TestCase.failureException` IS `AssertionError`, so this reads as a test
+    # failure without the helper having to be handed a `TestCase`.
+    raise AssertionError(f"lowered StableHLO changed:\n{diff}")

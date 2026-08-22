@@ -51,7 +51,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message
-from hash_frx.fusion import fused_region, routing
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, rotl, unpack_le
 
 if TYPE_CHECKING:
@@ -342,7 +342,7 @@ class Ripemd160(DeviceRow):
     digest_size = RIPEMD160_DIGEST_SIZE
 
     def __init__(self) -> None:
-        super().__init__(_routes_to_dedicated_emitter)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above

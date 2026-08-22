@@ -18,8 +18,8 @@ py_library(
     ],
 )
 
-# Deliberately absl + //hash_frx and nothing else, and deliberately no
-# GPU_PLUGIN_DEPS. Its central case asserts that importing the package imports
+# Deliberately absl + the bare package init and nothing else, and deliberately
+# no GPU_PLUGIN_DEPS. Its central case asserts that importing the package imports
 # no hash and therefore initializes no backend; a dep that pulled a family into
 # the process would not fail the build, it would just quietly make that case
 # untrue. The half of the public-API guard that DOES resolve every export is
@@ -29,7 +29,7 @@ py_test(
     size = "small",
     srcs = ["package_test.py"],
     deps = [
-        "//hash_frx",
+        "//hash_frx:package_init",
         requirement("absl_py"),
     ],
 )

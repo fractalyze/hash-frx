@@ -52,7 +52,7 @@ from frx import Array, lax
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message
-from hash_frx.fusion import fused_region, routing
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import rotr64
 
@@ -367,7 +367,7 @@ class AsconHash256(DeviceRow):
     digest_size = ASCON_HASH256_DIGEST_SIZE
 
     def __init__(self) -> None:
-        super().__init__(_routes_to_dedicated_emitter)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above

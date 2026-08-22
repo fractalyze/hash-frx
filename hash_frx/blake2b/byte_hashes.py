@@ -69,13 +69,6 @@ class HostBlake2b(HostRow):
     def _hash_one(self, data: ReadableBuffer) -> bytes:
         return hashlib.blake2b(data, digest_size=self.digest_size).digest()
 
-    def _parameters(self) -> tuple[object, ...]:
-        """The output length is part of the hash, not a formatting
-        choice — RFC 7693 folds it into the initial state and the
-        Keccak rows read it out of a different rate — so two lengths
-        are two hashes and must key apart."""
-        return (self.digest_size,)
-
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._hash_one, self.digest_size, msg)
 

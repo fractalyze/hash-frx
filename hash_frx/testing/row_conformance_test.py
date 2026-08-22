@@ -18,11 +18,15 @@ rather than just the first.
 
 from __future__ import annotations
 
+import importlib
+import pathlib
+
 import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx.byte_hash import ByteHash
+import hash_frx
+from hash_frx.byte_hash import ByteHash, DeviceRow, HostRow, Row
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.rows import ALL_ROWS, DEVICE_ROWS, HOST_ROWS, RowCase
 
@@ -148,25 +152,30 @@ class RowSeamTest(parameterized.TestCase):
 class RegistryTest(absltest.TestCase):
     def test_every_shipped_row_is_registered(self) -> None:
         # The list is only a contract if it cannot silently fall behind the
-        # package. Walk the modules the registry imports from and require every
-        # public row class to appear.
-        import importlib
-        import inspect
-
-        modules = sorted({c.make().__class__.__module__ for c in ALL_ROWS})
-        registered = {c.make().__class__ for c in ALL_ROWS}
+        # package, so the sweep walks the SOURCE TREE rather than the modules
+        # the registry already names — deriving the search boundary from the
+        # thing being checked would let a whole new row module ship with zero
+        # rows registered and still pass. `markers_test` sweeps the same way for
+        # the same reason.
+        package = pathlib.Path(next(iter(hash_frx.__path__)))
+        registered = {type(c.make()) for c in ALL_ROWS}
         missing = []
-        for name in modules:
-            for attr, obj in vars(importlib.import_module(name)).items():
-                if attr.startswith("_") or not inspect.isclass(obj):
+        for source in sorted(package.rglob("*.py")):
+            if "testing" in source.relative_to(package).parts:
+                continue
+            name = ".".join(
+                ("hash_frx", *source.relative_to(package).with_suffix("").parts)
+            ).removesuffix(".__init__")
+            module = importlib.import_module(name)
+            for attr, obj in vars(module).items():
+                if attr.startswith("_") or not isinstance(obj, type):
                     continue
                 if obj.__module__ != name or obj in registered:
                     continue
-                if isinstance(getattr(obj, "digest", None), type(None)):
+                # The bases themselves are the contract, not rows on it.
+                if obj in (Row, DeviceRow, HostRow):
                     continue
-                if callable(getattr(obj, "digest", None)) and hasattr(
-                    obj, "digest_size"
-                ):
+                if issubclass(obj, (DeviceRow, HostRow)):
                     missing.append(f"{name}.{attr}")
         self.assertEqual(missing, [], f"unregistered rows: {missing}")
 

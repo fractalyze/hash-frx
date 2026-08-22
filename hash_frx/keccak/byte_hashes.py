@@ -116,18 +116,10 @@ class _KeccakHash(DeviceRow):
         )
         # Derived rather than declared, so it cannot disagree with the routing
         # `KeccakSponge.hash` actually takes — the same arrangement
-        # `poseidon2.Poseidon2` uses. Per instance rather than on the class,
-        # because the emitter switch is a property of the pin and a value read at
-        # import would pin the answer before anything could vary it. The seam
-        # types both as plain attributes, so neither can be a read-only property.
-        self.fusion_path = KeccakF1600().fusion_path
-
-    def _parameters(self) -> tuple[object, ...]:
-        """The output length is part of the hash, not a formatting
-        choice — RFC 7693 folds it into the initial state and the
-        Keccak rows read it out of a different rate — so two lengths
-        are two hashes and must key apart."""
-        return (self.digest_size,)
+        # `poseidon2.Poseidon2` uses. `DeviceRow` takes the resolved path
+        # precisely so a row that derives it from a delegate goes through the
+        # same door as one that reads a pin-and-backend gate.
+        super().__init__(KeccakF1600().fusion_path)
 
     def digest(self, msg: ArrayLike) -> Array:
         return self._sponge.hash(msg)
@@ -215,13 +207,6 @@ class _HostKeccak(HostRow):
 
     def _hash_one(self, data: ReadableBuffer) -> bytes:
         raise NotImplementedError
-
-    def _parameters(self) -> tuple[object, ...]:
-        """The output length is part of the hash, not a formatting
-        choice — RFC 7693 folds it into the initial state and the
-        Keccak rows read it out of a different rate — so two lengths
-        are two hashes and must key apart."""
-        return (self.digest_size,)
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._hash_one, self.digest_size, msg)

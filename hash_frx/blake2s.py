@@ -63,7 +63,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
-from hash_frx.fusion import fused_region, routing
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, rotr, unpack_le
 
 if TYPE_CHECKING:
@@ -428,14 +428,7 @@ class Blake2s(DeviceRow):
                 f"{digest_size}"
             )
         self.digest_size = digest_size
-        super().__init__(_routes_to_dedicated_emitter)
-
-    def _parameters(self) -> tuple[object, ...]:
-        """The output length is part of the hash, not a formatting
-        choice — RFC 7693 folds it into the initial state and the
-        Keccak rows read it out of a different rate — so two lengths
-        are two hashes and must key apart."""
-        return (self.digest_size,)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg, self.digest_size)  # the module-level marker digest
@@ -454,13 +447,6 @@ class HostBlake2s(HostRow):
                 f"{digest_size}"
             )
         self.digest_size = digest_size
-
-    def _parameters(self) -> tuple[object, ...]:
-        """The output length is part of the hash, not a formatting
-        choice — RFC 7693 folds it into the initial state and the
-        Keccak rows read it out of a different rate — so two lengths
-        are two hashes and must key apart."""
-        return (self.digest_size,)
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
