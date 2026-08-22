@@ -440,18 +440,6 @@ def sha256_stream_init() -> Sha256State:
     )
 
 
-# The incremental schedule, with this family's pieces plugged in. `chain` is
-# the same marked region `digest` runs, so the streaming path and the batch
-# digest go through ONE marker rather than two.
-_STREAM = MdStream(
-    block_size=_BLOCK,
-    block_to_words=block_to_words,
-    deserialize=deserialize_digest,
-    chain=sha256_merkle_damgard,
-    make_state=Sha256State,
-)
-
-
 def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     """Absorb `data` (uint8 [L], L static) into the incremental hash: fold every
     newly-complete 64-byte block into the midstate, keep the `<64 B` remainder as
@@ -473,6 +461,20 @@ def _length_field(msg_bytes: Array) -> Array:
     """
     count = msg_bytes.astype(fnp.uint32)
     return unpack_be(fnp.stack([count >> fnp.uint32(29), count << fnp.uint32(3)]))
+
+
+# The incremental schedule, with this family's pieces plugged in. `chain` is
+# the same marked region `digest` runs, so the streaming path and the batch
+# digest go through ONE marker rather than two.
+_STREAM = MdStream(
+    block_size=_BLOCK,
+    block_to_words=block_to_words,
+    deserialize=deserialize_digest,
+    chain=sha256_merkle_damgard,
+    make_state=Sha256State,
+    length_bytes=8,
+    length_field=_length_field,
+)
 
 
 def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
@@ -497,49 +499,8 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     lengths encode alike. Far below FIPS 180-4's 2^61 bytes, and widening the
     counter rides the batch-polymorphic state rework on the redesign epic.
     """
-    batch, e = extras.shape
-    if e > _BLOCK - 8:
-        raise ValueError(
-            f"extras width ({e}) must be <= {_BLOCK - 8}: pending_len is runtime "
-            "data, so a wider tail cannot be guaranteed to fit the two-block "
-            "finalize layout at every offset — absorb the prefix instead"
-        )
-    pl = state.pending_len
-    content_len = pl + fnp.int32(e)
-    msg_bytes = state.total_len + fnp.int32(e)
-    len_bytes = _length_field(msg_bytes)  # [8] big-endian
 
-    two_blocks = content_len > fnp.int32(55)  # need a 2nd block for pad + length?
-    active_bytes = fnp.where(two_blocks, fnp.int32(128), fnp.int32(64))
-
-    pos = fnp.arange(128, dtype=fnp.int32)
-    # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:64].
-    combined_src = fnp.concatenate(
-        [fnp.broadcast_to(state.pending, (batch, _BLOCK)), extras.astype(fnp.uint8)],
-        axis=1,
-    )  # [B, 64+E]
-    src_idx = fnp.clip(
-        pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl), 0, _BLOCK + e - 1
-    )
-    content = combined_src[:, src_idx]  # [B, 128]
-
-    is_content = (pos < content_len)[None, :]
-    is_pad80 = (pos == content_len)[None, :]
-    len_start = active_bytes - fnp.int32(8)
-    is_len = ((pos >= len_start) & (pos < active_bytes))[None, :]
-    len_val = len_bytes[fnp.clip(pos - len_start, 0, 7)][None, :]
-    region = fnp.where(
-        is_content,
-        content,
-        fnp.where(is_pad80, fnp.uint8(0x80), fnp.where(is_len, len_val, fnp.uint8(0))),
-    )  # [B, 128]
-
-    # Both finalize shapes ride the marked chain from the shared midstate; the
-    # 1-vs-2-block choice is data-dependent, so emit both and select.
-    words = block_to_words(region)  # [B, 2, 16]
-    d2 = sha256_merkle_damgard(state.h, words)
-    d1 = sha256_merkle_damgard(state.h, words[:, :1])
-    return fnp.where(two_blocks, d2, d1)
+    return _STREAM.finalize(state, extras)
 
 
 # ---------------------------------------------------------------------------
