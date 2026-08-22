@@ -1,5 +1,6 @@
 load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 # Vectors read off the seven hand-written `_padding_tail` functions before they
 # were deleted, plus one case per `PadRule` axis. Deps `:pad` rather than `:md`,
@@ -16,4 +17,20 @@ py_test(
         requirement("absl_py"),
         requirement("numpy"),
     ],
+)
+
+# The schedules against a recording fake rather than against a family. Deps
+# `:sponge` alone: `absorb_squeeze` emits no array op — every one reaches it
+# through the caller's callbacks — so its rules are checked over plain Python
+# values, and only the two frx helpers need a backend.
+py_test(
+    name = "sponge_test",
+    size = "small",
+    srcs = ["sponge_test.py"],
+    deps = [
+        "//hash_frx/extension:sponge",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
 )

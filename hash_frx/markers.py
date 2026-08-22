@@ -72,6 +72,7 @@ MARKERS: tuple[Marker, ...] = (
     Marker("hash_frx.perm.poseidon2", 2, MarkerKind.PERM),
     Marker("hash_frx.perm.keccak_f", 1, MarkerKind.PERM),
     Marker("hash_frx.perm.vision", 1, MarkerKind.PERM),
+    Marker("hash_frx.perm.ascon_p", 1, MarkerKind.PERM),
     # Compression functions — BLAKE3's node-level units (the streaming one is
     # the bare family name; the namespace already says "compression").
     Marker("hash_frx.compress.blake3_parent", 1, MarkerKind.COMPRESS),
@@ -92,6 +93,7 @@ MARKERS: tuple[Marker, ...] = (
     Marker("hash_frx.digest.field_sponge", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.grostl256", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.ascon_hash256", 1, MarkerKind.DIGEST),
+    Marker("hash_frx.digest.ascon_xof128", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.ripemd160", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.blake2b", 1, MarkerKind.DIGEST),
     Marker("hash_frx.digest.blake2s", 1, MarkerKind.DIGEST),

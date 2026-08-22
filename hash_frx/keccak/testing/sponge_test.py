@@ -356,5 +356,50 @@ class MarkerRecognizedTest(absltest.TestCase):
         )
 
 
+class XorIntoRateTest(absltest.TestCase):
+    """The merge, whose whole point is that one spelling serves both ranks.
+
+    The one-shot sponge absorbs into `[B, 50]` lanes and the incremental SHAKE
+    into an unbatched `(50,)`; those were two transcriptions of this
+    slice-and-concatenate until the trailing-axis form replaced both. A version
+    indexed on axis 0 would silently merge along the BATCH axis instead, which
+    the batched KAT would catch but the unbatched one would not.
+    """
+
+    def test_only_the_rate_prefix_changes(self) -> None:
+        state = fnp.asarray(np.arange(10, dtype=np.uint32))
+        block = fnp.asarray(np.array([0xFF, 0xFF, 0xFF], dtype=np.uint32))
+        want = np.arange(10, dtype=np.uint32)
+        want[:3] ^= np.uint32(0xFF)
+        np.testing.assert_array_equal(
+            np.asarray(sponge_mod._xor_into_rate(state, block)), want
+        )
+
+    def test_one_spelling_serves_both_state_ranks(self) -> None:
+        row = np.arange(10, dtype=np.uint32)
+        blk = np.array([1, 2, 3], dtype=np.uint32)
+        unbatched = np.asarray(
+            sponge_mod._xor_into_rate(fnp.asarray(row), fnp.asarray(blk))
+        )
+        batched = np.asarray(
+            sponge_mod._xor_into_rate(
+                fnp.asarray(np.stack([row, row + 100])),
+                fnp.asarray(np.stack([blk, blk])),
+            )
+        )
+        np.testing.assert_array_equal(batched[0], unbatched)
+
+    def test_a_full_width_block_leaves_no_capacity(self) -> None:
+        np.testing.assert_array_equal(
+            np.asarray(
+                sponge_mod._xor_into_rate(
+                    fnp.asarray(np.zeros(4, dtype=np.uint32)),
+                    fnp.asarray(np.arange(4, dtype=np.uint32)),
+                )
+            ),
+            np.arange(4, dtype=np.uint32),
+        )
+
+
 if __name__ == "__main__":
     absltest.main()

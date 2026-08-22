@@ -69,3 +69,24 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "permutation_test",
+    # Compile-heavy: twelve unrolled rounds, compiled once per routing and per
+    # state aval, plus the exhaustive S-box circuit case.
+    size = "large",
+    srcs = ["permutation_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx:fusion",
+        "//hash_frx:permutation",
+        "//hash_frx:word",
+        "//hash_frx/ascon:permutation",
+        "//hash_frx/testing:fusion_ready",
+        "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_seam",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

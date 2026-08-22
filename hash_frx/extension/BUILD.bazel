@@ -15,6 +15,20 @@ py_library(
     deps = [requirement("numpy")],
 )
 
+# The schedules that feed a permutation a message: the static-count byte one
+# both byte sponges take, and the runtime-count field one. Device code, hence
+# frx — but it emits no op of its own, every array operation reaching it through
+# the caller's callbacks.
+py_library(
+    name = "sponge",
+    srcs = [
+        "__init__.py",
+        "sponge.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
+)
+
 # The schedules that feed the padded blocks to a compression: the one-shot
 # marked region and the incremental midstate. Device code, hence frx.
 py_library(

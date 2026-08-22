@@ -1,9 +1,9 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""`PadRule` against the seven padding rules it replaced.
+"""`PadRule` and `SpongePad` against the nine padding rules they replaced.
 
 Pinned as literal bytes rather than re-derived from the same formula, because a
 test that recomputes the implementation proves only that the implementation is
-deterministic. These vectors were read off the seven hand-written
+deterministic. These vectors were read off the nine hand-written
 `_padding_tail` functions before they were deleted, and each is the
 specification's own rule.
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from absl.testing import absltest, parameterized
 
-from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
+from hash_frx.extension.pad import PadRule, SpongePad, Trailer, haifa_counter
 
 SHA256 = PadRule(64, Trailer.BIT_LENGTH)
 SHA512 = PadRule(128, Trailer.BIT_LENGTH, reserve=16)
@@ -174,6 +174,135 @@ class HaifaCounterTest(absltest.TestCase):
     def test_blake2b_uses_the_wider_block(self) -> None:
         self.assertEqual(haifa_counter(0, 2, 200, 128), (128, False))
         self.assertEqual(haifa_counter(1, 2, 200, 128), (200, True))
+
+
+# The two sponge rules `SpongePad` replaced. FIPS 202 section 6 fixes the Keccak
+# suffixes; SP 800-232 Algorithm 2 fixes Ascon's.
+SHA3_256_PAD = SpongePad(rate=136, head=0x06)
+SHAKE256_PAD = SpongePad(rate=136, head=0x1F)
+KECCAK256_PAD = SpongePad(rate=136, head=0x01)
+ASCON_PAD = SpongePad(rate=8, head=0x01, final_bit=False)
+
+
+class SpongePadVectorTest(parameterized.TestCase):
+    @parameterized.named_parameters(
+        # FIPS 202 section 5.1: `suffix ‖ 0x00* ‖ 0x80`, never empty.
+        ("sha3_256_empty", SHA3_256_PAD, 0, 136, 0x06, 0x80),
+        ("sha3_256_one", SHA3_256_PAD, 1, 135, 0x06, 0x80),
+        # One byte short of a block: the two ends land on the SAME byte and it
+        # becomes `head | 0x80` — the standard's single-byte pad rather than a
+        # special case, and the case a rule that wrote the two ends
+        # independently would get wrong.
+        ("sha3_256_single_byte_pad", SHA3_256_PAD, 135, 1, 0x86, 0x86),
+        # A rate-aligned message gains a WHOLE padding block.
+        ("sha3_256_whole_block", SHA3_256_PAD, 136, 136, 0x06, 0x80),
+        ("shake256_one", SHAKE256_PAD, 1, 135, 0x1F, 0x80),
+        ("shake256_single_byte_pad", SHAKE256_PAD, 135, 1, 0x9F, 0x9F),
+        # Keccak-256 differs from SHA3-256 in exactly this byte, and in nothing
+        # else — the padding NIST changed on standardisation.
+        ("keccak256_one", KECCAK256_PAD, 1, 135, 0x01, 0x80),
+        # Ascon has no trailing bit at all (`final_bit=False`), which is the one
+        # axis separating the two sponge rules: the last byte stays zero, and at
+        # a one-byte pad the head is NOT ORed with 0x80.
+        ("ascon_empty", ASCON_PAD, 0, 8, 0x01, 0x00),
+        ("ascon_one", ASCON_PAD, 1, 7, 0x01, 0x00),
+        ("ascon_single_byte_pad", ASCON_PAD, 7, 1, 0x01, 0x01),
+        ("ascon_whole_block", ASCON_PAD, 8, 8, 0x01, 0x00),
+    )
+    def test_tail_matches_the_specification(
+        self,
+        pad: SpongePad,
+        length: int,
+        size: int,
+        first: int,
+        last: int,
+    ) -> None:
+        tail = pad.tail(length)
+        self.assertEqual(tail.shape, (size,))
+        self.assertEqual(int(tail[0]), first)
+        self.assertEqual(int(tail[-1]), last)
+        # Everything between the two ends is zero.
+        self.assertTrue(bool((tail[1:-1] == 0).all()))
+
+    def test_the_pad_is_never_empty(self) -> None:
+        # What makes the block count a function of the length alone, and what a
+        # bare `-length % rate` gets wrong on an aligned message.
+        for length in range(0, 3 * 136 + 1):
+            self.assertGreater(SHA3_256_PAD.tail(length).size, 0)
+
+    def test_the_padded_length_is_always_whole_blocks(self) -> None:
+        for pad in (SHA3_256_PAD, ASCON_PAD):
+            for length in range(0, 3 * pad.rate + 1):
+                self.assertEqual((length + pad.tail(length).size) % pad.rate, 0)
+
+
+class SpongePadAxisTest(absltest.TestCase):
+    """Each axis changes an outcome, or it is a parameter nobody needs."""
+
+    def test_the_head_is_the_domain_separation(self) -> None:
+        # SHA3-256 and Keccak-256 differ in this byte and nothing else.
+        self.assertNotEqual(int(SHA3_256_PAD.tail(1)[0]), int(KECCAK256_PAD.tail(1)[0]))
+        self.assertEqual(SHA3_256_PAD.tail(1).size, KECCAK256_PAD.tail(1).size)
+
+    def test_the_final_bit_changes_the_last_byte(self) -> None:
+        with_bit = SpongePad(rate=8, head=0x01)
+        without = SpongePad(rate=8, head=0x01, final_bit=False)
+        self.assertEqual(int(with_bit.tail(1)[-1]), 0x80)
+        self.assertEqual(int(without.tail(1)[-1]), 0x00)
+
+    def test_the_final_bit_ors_into_a_single_byte_pad(self) -> None:
+        # The case the two axes interact on: one byte of pad, so head and
+        # trailing bit share it.
+        self.assertEqual(int(SpongePad(rate=8, head=0x06).tail(7)[0]), 0x86)
+        self.assertEqual(
+            int(SpongePad(rate=8, head=0x06, final_bit=False).tail(7)[0]), 0x06
+        )
+
+    def test_the_rate_sets_the_boundary(self) -> None:
+        self.assertEqual(SpongePad(rate=136, head=0x06).tail(1).size, 135)
+        self.assertEqual(SpongePad(rate=72, head=0x06).tail(1).size, 71)
+
+
+class SpongePadValidationTest(absltest.TestCase):
+    def test_rejects_a_head_that_claims_the_padding_bit(self) -> None:
+        # Bit 7 belongs to `pad10*1`'s trailing 1. A head that set it would
+        # collide on a one-byte pad, where `|= 0x80` on a host tail and
+        # `^ 0x80` on a traced block disagree — a different digest, not an
+        # error.
+        with self.assertRaisesRegex(ValueError, "head"):
+            SpongePad(rate=136, head=0x80)
+
+    def test_a_rule_without_the_final_bit_may_use_the_whole_byte(self) -> None:
+        # The bit is only reserved where there is a trailing 1 to reserve it
+        # for, so the rejection above must not be unconditional.
+        self.assertEqual(
+            int(SpongePad(rate=8, head=0x80, final_bit=False).tail(1)[0]), 0x80
+        )
+
+    def test_rejects_a_non_positive_rate(self) -> None:
+        with self.assertRaisesRegex(ValueError, "rate"):
+            SpongePad(rate=0, head=0x06)
+
+    def test_rejects_a_head_that_is_not_a_byte(self) -> None:
+        with self.assertRaisesRegex(ValueError, "head"):
+            SpongePad(rate=8, head=0x100, final_bit=False)
+
+
+class SpongePadTailIsSafeToShareTest(absltest.TestCase):
+    def test_the_memoized_tail_is_read_only(self) -> None:
+        # Keyed by VALUE, so two equal rules share one entry — a caller writing
+        # through the array would change the other's padding, silently and
+        # everywhere after. `PadRuleTailIsSafeToShareTest` states the same for
+        # the MD rule.
+        tail = SHA3_256_PAD.tail(1)
+        with self.assertRaises(ValueError):
+            tail[0] = 0
+
+    def test_equal_rules_share_the_cached_tail(self) -> None:
+        # SHAKE256 and SHA3-256 run the same rate but different heads, so they
+        # must NOT share; two spellings of one rule must.
+        self.assertIsNot(SHA3_256_PAD.tail(1), SHAKE256_PAD.tail(1))
+        self.assertIs(SHA3_256_PAD.tail(1), SpongePad(rate=136, head=0x06).tail(1))
 
 
 if __name__ == "__main__":

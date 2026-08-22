@@ -31,6 +31,7 @@ from typing import Any, NamedTuple
 
 from hash_frx import (
     AsconHash256,
+    AsconXof128,
     Blake2b,
     Blake2s,
     Blake3,
@@ -90,6 +91,7 @@ ALL_ROWS: tuple[RowCase, ...] = (
     RowCase("Ripemd160", Ripemd160),
     RowCase("Grostl256", Grostl256),
     RowCase("AsconHash256", AsconHash256),
+    RowCase("AsconXof128", lambda: AsconXof128(32), (lambda: AsconXof128(64),)),
     RowCase("Blake2s", Blake2s, (lambda: Blake2s(20),)),
     RowCase("Blake2b", Blake2b, (lambda: Blake2b(20),)),
     RowCase("Sha3_256", Sha3_256),

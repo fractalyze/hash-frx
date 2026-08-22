@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""The oracle is anchored to the published record before anything is held to it.
+"""The oracles are anchored to the published record before anything is held to them.
 
 `ascon_test` checks the frx Ascon-Hash256 against `reference.py`, which only
 means something if the oracle is right. Oracle and KAT transcription were both
@@ -20,8 +20,13 @@ from hash_frx.ascon.testing.reference import (
     INITIAL_STATE,
     KAT_VECTORS,
     SBOX,
+    XOF_INITIAL_STATE,
+    XOF_IV,
+    XOF_KAT_VECTORS,
     ascon_hash256,
+    ascon_xof128,
     pad,
+    permutation,
 )
 
 
@@ -67,6 +72,38 @@ class ReferenceAnchorTest(parameterized.TestCase):
         self.assertEqual(pad(8), b"\x01" + b"\x00" * 7)
         for length in (0, 1, 7, 8, 9, 15, 16, 64):
             self.assertEqual((length + len(pad(length))) % 8, 0)
+
+
+class XofReferenceAnchorTest(parameterized.TestCase):
+    """The XOF oracle against the same published record as the hash's."""
+
+    @parameterized.parameters(*((len(m), m, d) for m, d in XOF_KAT_VECTORS))
+    def test_matches_the_reference_implementation_kat(
+        self, _length: int, msg: bytes, out_hex: str
+    ) -> None:
+        self.assertEqual(ascon_xof128(msg, len(out_hex) // 2).hex(), out_hex)
+
+    def test_a_short_read_is_a_prefix_of_a_long_one(self) -> None:
+        # An XOF's defining property, and what separates a genuine squeeze from
+        # a fixed digest truncated: asking for fewer bytes must not change the
+        # bytes returned. It also pins the rate-boundary truncation, since 8 is
+        # the block and the reads below straddle it.
+        full = ascon_xof128(b"abc", 64)
+        for n in (1, 7, 8, 9, 32, 63, 64):
+            self.assertEqual(ascon_xof128(b"abc", n), full[:n])
+
+    def test_the_xof_is_not_the_hash(self) -> None:
+        # The two differ only in the IV, so a transcription that reused
+        # Ascon-Hash256's initial state would pass every structural case and
+        # fail here.
+        self.assertNotEqual(ascon_xof128(b"abc", 32), ascon_hash256(b"abc"))
+        self.assertNotEqual(XOF_INITIAL_STATE, INITIAL_STATE)
+
+    def test_the_initial_state_derives_from_the_documented_iv(self) -> None:
+        # §B Table 13's layout: Ascon-Hash256's IV with the version byte 3 and
+        # a zero output length, which is how "arbitrary output" is encoded.
+        self.assertEqual(XOF_IV, 0x0000080000CC0003)
+        self.assertEqual(XOF_INITIAL_STATE, tuple(permutation([XOF_IV, 0, 0, 0, 0])))
 
 
 if __name__ == "__main__":
