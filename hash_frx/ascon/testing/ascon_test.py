@@ -30,9 +30,15 @@ from absl.testing import absltest, parameterized
 from frx import Array
 
 from hash_frx.ascon import ascon
-from hash_frx.ascon.ascon import AsconHash256
+from hash_frx.ascon.ascon import ASCON_HASH256_DIGEST_SIZE, AsconHash256, AsconXof128
 from hash_frx.ascon.testing.host_ascon_hash256 import HostAsconHash256
-from hash_frx.ascon.testing.reference import INITIAL_STATE, KAT_VECTORS
+from hash_frx.ascon.testing.reference import (
+    INITIAL_STATE,
+    KAT_VECTORS,
+    XOF_INITIAL_STATE,
+    XOF_KAT_VECTORS,
+    ascon_xof128,
+)
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.jit_cache import assert_single_trace
@@ -234,3 +240,120 @@ class EmptyBatchTest(absltest.TestCase):
 
 if __name__ == "__main__":
     absltest.main()
+
+
+class AsconXof128KatTest(parameterized.TestCase):
+    """Ascon-XOF128 (§5.2) — the SP's own vectors, then the oracle differentially."""
+
+    @parameterized.parameters(*((len(m), m, d) for m, d in XOF_KAT_VECTORS))
+    def test_matches_the_reference_implementation_kat(
+        self, _length: int, msg: bytes, out_hex: str
+    ) -> None:
+        out_size = len(out_hex) // 2
+        batch = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        got = np.asarray(ascon.xof128(batch, out_size))
+        self.assertEqual(got.shape, (1, out_size))
+        self.assertEqual(bytes(got[0]).hex(), out_hex)
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_device_and_oracle_agree(self, length: int) -> None:
+        # Lengths the KAT transcription does not carry, at an output size that
+        # is NOT a rate multiple so the truncation runs.
+        msg = _message(length)
+        got = np.asarray(ascon.xof128(msg, 37))
+        for row in range(msg.shape[0]):
+            self.assertEqual(
+                bytes(got[row]).hex(), ascon_xof128(bytes(msg[row]), 37).hex()
+            )
+
+    def test_a_short_read_is_a_prefix_of_a_long_one(self) -> None:
+        # The XOF property on the device path: fewer bytes asked for must not
+        # be different bytes. The rate is 8, so these straddle the boundary the
+        # squeeze truncation sits on.
+        msg = _message(20)
+        full = np.asarray(ascon.xof128(msg, 64))
+        for n in (1, 7, 8, 9, 33, 64):
+            np.testing.assert_array_equal(np.asarray(ascon.xof128(msg, n)), full[:, :n])
+
+    def test_the_xof_is_not_the_hash_at_the_same_length(self) -> None:
+        # Both squeeze four 8-byte blocks from the same absorb; only the IV
+        # differs, and it must.
+        msg = _message(8)
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(ascon.xof128(msg, ASCON_HASH256_DIGEST_SIZE)),
+                np.asarray(ascon.digest(msg)),
+            )
+        )
+
+    def test_the_initial_state_meets_the_oracle_derivation(self) -> None:
+        # The device module transcribes the precomputed XOF state; the oracle
+        # derives Ascon-p[12](IV ‖ 0^256) from the documented IV. Meeting here
+        # pins the transcription against an independent derivation, exactly as
+        # `InitialStateTest` does for the hash.
+        derived = np.array([split(w) for w in XOF_INITIAL_STATE], dtype=np.uint32)
+        np.testing.assert_array_equal(ascon._XOF128_INITIAL_STATE, derived)
+
+
+class AsconXof128MarkerTest(absltest.TestCase):
+    def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
+        msg = fnp.asarray(_message(9))
+        eqn = _composite(lambda m: ascon.xof128(m, 40), msg)
+        self.assertEqual(eqn.params["name"], ascon.ASCON_XOF128_MARKER)
+        self.assertEqual(eqn.params["version"], ascon.ASCON_XOF128_MARKER_VERSION)
+        # The hash's three-operand ABI, with no captured constants: a
+        # host-materialised array closed over by the body would be lifted into
+        # an unnamed operand ahead of these.
+        self.assertLen(eqn.invars, 3)
+        self.assertEqual(eqn.invars[0].aval.shape, (5, 2))
+        self.assertEqual(eqn.invars[1].aval.shape, msg.shape)
+
+    def test_the_output_length_rides_as_an_attribute(self) -> None:
+        # It fixes the region's SHAPE — the squeeze count and the result width —
+        # which is what an attribute is for, where an operand determines a
+        # value. An emitter reads it rather than inferring the squeeze count.
+        eqn = _composite(lambda m: ascon.xof128(m, 40), fnp.asarray(_message(9)))
+        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(attrs, {"output_size": 40})
+
+    def test_two_output_lengths_are_two_regions(self) -> None:
+        msg = fnp.asarray(_message(9))
+        self.assertNotEqual(
+            _composite(lambda m: ascon.xof128(m, 32), msg).params["attributes"],
+            _composite(lambda m: ascon.xof128(m, 64), msg).params["attributes"],
+        )
+
+
+class AsconXof128ByteHashTest(absltest.TestCase):
+    def test_impl_satisfies_the_seam(self) -> None:
+        self.assertIsInstance(AsconXof128(32), ByteHash)
+
+    def test_the_output_length_is_part_of_the_value_identity(self) -> None:
+        # `AsconXof128(64)` is a different hash from `AsconXof128(32)`, not one
+        # hash asked for more bytes — so the two must not share a jit cache key.
+        self.assertEqual(AsconXof128(32), AsconXof128(32))
+        self.assertNotEqual(AsconXof128(32), AsconXof128(64))
+        self.assertNotEqual(hash(AsconXof128(32)), hash(AsconXof128(64)))
+
+    def test_digest_shape_and_dtype(self) -> None:
+        got = AsconXof128(37).digest(_message(5))
+        self.assertEqual(got.shape, (4, 37))
+        self.assertEqual(got.dtype, fnp.uint8)
+
+    def test_fusion_path_pins_the_substrate(self) -> None:
+        # No plugin recognizes the name yet, so every leg reads GENERIC —
+        # a device row, traceable, whose marker inlines.
+        self.assertIs(AsconXof128(32).fusion_path, FusionPath.GENERIC)
+
+    def test_rejects_a_zero_length_output(self) -> None:
+        with self.assertRaisesRegex(ValueError, "output_size"):
+            AsconXof128(0)
+        with self.assertRaisesRegex(ValueError, "output_size"):
+            ascon.xof128(_message(1), 0)
+
+    def test_jit_matches_eager(self) -> None:
+        msg = fnp.asarray(_message(20))
+        row = AsconXof128(40)
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(row.digest)(msg)), np.asarray(row.digest(msg))
+        )
