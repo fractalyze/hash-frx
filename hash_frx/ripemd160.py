@@ -51,7 +51,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import device_message
-from hash_frx.fusion import FusionPath, fused_region
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, rotl, unpack_le
 
 if TYPE_CHECKING:
@@ -87,13 +87,9 @@ _EMITTER_BACKENDS: tuple[str, ...] = ()
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry a RIPEMD-160 emitter. Read
-    per construction rather than at import, so the routing cannot be frozen to
-    whichever backend happened to be default when the module loaded; the lookup
-    behind `frx.default_backend()` is memoized. (Reading it late does not by
-    itself keep import backend-free — this module materializes its constants on
-    device at import, which #167 tracks.)"""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 _BLOCK = 64  # 512-bit message blocks, 16 words of 32 bits

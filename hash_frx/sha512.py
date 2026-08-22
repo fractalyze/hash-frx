@@ -53,7 +53,7 @@ from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import device_message, host_digest
-from hash_frx.fusion import FusionPath, fused_region
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -93,13 +93,9 @@ _EMITTER_BACKENDS: tuple[str, ...] = ()
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry a SHA-512 emitter. Read per
-    construction rather than at import, so the routing cannot be frozen to
-    whichever backend happened to be default when the module loaded; the lookup
-    behind `frx.default_backend()` is memoized. (Reading it late does not by
-    itself keep import backend-free — this module materializes its constants on
-    device at import, which #167 tracks.)"""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 # Round constants (first 64 bits of the fractional parts of the cube roots of

@@ -65,14 +65,13 @@ from typing import TYPE_CHECKING
 # The BLAKE3 team's Rust binding (the `blake3` distribution on PyPI), aliased
 # because the unqualified name is this package's own `blake3` module below.
 import blake3 as blake3_py
-import frx
 import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake3 import blake3
 from hash_frx.byte_hash import host_digest
-from hash_frx.fusion import FusionPath
+from hash_frx.fusion import FusionPath, routing
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
@@ -92,10 +91,9 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry the BLAKE3 emitter. Read
-    per construction so importing does not initialize a backend; the lookup
-    behind `frx.default_backend()` is memoized."""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 class _Blake3Hash:

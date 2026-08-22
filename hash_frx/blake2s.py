@@ -63,7 +63,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import device_message, host_digest
-from hash_frx.fusion import FusionPath, fused_region
+from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, rotr, unpack_le
 
 if TYPE_CHECKING:
@@ -99,10 +99,9 @@ _EMITTER_BACKENDS: tuple[str, ...] = ()
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry a BLAKE2s emitter. Read
-    per construction so importing does not initialize a backend; the lookup
-    behind `frx.default_backend()` is memoized."""
-    return _DEDICATED_EMITTER_AVAILABLE and frx.default_backend() in _EMITTER_BACKENDS
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 _BLOCK = 64  # RFC 7693 §2.1: bb = 64-byte blocks (16 words of 32 bits)
