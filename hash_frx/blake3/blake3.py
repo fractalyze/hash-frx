@@ -67,6 +67,7 @@ from hash_frx.blake3.compress import (
     ROOT,
     compress,
 )
+from hash_frx.byte_hash import padded_batch
 from hash_frx.fusion import fused_region
 from hash_frx.word import pack_le, unpack_le
 
@@ -480,7 +481,7 @@ def _block_words(msg: Array) -> Array:
     nblocks = _units(length, BLOCK_LEN)
     pad = nblocks * BLOCK_LEN - length
     if pad:
-        msg = fnp.concatenate([msg, fnp.zeros((batch, pad), dtype=fnp.uint8)], axis=-1)
+        msg = padded_batch(msg, fnp.zeros(pad, dtype=fnp.uint8))
     return pack_le(msg.reshape(batch, nblocks, BLOCK_LEN))
 
 

@@ -59,7 +59,8 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import MdStream, PadRule, Trailer, chain
+from hash_frx.extension.md import MdStream, chain
+from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, routing
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
@@ -282,16 +283,6 @@ def _shr64(a: Pair, n: int) -> Pair:
 _PAD = PadRule(128, Trailer.BIT_LENGTH, reserve=16)
 
 
-def _padding_tail(length: int) -> np.ndarray:
-    """The bytes appended to a `length`-byte message.
-
-    Built from the length alone, so it is a host constant the marked region
-    takes as an operand — which is what lets `digest` take a traced message.
-    `_PAD` memoizes, as the hand-written copy this replaces did.
-    """
-    return _PAD.tail(length)
-
-
 def _compress(state: Array, w32: Array, k: Array) -> Array:
     """One block: state [B, 16] (a..h as pairs) + message words w32 [B, 32] ->
     state [B, 16], everything in the module's big-endian pair layout. `k` is the
@@ -371,7 +362,7 @@ def _padded_words(msg: Array, tail: Array | None = None) -> Array:
     FIPS 180-4 §5.1.2 padding for L.
     """
     if tail is None:
-        tail = fnp.asarray(_padding_tail(msg.shape[-1]))
+        tail = fnp.asarray(_PAD.tail(msg.shape[-1]))
     return block_to_words(padded_batch(msg, tail))
 
 
@@ -444,9 +435,6 @@ def sha512_merkle_damgard(h0: Array, blocks: Array) -> Array:
         constants=_Kd,
         compress_block=_compress,
         serialize=serialize_digest,
-        # 8 words of 64 bits, carried as 16 uint32 lo/hi halves — frx has no
-        # native 64-bit lane, so the state is twice as wide as SHA-256's.
-        state_words=16,
         marker=(SHA512_MARKER, SHA512_MARKER_VERSION),
     )
 
@@ -462,7 +450,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash inside
     its own `@jit` or `vmap` without reaching past the seam for
     `sha512_merkle_damgard` — which would make it name SHA-512. The padding is
-    built from the static length and never reads the message (`_padding_tail`),
+    built from the static length and never reads the message (`_PAD`),
     which is the same property `sha256.digest` states.
     """
     msg = device_message(msg)
@@ -570,12 +558,11 @@ def _length_field(msg_bytes: Array) -> Array:
 # the same marked region `digest` runs, so the streaming path and the batch
 # digest go through ONE marker rather than two.
 _STREAM = MdStream(
-    block_size=_BLOCK,
+    pad=_PAD,
     block_to_words=block_to_words,
     deserialize=deserialize_digest,
     chain=sha512_merkle_damgard,
     make_state=Sha512State,
-    length_bytes=16,
     length_field=_length_field,
 )
 

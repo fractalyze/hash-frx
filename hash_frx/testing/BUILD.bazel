@@ -127,6 +127,22 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# `MdStream.absorb`'s only performance contract, for both families that run it.
+# The digests are identical either way, so nothing in a byte-exactness suite can
+# see a regression here.
+py_test(
+    name = "absorb_cost_test",
+    size = "medium",
+    srcs = ["absorb_cost_test.py"],
+    deps = [
+        "//hash_frx:sha256",
+        "//hash_frx:sha512",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 # The registry's drift guard. Its completeness case walks the package files
 # that reach runfiles, so what is listed here bounds what the sweep can see.
 # `//hash_frx` now carries the whole package (it has to, for the public

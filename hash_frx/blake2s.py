@@ -37,7 +37,7 @@ independently through the shared schedule.
 
 Contract: `digest(msg, digest_size)` takes uint8 `[B, L]` and returns uint8
 `[B, digest_size]` little-endian digests (RFC 7693 §3.3). `L` is static, so
-the zero pad is data-independent (`_padding_tail`), which is what lets `msg`
+the zero pad is data-independent (`_PAD`), which is what lets `msg`
 itself be traced. `digest_size` is 1..32 and rides the VALUE surface — RFC
 7693 folds it into the initial state through the parameter block, so
 `Blake2s(digest_size=16)` is a different hash from `Blake2s(32)`, not one
@@ -69,7 +69,7 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import PadRule, Trailer, haifa_counter
+from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, rotr, unpack_le
 
@@ -186,16 +186,6 @@ def _initial_state(digest_size: int) -> np.ndarray:
 # How this family pads, as the axes `extension/md.py` names.
 # RFC 7693 §3.3 — HAIFA, so the length rides the counter and the padding is a zero fill.
 _PAD = PadRule(64, Trailer.NONE)
-
-
-def _padding_tail(length: int) -> np.ndarray:
-    """The bytes appended to a `length`-byte message.
-
-    Built from the length alone, so it is a host constant the marked region
-    takes as an operand — which is what lets `digest` take a traced message.
-    `_PAD` memoizes, as the hand-written copy this replaces did.
-    """
-    return _PAD.tail(length)
 
 
 def _fold_counter(row: Array, t_lo: int, t_hi: int, ff: int) -> Array:
@@ -389,14 +379,14 @@ def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash`
     seam: the zero pad is built from the static length and never reads the
-    message (`_padding_tail`), which is the same property `sha256.digest`
+    message (`_PAD`), which is the same property `sha256.digest`
     states.
     """
     msg = device_message(msg)
     full = blake2s_bytes(
         fnp.asarray(_initial_state(digest_size)),
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
     )
     return full[:, :digest_size]
 

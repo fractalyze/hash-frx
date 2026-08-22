@@ -23,7 +23,7 @@ reaches the body (`_sbox` carries the circuit's provenance).
 Contract: `digest(msg)` takes uint8 `[B, L]` and returns uint8 `[B, 32]`
 digests (the trailing-256-bit truncation of Ω, spec section 3.3). Length `L`
 is static, so the padding is data-independent: a host tail built from the
-length alone (`_padding_tail`), concatenated on — which is what lets `msg`
+length alone (`_PAD`), concatenated on — which is what lets `msg`
 itself be traced. Requires no x64; everything is uint8.
 """
 
@@ -39,7 +39,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
-from hash_frx.extension.md import PadRule, Trailer
+from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import roll
 
@@ -113,16 +113,6 @@ _RC_Qd = fnp.asarray(_RC_Q)
 # How this family pads, as the axes `extension/md.py` names.
 # Grøstl v2.0.1 §3.1 — the trailer counts BLOCKS, not bits.
 _PAD = PadRule(64, Trailer.BLOCK_COUNT)
-
-
-def _padding_tail(length: int) -> np.ndarray:
-    """The bytes appended to a `length`-byte message.
-
-    Built from the length alone, so it is a host constant the marked region
-    takes as an operand — which is what lets `digest` take a traced message.
-    `_PAD` memoizes, as the hand-written copy this replaces did.
-    """
-    return _PAD.tail(length)
 
 
 def _to_state(block: Array) -> Array:
@@ -431,7 +421,7 @@ def grostl256_bytes(msg: Array) -> Array:
         _RC_Pd,
         _RC_Qd,
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
         name=GROSTL256_MARKER,
         version=GROSTL256_MARKER_VERSION,
     )
@@ -448,7 +438,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash` seam:
     the padding is built from the static length and never reads the message
-    (`_padding_tail`), which is the same property `sha256.digest` states.
+    (`_PAD`), which is the same property `sha256.digest` states.
     """
     msg = device_message(msg)
     return grostl256_bytes(msg)

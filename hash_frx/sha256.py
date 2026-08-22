@@ -37,7 +37,8 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import MdStream, PadRule, Trailer, chain
+from hash_frx.extension.md import MdStream, chain
+from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
 
@@ -188,16 +189,6 @@ _Kd = fnp.asarray(_K)
 _PAD = PadRule(64, Trailer.BIT_LENGTH)
 
 
-def _padding_tail(length: int) -> np.ndarray:
-    """The bytes appended to a `length`-byte message.
-
-    Built from the length alone, so it is a host constant the marked region
-    takes as an operand — which is what lets `digest` take a traced message.
-    `_PAD` memoizes, as the hand-written copy this replaces did.
-    """
-    return _PAD.tail(length)
-
-
 def _compress(state: Array, w16: Array, k: Array) -> Array:
     """One block: state [B, 8] (a..h) + message words w16 [B, 16] -> state [B, 8].
     `k` is the [64] round-constant table (an explicit operand so the marked
@@ -262,7 +253,7 @@ def _padded_words(msg: Array, tail: Array | None = None) -> Array:
     so its marked region captures nothing.
     """
     if tail is None:
-        tail = fnp.asarray(_padding_tail(msg.shape[-1]))
+        tail = fnp.asarray(_PAD.tail(msg.shape[-1]))
     return block_to_words(padded_batch(msg, tail))
 
 
@@ -323,7 +314,6 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
         constants=_Kd,
         compress_block=_compress,
         serialize=serialize_digest,
-        state_words=8,
         marker=(SHA256_MARKER, SHA256_MARKER_VERSION),
     )
 
@@ -347,7 +337,7 @@ def sha256_bytes(msg: Array) -> Array:
     than at `L`, so the streaming path stays on the blocks marker.
 
     Operands are explicit in the recognizer's positional ABI order
-    [h0, k, msg, tail]. `tail` is `_padding_tail(L)` passed as an operand
+    [h0, k, msg, tail]. `tail` is `_PAD.tail(L)` passed as an operand
     rather than captured (a captured constant would prepend at operand 0);
     it is derivable from the static L — a recognizing emitter reads it
     rather than re-deriving it — and load-bearing for the inlined
@@ -364,7 +354,7 @@ def sha256_bytes(msg: Array) -> Array:
         INITIAL_STATE,
         _Kd,
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
         name=SHA256_BYTES_MARKER,
         version=SHA256_BYTES_MARKER_VERSION,
     )
@@ -467,12 +457,11 @@ def _length_field(msg_bytes: Array) -> Array:
 # the same marked region `digest` runs, so the streaming path and the batch
 # digest go through ONE marker rather than two.
 _STREAM = MdStream(
-    block_size=_BLOCK,
+    pad=_PAD,
     block_to_words=block_to_words,
     deserialize=deserialize_digest,
     chain=sha256_merkle_damgard,
     make_state=Sha256State,
-    length_bytes=8,
     length_field=_length_field,
 )
 

@@ -1,115 +1,27 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Merkle-Damgard: the schedule that feeds a compression function a message.
 
-Seven families in this package run this schedule and, until now, each ran its
-own copy of it. The clearest measure was `_padding_tail`, defined nine times
-across the tree — seven here plus the two sponges — with six of the seven MD
-docstrings citing `sha256._padding_tail` as the arrangement they reproduce.
+Two shapes, and both are here because both are device code. `chain` is the
+one-shot marked region — broadcast the midstate, walk the blocks, serialize —
+and `MdStream` is the incremental one, whose absorb and finalize were
+transcribed once per SHA-2 family before this.
 
-**The rule is parameterized against all seven, not generalized from SHA-2.**
-That distinction is the one #169 paid for by deferring the byte-sponge seam
-until a second byte sponge existed: a surface shaped from one implementation
-encodes that implementation's accidents as if they were the family's. Reading
-all seven first is what surfaced these, and only the first would have survived
-a SHA-2-derived design:
-
-- the length field is **little**-endian in RIPEMD-160 and big-endian elsewhere;
-- SHA-512 reserves **16** bytes for a 128-bit length field while writing 8;
-- Grostl's trailer is the **block count**, not the bit length;
-- BLAKE2b/2s have no trailer and no 0x80 at all — HAIFA carries the length as a
-  counter into the compression, so their padding is a zero-fill to the block.
-
-`PadRule` names those axes and nothing else, so a family is its compression
-function plus four numbers rather than its own transcription of this file.
+The padding rule they schedule around lives in `pad.py`, which is pure host
+arithmetic and deliberately frx-free.
 """
 
 from __future__ import annotations
 
-import enum
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any, Protocol
 
 import frx
 import frx.numpy as fnp
-import numpy as np
 from frx import Array
 
+from hash_frx.extension.pad import PadRule
 from hash_frx.fusion import fused_region
-
-
-class Trailer(enum.Enum):
-    """What the last 8 bytes of the padding encode.
-
-    `NONE` is HAIFA: no strengthening bytes at all, because the length reaches
-    the compression as a counter operand instead of through the message.
-    """
-
-    BIT_LENGTH = "bit_length"  # SHA-2, RIPEMD-160, SM3
-    BLOCK_COUNT = "block_count"  # Grostl, which counts blocks rather than bits
-    NONE = "none"  # BLAKE2's HAIFA padding
-
-
-@dataclass(frozen=True)
-class PadRule:
-    """How a message becomes a whole number of blocks.
-
-    block_size : bytes per block.
-    trailer    : what the final 8 bytes encode, or `NONE` for HAIFA.
-    reserve    : bytes the length field must fit in when sizing the last block.
-                 8 everywhere except SHA-512, whose standard reserves 16 for a
-                 128-bit field it never fills past 64 bits.
-    big_endian : byte order of the trailer. RIPEMD-160 is the little-endian one.
-    """
-
-    block_size: int
-    trailer: Trailer
-    reserve: int = 8
-    big_endian: bool = True
-
-    def __post_init__(self) -> None:
-        if self.block_size <= 0 or self.block_size % 8:
-            raise ValueError(
-                f"block_size must be a positive multiple of 8, got {self.block_size}"
-            )
-        if self.trailer is not Trailer.NONE and self.reserve < 8:
-            raise ValueError(
-                f"a trailer needs at least 8 reserved bytes, got {self.reserve}"
-            )
-
-    # Memoized because all seven families memoized their own copy: a digest
-    # rebuilds the tail on every trace otherwise, and the rule is a frozen
-    # dataclass over four hashable fields, so keying on `self` is sound. The
-    # returned array is shared, and every caller passes it to `fnp.asarray`
-    # rather than mutating it.
-    @lru_cache(maxsize=None)
-    def tail(self, length: int) -> np.ndarray:
-        """The bytes appended to a `length`-byte message, built from the length
-        alone.
-
-        Data-independent by construction, which is what lets `digest` take a
-        traced message: the tail is a host constant threaded through the marked
-        region as an operand, never something read off the message.
-        """
-        if self.trailer is Trailer.NONE:
-            # HAIFA: zero-fill to a block, and a whole empty block for the empty
-            # message, since the compression still has to run once.
-            if length == 0:
-                return np.zeros(self.block_size, dtype=np.uint8)
-            return np.zeros(-length % self.block_size, dtype=np.uint8)
-
-        nblocks = (length + self.reserve) // self.block_size + 1
-        tail = np.zeros(nblocks * self.block_size - length, dtype=np.uint8)
-        tail[0] = 0x80
-        value = length * 8 if self.trailer is Trailer.BIT_LENGTH else nblocks
-        encoded = (
-            int(value).to_bytes(8, "big")
-            if self.big_endian
-            else int(value).to_bytes(8, "little")
-        )
-        tail[-8:] = np.frombuffer(encoded, dtype=np.uint8)
-        return tail
 
 
 def chain(
@@ -119,7 +31,6 @@ def chain(
     constants: Array,
     compress_block: Callable[[Array, Array, Array], Array],
     serialize: Callable[[Array], Array],
-    state_words: int,
     marker: tuple[str, int],
 ) -> Array:
     """The compression chain from midstate `h0` over `blocks`, as one marked
@@ -154,7 +65,10 @@ def chain(
     def decomposition(
         h0: Array, constants: Array, blocks: Array, **_attrs: object
     ) -> Array:
-        state = fnp.broadcast_to(h0, (blocks.shape[0], state_words))
+        # Width comes off the operand: `h0` is the unbatched midstate, so any
+        # other value would be a broadcast error rather than a different
+        # outcome — a parameter that cannot change a result is one nobody needs.
+        state = fnp.broadcast_to(h0, (blocks.shape[0], h0.shape[-1]))
         for i in range(blocks.shape[1]):  # static, small
             state = compress_block(state, blocks[:, i], constants)
         return serialize(state)
@@ -184,12 +98,12 @@ class _Midstate(Protocol):
         """The trailing partial block, valid prefix `[:pending_len]`."""
 
     @property
-    def counts(self) -> Array:
-        """int32[2] = [pending_len, total bytes absorbed]."""
-
-    @property
     def pending_len(self) -> Array:
         """Bytes currently buffered in `pending`."""
+
+    @property
+    def total_len(self) -> Array:
+        """Total bytes absorbed so far."""
 
 
 @dataclass(frozen=True)
@@ -211,17 +125,16 @@ class MdStream:
     The pieces below are the family's, and the schedule is this class's.
     """
 
-    block_size: int
+    # The family's padding rule, which already carries the block size and the
+    # bytes the length field claims. Restating them here let the batch digest
+    # and the streaming finalize disagree about where the length field goes.
+    pad: PadRule
     block_to_words: Callable[[Array], Array]
     deserialize: Callable[[Array], Array]
     # (h0, blocks) -> serialized final state; the family's own marked chain, so
     # the streaming path and the batch digest go through ONE marker.
     chain: Callable[[Array, Array], Array]
     make_state: Callable[[Array, Array, Array], Any]
-    # Bytes the trailing length field occupies: 8 for SHA-256, 16 for SHA-512's
-    # 128-bit field. It sets how much of the final block the padding claims, and
-    # so how wide a tail `finalize` can still accept.
-    length_bytes: int
     length_field: Callable[[Array], Array]
 
     def absorb(self, state: _Midstate, data: Array) -> Any:
@@ -232,7 +145,7 @@ class MdStream:
         slices — never a traced-index gather or a scan-carry scatter — which is
         the CPU-safe pattern `transcript.DuplexTranscript` uses.
         """
-        block = self.block_size
+        block = self.pad.block_size
         length = data.shape[0]
         pl = state.pending_len
         combined_src = fnp.concatenate([state.pending, data.astype(fnp.uint8)])
@@ -261,33 +174,24 @@ class MdStream:
         # property, the same one that lets a stream pick up from a midstate.
         # Running both from `h` instead costs min + max compressions — 2N - 1,
         # measured at 31 for a 1000-byte absorb where 16 suffice.
-        h = state.h
         min_blocks = length // block
-        if max_blocks == 0:
-            h_new = h
-        else:
+        h_new = state.h
+        if max_blocks:
             words = self.block_to_words(
                 combined[: max_blocks * block].reshape(1, max_blocks * block)
             )
-            if min_blocks == max_blocks:
-                h_new = self.deserialize(self.chain(h, words))[0]
-            else:
-                h_lo = (
-                    self.deserialize(self.chain(h, words[:, :min_blocks]))[0]
-                    if min_blocks > 0
-                    else h
-                )
-                h_hi = self.deserialize(
-                    self.chain(h_lo, words[:, min_blocks:max_blocks])
-                )[0]
-                h_new = fnp.where(active_blocks == max_blocks, h_hi, h_lo)
+            if min_blocks:
+                h_new = self.deserialize(self.chain(h_new, words[:, :min_blocks]))[0]
+            if max_blocks > min_blocks:
+                h_hi = self.deserialize(self.chain(h_new, words[:, min_blocks:]))[0]
+                h_new = fnp.where(active_blocks == max_blocks, h_hi, h_new)
 
         tail_len = new_len - active_blocks * block
         tail = frx.lax.dynamic_slice(combined, (active_blocks * block,), (block,))
         slot = fnp.arange(block, dtype=fnp.int32)
         pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
         # One fused counter update: [pending_len', total'] = [tail_len, total+L].
-        counts = fnp.stack([tail_len, state.counts[1] + fnp.int32(length)])
+        counts = fnp.stack([tail_len, state.total_len + fnp.int32(length)])
         return self.make_state(h_new, pending, counts)
 
     def finalize(self, state: _Midstate, extras: Array) -> Array:
@@ -305,7 +209,7 @@ class MdStream:
         rejected rather than silently overlapping the padding. Absorb the prefix
         and finalize with the remainder.
         """
-        block, lb = self.block_size, self.length_bytes
+        block, lb = self.pad.block_size, self.pad.reserve
         batch, e = extras.shape
         if e > block - lb:
             raise ValueError(
@@ -316,7 +220,7 @@ class MdStream:
             )
         pl = state.pending_len
         content_len = pl + fnp.int32(e)
-        len_bytes = self.length_field(state.counts[1] + fnp.int32(e))
+        len_bytes = self.length_field(state.total_len + fnp.int32(e))
 
         # One block only if the content, the 0x80 and the length field all fit.
         two_blocks = content_len > fnp.int32(block - lb - 1)
@@ -350,26 +254,3 @@ class MdStream:
         return fnp.where(
             two_blocks, self.chain(state.h, words), self.chain(state.h, words[:, :1])
         )
-
-
-def haifa_counter(
-    index: int, nblocks: int, length: int, block_size: int
-) -> tuple[int, bool]:
-    """BLAKE2's per-block `(t, last)`: bytes hashed through the end of block
-    `index`, and whether it is the final one.
-
-    HAIFA is Merkle-Damgard with the length fed to the compression rather than
-    into the message, which is why these rows pad with a bare zero fill
-    (`Trailer.NONE`) — and why the count here is the TRUE message length on the
-    final block rather than the padded one. RFC 7693 §3.2 counts a full block
-    per interior block; §3.3 has the final block report the real length, so the
-    zero pad is never counted. Getting that wrong is a wrong digest on exactly
-    the messages whose length is not a block multiple.
-
-    Shared by BLAKE2b and BLAKE2s, whose copies were identical down to the
-    comment. Not folded into a general bytes-in chain: measured across the four
-    bytes-in families, such a helper would share three lines out of forty to
-    fifty-six and need five callbacks to do it, so the loop stays where it reads.
-    """
-    last = index == nblocks - 1
-    return (length if last else (index + 1) * block_size), last

@@ -15,10 +15,9 @@ not each change an outcome is a rule with a parameter nobody needs.
 
 from __future__ import annotations
 
-import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.extension.md import PadRule, Trailer, haifa_counter
+from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
 
 SHA256 = PadRule(64, Trailer.BIT_LENGTH)
 SHA512 = PadRule(128, Trailer.BIT_LENGTH, reserve=16)
@@ -130,13 +129,20 @@ class PadRuleValidationTest(absltest.TestCase):
 
 
 class PadRuleTailIsSafeToShareTest(absltest.TestCase):
-    def test_the_memoized_tail_is_the_documented_shape(self) -> None:
-        # `tail` is memoized, so callers share one array. They all hand it to
-        # `fnp.asarray`; this pins that nothing has made it writable-in-place by
-        # accident, which would corrupt every later caller.
-        first, second = SHA256.tail(55), SHA256.tail(55)
-        self.assertIs(first, second)
-        np.testing.assert_array_equal(first, second)
+    def test_the_memoized_tail_is_read_only(self) -> None:
+        # `tail` is memoized, so callers share one array — and the cache keys by
+        # VALUE, so equal rules share an entry too. A writable array here means
+        # one caller can change another family's padding.
+        tail = SHA256.tail(55)
+        self.assertIs(SHA256.tail(55), tail)
+        self.assertFalse(tail.flags.writeable)
+        with self.assertRaises(ValueError):
+            tail[0] = 0
+
+    def test_equal_rules_share_the_cached_tail(self) -> None:
+        # SHA-256 and SM3 are the same rule by value, which is what makes the
+        # read-only guarantee load-bearing rather than tidy.
+        self.assertIs(SHA256.tail(55), SM3.tail(55))
 
 
 class HaifaCounterTest(absltest.TestCase):

@@ -28,7 +28,7 @@ table array ever reaches the body.
 
 Contract: `digest(msg)` takes uint8 `[B, L]` and returns uint8 `[B, 20]`
 digests. Length `L` is static, so the padding is data-independent: a host tail
-built from the length alone (`_padding_tail`), concatenated on — which is what
+built from the length alone (`_PAD`), concatenated on — which is what
 lets `msg` itself be traced. Requires no x64; all arithmetic is uint32 (wraps
 mod 2^32 in XLA).
 
@@ -51,7 +51,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
-from hash_frx.extension.md import PadRule, Trailer
+from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, rotl, unpack_le
 
@@ -158,16 +158,6 @@ _S_RIGHT = (
 # How this family pads, as the axes `extension/md.py` names.
 # the designers' pseudocode — little-endian throughout, the opposite of SHA-2.
 _PAD = PadRule(64, Trailer.BIT_LENGTH, big_endian=False)
-
-
-def _padding_tail(length: int) -> np.ndarray:
-    """The bytes appended to a `length`-byte message.
-
-    Built from the length alone, so it is a host constant the marked region
-    takes as an operand — which is what lets `digest` take a traced message.
-    `_PAD` memoizes, as the hand-written copy this replaces did.
-    """
-    return _PAD.tail(length)
 
 
 def _f1(x: Array, y: Array, z: Array) -> Array:
@@ -293,7 +283,7 @@ def ripemd160_bytes(msg: Array) -> Array:
         decomposition,
         _H0d,
         msg,
-        fnp.asarray(_padding_tail(msg.shape[-1])),
+        fnp.asarray(_PAD.tail(msg.shape[-1])),
         name=RIPEMD160_MARKER,
         version=RIPEMD160_MARKER_VERSION,
     )
@@ -310,7 +300,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash` seam:
     the padding is built from the static length and never reads the message
-    (`_padding_tail`), which is the same property `sha256.digest` states.
+    (`_PAD`), which is the same property `sha256.digest` states.
     """
     msg = device_message(msg)
     return ripemd160_bytes(msg)

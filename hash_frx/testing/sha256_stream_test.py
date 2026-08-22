@@ -9,7 +9,6 @@ transcript threads `@jit` / a `lax.scan` carry (`Sha256FieldTranscript`).
 from __future__ import annotations
 
 import hashlib
-import re
 
 import frx
 import frx.numpy as fnp
@@ -18,8 +17,6 @@ from absl.testing import absltest, parameterized
 
 from hash_frx import sha256
 from hash_frx.sha256 import (
-    _BLOCK,
-    SHA256_MARKER,
     Sha256State,
     sha256_stream_absorb,
     sha256_stream_finalize,
@@ -162,49 +159,6 @@ class FinalizeBoundsTest(parameterized.TestCase):
         wrapped = np.asarray(count & 0xFFFFFFFF, dtype=np.uint32).astype(np.int32)
         got = np.asarray(sha256._length_field(fnp.asarray(wrapped))).tobytes()
         self.assertEqual(got, (count * 8).to_bytes(8, "big"))
-
-
-class AbsorbCompressionCountTest(parameterized.TestCase):
-    """What the absorb costs, pinned — the prefix form is invisible otherwise.
-
-    The live block count depends on `pending_len`, which is runtime data, so the
-    absorb computes both static candidates and selects. Running each from the
-    base midstate costs `min + max` compressions; continuing the high one from
-    the low one costs `min + 1`, because Merkle-Damgard composes — and nothing
-    in a byte-exactness suite can tell the two apart, which is why the count
-    needs its own assertion.
-
-    Block multiples are in the table on purpose: there `min == max`, only one
-    candidate exists, and the prefix form must not add work.
-    """
-
-    @parameterized.named_parameters(
-        ("block_multiple_1", 64, 1),
-        ("block_multiple_2", 128, 2),
-        ("just_over_one_block", 65, 2),
-        ("mid_block", 100, 2),
-        ("just_over_two", 129, 3),
-        ("several_blocks", 200, 4),
-        ("many_blocks", 1000, 16),
-    )
-    def test_absorb_compresses_each_block_about_once(
-        self, length: int, expected_blocks: int
-    ) -> None:
-        data = fnp.asarray(np.arange(length, dtype=np.uint8))
-        text = (
-            frx.jit(lambda d: sha256_stream_absorb(sha256_stream_init(), d))
-            .lower(data)
-            .as_text()
-        )
-        blocks = [
-            int(n)
-            for n in re.findall(
-                r'composite "' + SHA256_MARKER + r'".*?tensor<1x(\d+)x16xui32>', text
-            )
-        ]
-        self.assertEqual(sum(blocks), expected_blocks)
-        # min + 1 at most: the second candidate is one block past the first.
-        self.assertLessEqual(sum(blocks), length // _BLOCK + 1)
 
 
 if __name__ == "__main__":

@@ -203,11 +203,13 @@ def padded_batch(msg: Array, tail: Array) -> Array:
     """`msg` with its padding appended: uint8 `[B, L]` + `[T]` -> `[B, L + T]`.
 
     The tail is one row — it is a function of the message LENGTH, which every
-    row of a batch shares — so it broadcasts across the batch rather than being
-    materialized per row.
+    row of a batch shares — so it is broadcast rather than built per row. (The
+    concatenate still materializes the `[B, L + T]` result; what the broadcast
+    avoids is a second per-row copy of the tail.)
 
-    Shared by both extensions rather than living with either. Nine files built
-    this concatenate: the seven Merkle-Damgard families and both byte sponges.
+    Shared by both extensions rather than living with either. Ten files built
+    this concatenate: the seven Merkle-Damgard families, both byte sponges, and
+    BLAKE3's chunk padding.
     It is not an MD step and not a sponge step; it is the last thing that
     happens to a message before whichever schedule reads it, which is why it
     sits next to `device_message` on the seam.
