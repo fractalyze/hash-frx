@@ -159,6 +159,19 @@ differential cases that pin an implementation against its standard live with tha
 implementation. A double that computes real digests duplicates an implementation
 and implies a fidelity the seam test does not check.
 
+That property is enforced by the target, which carries no device plugin — so an
+assertion there may not reach `frx.numpy` at all, not even `fnp.asarray`. One
+that does passes the CPU leg and fails the GPU leg with `Unable to initialize
+backend 'cuda'`, naming nothing about seams. The fix is the function, not the
+target: validate before converting, so the check needs no backend
+(`byte_hash.device_message` reads `np.ndim` — which returns `.ndim` for an array
+or a tracer and only converts a plain sequence — before it calls `fnp.asarray`).
+Giving the target a plugin instead would spend exactly what #167 is trying to
+get back.
+
+**Run both legs before pushing.** The GPU leg is also the only one that reports
+a lost fusion marker, so a green CPU run is weak evidence twice over.
+
 Three assertions here exist because the failure they catch is silent — right
 bytes, wrong lowering. **Each is written so that it bites**, and the proof that
 it bites is a test:
