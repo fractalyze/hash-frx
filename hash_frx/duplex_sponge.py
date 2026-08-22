@@ -5,8 +5,13 @@ input into the rate lanes (`state[:rate] += block`, not overwrite — contrast t
 one-shot overwrite `Sponge`), permuting when a rate block fills or the duplex
 direction switches; squeeze reads the rate lanes, permuting when they drain.
 This is the agnostic primitive a classic Fiat-Shamir prover (e.g. an
-ark-sponge-faithful accumulation prover) drives; the scheme-specific challenge
-packing, domain separation, and field conversions live in the consumer.
+ark-crypto-primitives-0.5-faithful accumulation prover) drives; the
+scheme-specific challenge packing, domain separation, and field conversions live
+in the consumer. A consumer that must byte-match ark-sponge 0.3 cannot use this
+construction as-is: 0.3's squeeze skips a spill permute when the remaining
+request equals the rate — re-emitting already-squeezed lanes, the bug 0.5
+fixed — and reproducing that belongs to an explicitly named convention row,
+not to the default.
 
 Unlike its siblings, this one constrains the permutation's dtype, and enforces it
 in `__init__` rather than only stating it: the absorb merge is `+`, so `+` must be
@@ -24,8 +29,7 @@ conventions and diverge on three independent axes — the absorb merge (add here
 vs overwrite there), the squeeze read direction (this reads the rate low→high;
 `DuplexTranscript` pops it high→low, so a partial squeeze returns different lanes,
 not merely reversed ones), and the permute timing (this defers the permute on an
-exactly-filled rate block and skips a spill permute when a squeeze request equals
-the rate exactly). A shared core would have to parameterize all three — two
+exactly-filled rate block). A shared core would have to parameterize all three — two
 conventions in one config object, not real reuse — so the genuinely shared part
 (a buffer, a position, a permute call) does not justify merging them.
 
@@ -120,15 +124,20 @@ class DuplexSponge:
     def _absorb_into_rate(
         self, state: Array, start: int, elems: Array
     ) -> tuple[Array, int]:
-        # Add elements into the rate lanes from `start`; when they spill past the
-        # rate block, add what fits, permute, and recurse onto the fresh block.
-        n = elems.shape[0]
-        if start + n <= self.rate:
-            return state.at[start : start + n].add(elems), start + n
-        take = self.rate - start
-        state = state.at[start : self.rate].add(elems[:take])
-        state = self._permutation.permute(state)
-        return self._absorb_into_rate(state, 0, elems[take:])
+        # Add elements into the rate lanes from `start`; when they spill past
+        # the rate block, add what fits, permute, and continue on the fresh
+        # block. A loop rather than recursion: the block count is input-length /
+        # rate, and recursing per block hit Python's recursion limit near a
+        # thousand blocks.
+        while True:
+            n = elems.shape[0]
+            if start + n <= self.rate:
+                return state.at[start : start + n].add(elems), start + n
+            take = self.rate - start
+            state = state.at[start : self.rate].add(elems[:take])
+            state = self._permutation.permute(state)
+            elems = elems[take:]
+            start = 0
 
     def squeeze(self, n: int) -> tuple["DuplexSponge", Array]:
         if n < 0:
@@ -150,16 +159,18 @@ class DuplexSponge:
     ) -> tuple[Array, int, Array]:
         # Read n elements from the rate lanes starting at `start`; when the
         # request drains past the rate block, read what is there, permute, and
-        # continue on the fresh block. The permute is skipped when the remaining
-        # request length equals the rate exactly (ark-sponge's squeeze edge rule).
-        # Block reads are collected and concatenated once, so the traced copy is
-        # linear in the squeeze length rather than quadratic in the block count.
+        # continue on the fresh block — unconditionally. ark-sponge 0.3 skipped
+        # the permute when the remaining request equaled the rate exactly, which
+        # re-reads lanes an earlier squeeze already returned; that is the bug
+        # ark-crypto-primitives 0.5 fixed (`if !output_remaining.is_empty()`),
+        # not a convention, so it is not reproduced here. Block reads are
+        # collected and concatenated once, so the traced copy is linear in the
+        # squeeze length rather than quadratic in the block count.
         chunks = []
         while start + n > self.rate:
             chunks.append(state[start : self.rate])
             take = self.rate - start
-            if n != self.rate:
-                state = self._permutation.permute(state)
+            state = self._permutation.permute(state)
             n -= take
             start = 0
         chunks.append(state[start : start + n])
