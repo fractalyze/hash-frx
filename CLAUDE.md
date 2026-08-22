@@ -11,8 +11,9 @@ rules every change must respect.
   [`docs/reference/conventions.md`](docs/reference/conventions.md)
 - **Design notes — why two seams, and what may live in this repo at all:**
   [`docs/blocks/hash.md`](docs/blocks/hash.md)
-- **Dev environment — backend selection, the CUDA-12 requirement, running
-  against an unreleased XLA, the compile cache:**
+- **Dev environment — backend selection, the two test legs (`bazel test` runs
+  only one), the lowering gate a wire-preserving refactor needs, the CUDA-12
+  requirement, running against an unreleased XLA, the compile cache:**
   [`docs/reference/development.md`](docs/reference/development.md)
 - **Detailed design & open decisions:** tracked on GitHub — epic issue
   [fractalyze/hash-frx#1](https://github.com/fractalyze/hash-frx/issues/1).
