@@ -213,6 +213,14 @@ def host_digest(
     never be a tracer. That is the seam's return-type rule above, and returning
     `np.ndarray` is what states it.
     """
+    # Same rank check `device_message` makes, for the same reason and with the
+    # same message. Without it a 1-D message is not rejected but re-read: the
+    # loop below walks the wrong axis and returns one digest per BYTE, which is
+    # a well-formed answer to a different question (#235). A device row and its
+    # host sibling are two implementations of one function, so the same call has
+    # to mean the same thing through both.
+    if np.ndim(msg) != 2:
+        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={np.ndim(msg)}")
     rows = np.ascontiguousarray(np.asarray(msg, dtype=np.uint8))  # [B, L]
     out = np.empty((rows.shape[0], digest_size), dtype=np.uint8)
     for i, row in enumerate(rows):

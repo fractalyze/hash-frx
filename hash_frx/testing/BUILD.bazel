@@ -82,6 +82,36 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# Every shipped `ByteHash` row, as one list. testonly library so the
+# conformance suite and any later re-layering step walk the same list.
+py_library(
+    name = "rows",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "rows.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = ["//hash_frx"],
+)
+
+# The seam's contract, asserted against all thirty-two rows at once rather than
+# family by family — which is how the #211 and #215 sweeps came to miss SM3 and
+# BLAKE2s. The equality cases are the load-bearing ones: a row's __eq__/__hash__
+# is its jit cache key.
+py_test(
+    name = "row_conformance_test",
+    size = "large",
+    srcs = ["row_conformance_test.py"],
+    deps = [
+        ":rows",
+        "//hash_frx",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 # The registry's drift guard. Its completeness case walks the package files
 # that reach runfiles, so what is listed here bounds what the sweep can see.
 # `//hash_frx` now carries the whole package (it has to, for the public
