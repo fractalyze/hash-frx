@@ -59,7 +59,7 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import PadRule, Trailer, chain
+from hash_frx.extension.md import MdStream, PadRule, Trailer, chain
 from hash_frx.fusion import FusionPath, routing
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
@@ -544,59 +544,26 @@ def sha512_stream_init() -> Sha512State:
     )
 
 
+# The incremental schedule, with this family's pieces plugged in. `chain` is
+# the same marked region `digest` runs, so the streaming path and the batch
+# digest go through ONE marker rather than two.
+_STREAM = MdStream(
+    block_size=_BLOCK,
+    block_to_words=block_to_words,
+    deserialize=deserialize_digest,
+    chain=sha512_merkle_damgard,
+    make_state=Sha512State,
+)
+
+
 def sha512_stream_absorb(state: Sha512State, data: Array) -> Sha512State:
     """Absorb `data` (uint8 [L], L static) into the incremental hash: fold every
     newly-complete 128-byte block into the midstate, keep the `<128 B` remainder
     as the new pending block. The block loop is a Python-unrolled,
     active-count-masked schedule over STATIC slices (never a traced-index gather
     / scan-carry scatter) — `sha256_stream_absorb`'s pattern."""
-    length = data.shape[0]
-    pl = state.pending_len
-    combined_src = fnp.concatenate([state.pending, data.astype(fnp.uint8)])  # [128+L]
-    new_len = pl + fnp.int32(length)
-    active_blocks = new_len // _BLOCK
-    max_blocks = (_BLOCK - 1 + length) // _BLOCK  # static upper bound
 
-    # Drop the pending buffer's invalid gap [pending_len:128] from the stream:
-    # for stream position j, source index is j while j < pending_len, else
-    # shifted to skip past the gap.
-    total_slots = (max_blocks + 1) * _BLOCK
-    pos = fnp.arange(total_slots, dtype=fnp.int32)
-    src_idx = pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl)
-    src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
-    combined = combined_src[src_idx]  # [total_slots], valid prefix [0:new_len]
-
-    # Fold the newly-complete blocks through the marked chain. The live block
-    # count depends on pending_len by AT MOST one — (pl + L) // 128 spans
-    # {L // 128, (127 + L) // 128} — so run the chain at both static candidate
-    # counts and select; the discarded candidate is the only one that ever sees
-    # the gap-shifted junk tail block.
-    h = state.h
-    min_blocks = length // _BLOCK
-    if max_blocks == 0:
-        h_new = h
-    else:
-        words = block_to_words(
-            combined[: max_blocks * _BLOCK].reshape(1, max_blocks * _BLOCK)
-        )  # [1, max_blocks, 32]
-        h_hi = deserialize_digest(sha512_merkle_damgard(h, words))[0]
-        if min_blocks == max_blocks:
-            h_new = h_hi
-        else:
-            h_lo = (
-                deserialize_digest(sha512_merkle_damgard(h, words[:, :min_blocks]))[0]
-                if min_blocks > 0
-                else h
-            )
-            h_new = fnp.where(active_blocks == max_blocks, h_hi, h_lo)
-
-    tail_len = new_len - active_blocks * _BLOCK
-    tail = frx.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
-    slot = fnp.arange(_BLOCK, dtype=fnp.int32)
-    pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
-    # One fused counter update: [pending_len', total_len'] = [tail_len, total+L].
-    counts = fnp.stack([tail_len, state.counts[1] + fnp.int32(length)])
-    return Sha512State(h_new, pending, counts)
+    return _STREAM.absorb(state, data)
 
 
 def _length_field(msg_bytes: Array) -> Array:
