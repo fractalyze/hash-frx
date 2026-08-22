@@ -7,27 +7,23 @@ missing from whichever row shipped last — which is what happened twice, when t
 seam sweeps behind #211 and #215 both had to be re-applied to SM3 and BLAKE2s
 after the fact. This walks the list instead.
 
-The equality cases carry the most weight and read like the least. A row's
-`__eq__`/`__hash__` is its **jit cache key**: two instances that compare equal
-share a trace, and two that do not each get their own. Get it wrong in the
-lenient direction and one key's compiled executable is served for another's —
-silently, with the right shape and the wrong constants. That is why `variant`
-exists in the registry, and why "equal" and "distinguishable" are both asserted
-rather than just the first.
+The equality cases carry the most weight and read like the least: a row's
+`__eq__`/`__hash__` is its jit cache key, and `byte_hash.Row` states what that
+costs when it is wrong. That is why the registry carries `variants`, and why
+"equal" and "distinguishable" are both asserted rather than just the first.
 """
 
 from __future__ import annotations
 
 import importlib
-import pathlib
 
 import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-import hash_frx
 from hash_frx.byte_hash import ByteHash, DeviceRow, HostRow, Row
 from hash_frx.fusion import FusionPath
+from hash_frx.testing.package_sweep import shipped_sources
 from hash_frx.testing.rows import ALL_ROWS, DEVICE_ROWS, HOST_ROWS, RowCase
 
 _MSG = np.arange(3 * 40, dtype=np.uint8).reshape(3, 40)
@@ -63,13 +59,17 @@ class RowEqualityTest(parameterized.TestCase):
         self.assertIn(case.make(), {case.make(): "cached"})
 
     @parameterized.named_parameters(
-        *[(c.name, c) for c in ALL_ROWS if c.variant is not None]
+        *[(f"{c.name}_{i}", c, i) for c in ALL_ROWS for i in range(len(c.variants))]
     )
-    def test_different_parameters_compare_unequal(self, case: RowCase) -> None:
+    def test_different_parameters_compare_unequal(
+        self, case: RowCase, index: int
+    ) -> None:
         # The lenient-direction failure: a row that adds a parameter and forgets
         # to compare on it serves one parameterization's trace for another's.
-        assert case.variant is not None
-        self.assertNotEqual(case.make(), case.variant())
+        # One case per parameter, because a row with two of them and one variant
+        # leaves the other untested — which is how `_Blake3Hash`'s output-length
+        # half went unexercised.
+        self.assertNotEqual(case.make(), case.variants[index]())
 
     @parameterized.named_parameters(*_named(ALL_ROWS))
     def test_a_foreign_type_is_not_equal(self, case: RowCase) -> None:
@@ -155,17 +155,10 @@ class RegistryTest(absltest.TestCase):
         # package, so the sweep walks the SOURCE TREE rather than the modules
         # the registry already names — deriving the search boundary from the
         # thing being checked would let a whole new row module ship with zero
-        # rows registered and still pass. `markers_test` sweeps the same way for
-        # the same reason.
-        package = pathlib.Path(next(iter(hash_frx.__path__)))
+        # rows registered and still pass.
         registered = {type(c.make()) for c in ALL_ROWS}
         missing = []
-        for source in sorted(package.rglob("*.py")):
-            if "testing" in source.relative_to(package).parts:
-                continue
-            name = ".".join(
-                ("hash_frx", *source.relative_to(package).with_suffix("").parts)
-            ).removesuffix(".__init__")
+        for name, _path in shipped_sources():
             module = importlib.import_module(name)
             for attr, obj in vars(module).items():
                 if attr.startswith("_") or not isinstance(obj, type):

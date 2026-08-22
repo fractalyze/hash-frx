@@ -103,10 +103,20 @@ changes what `permute` lowers to, which is why
 [`sparse.py`](../../hash_frx/poseidon/sparse.py) folds its marker name into the
 key.
 
-The `Permutation` and `ByteHash` Protocols require this and cannot enforce it: a
-Protocol carries no implementation. Getting it wrong does not error — identity
-equality makes every freshly built instance a new jit cache key and re-traces the
-enclosing zone per call, so it surfaces as a slow caller and never as a failure.
+Getting it wrong does not error — identity equality makes every freshly built
+instance a new jit cache key and re-traces the enclosing zone per call, so it
+surfaces as a slow caller and never as a failure.
+
+The two seams answer this differently, and the split is deliberate rather than
+settled. On the **`ByteHash`** side the contract is implemented once, on
+[`byte_hash.Row`](../../hash_frx/byte_hash.py), which every row inherits: a row
+overrides `_parameters()` and nothing else, and `row_conformance_test` builds
+each parameterized row once per parameter and requires the results to differ. On
+the **`Permutation`** side the Protocol still cannot enforce it — each of the
+five implementations carries its own pair, spelled with `isinstance` rather than
+`type(other) is not type(self)`. Folding those onto a shared base is open work;
+until it lands, a new permutation copies the existing spelling and a new row
+does not.
 `assert_single_trace` ([`testing/jit_cache.py`](../../hash_frx/testing/jit_cache.py))
 is what pins it.
 

@@ -46,8 +46,6 @@ class HostRipemd160(HostRow):
     # literal lives here rather than importing the device module's constant —
     # the oracle side of the differential carries no frx hash to import.
     digest_size = 20
-    # The one legitimate class constant of the taxonomy: a host row is HOST on
-    # every backend, so nothing here varies with the pin.
 
     def _hash_one(self, data: ReadableBuffer) -> bytes:
         return ripemd160(bytes(data))

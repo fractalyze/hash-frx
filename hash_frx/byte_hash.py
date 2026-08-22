@@ -114,8 +114,11 @@ class Row:
     differ.
     """
 
+    # `fusion_path` is deliberately NOT declared here: `DeviceRow` and `HostRow`
+    # each supply their own, and leaving it off is what lets an adapter that has
+    # no fusion path at all — `Hmac` — share the equality contract rather than
+    # keep a thirty-third copy of it.
     digest_size: int
-    fusion_path: FusionPath
 
     def _parameters(self) -> tuple[object, ...]:
         """Everything two instances of this row compare on, beyond their type.
@@ -189,17 +192,8 @@ def _require_batch_rank(msg: ArrayLike) -> None:
 def device_message(msg: ArrayLike) -> Array:
     """A message as the uint8 `[B, L]` batch every device row hashes.
 
-    The rank is checked at the seam so a caller holding the wrong one is told
-    so eagerly, rather than from inside the trace of a marked region — where it
-    surfaces as a reshape or concatenate error naming neither the seam nor the
-    rank. A 1-D message is the common miss: a single message is `B = 1`, not a
-    bare `[L]`.
-
-    Checked *before* the conversion, so a wrong rank never reaches a device and
-    the check itself needs no backend — which is what lets the seam's own test
-    stay substrate-free, as a seam test must. `np.ndim` reads `.ndim` where
-    there is one (an array, a tracer) and only falls back to converting for a
-    plain sequence, so this holds under `jit` too.
+    The rank is checked before the conversion (`_require_batch_rank`, which
+    carries the reasoning), so a wrong rank never reaches a device.
     """
     _require_batch_rank(msg)
     return fnp.asarray(msg, dtype=fnp.uint8)
@@ -237,11 +231,8 @@ def host_digest(
     never be a tracer. That is the seam's return-type rule above, and returning
     `np.ndarray` is what states it.
     """
-    # The same check the device door makes. Without it a 1-D message is not
-    # rejected but re-read: the loop below walks the wrong axis and returns one
-    # digest per BYTE (#235). A device row and its host sibling are two
-    # implementations of one function, so the same call has to mean the same
-    # thing through both — which is why the check is shared rather than copied.
+    # Without this the loop below walks the wrong axis and returns one digest
+    # per BYTE — a well-formed answer to a different question (#235).
     _require_batch_rank(msg)
     rows = np.ascontiguousarray(np.asarray(msg, dtype=np.uint8))  # [B, L]
     out = np.empty((rows.shape[0], digest_size), dtype=np.uint8)

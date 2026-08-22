@@ -33,7 +33,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import ByteHash
+from hash_frx.byte_hash import ByteHash, Row
 
 # The FIPS 198-1 §4 inner / outer pad bytes, repeated to the block. Python ints
 # here — wrapped per use — so importing this module puts nothing on a backend.
@@ -41,7 +41,7 @@ _IPAD = 0x36
 _OPAD = 0x5C
 
 
-class Hmac:
+class Hmac(Row):
     """HMAC over a `ByteHash` — FIPS 198-1, byte-identical to the standard.
 
     byte_hash : the underlying byte hash `H` (any `ByteHash`; a host row works
@@ -111,11 +111,3 @@ class Hmac:
         so an `Hmac` riding as pytree aux stays re-trace-safe (the hash rows
         already compare by value)."""
         return (self.byte_hash, self.block_size)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self._parameters() == other._parameters()
-
-    def __hash__(self) -> int:
-        return hash((type(self), self._parameters()))

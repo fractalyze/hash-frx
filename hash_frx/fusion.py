@@ -124,28 +124,17 @@ def routing(available: bool, backends: tuple[str, ...]) -> bool:
     """Whether a dedicated emitter is reachable: the pinned plugin ships it AND
     this backend is one of the arms it was written for.
 
-    Every hash that can lower to a dedicated kernel asks this, and asked it in
-    its own transcribed copy until they were collapsed here — fourteen files
-    carrying the same two-term conjunction, several with the rationale below
-    reproduced verbatim. The two terms stay per-family constants, because they
-    are per-family facts: `available` flips with the `frx>=` floor in
-    `pyproject.toml` when that emitter lands, and `backends` names the arms it
-    was actually written for. Only the question is shared.
-
     **Call it per construction, never at import.** Reading it at module scope
     freezes the routing to whichever backend happened to be default when the
     module loaded, which is wrong the moment a process builds a hash after
     switching backends. `frx.default_backend()` is memoized, so asking late is
-    cheap. (Asking late does not by itself keep import backend-free — the
-    families materialize their constant tables on device at import, which #167
-    tracks.)
+    cheap.
 
-    A hash with no emitter yet passes `available=False` and an empty
-    `backends`, which is the same question answered `False`: the marker is
-    still emitted — there is no per-block routing alternative for a whole-hash
-    digest — and an unrecognized name inlines its decomposition, giving right
-    bytes on the `GENERIC` fusion path. `fusion_path_test`'s matrix law is what
-    holds the two constants to agree.
+    The two arguments stay per-family constants because they are per-family
+    facts: `available` flips with the `frx>=` floor in `pyproject.toml` when
+    that emitter lands, and `backends` names the arms it was written for. Only
+    the question is shared. What a `False` answer means for the marker is
+    `FusionPath.from_routing`'s to say.
     """
     return available and frx.default_backend() in backends
 

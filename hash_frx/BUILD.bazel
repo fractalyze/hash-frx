@@ -45,37 +45,19 @@ py_library(
     ],
 )
 
-# `__init__.py` alone, with none of the package's dependencies, plus the source
-# tree as data. `package_test` needs exactly this and nothing more: it imports
-# the package (which, being lazy, pulls no hash) and globs the layout to prove
-# no export name collides with a submodule. Depending on `//hash_frx` for that
-# would drag every pip requirement into a 4 ms test's runfiles — measured at
-# +595 MB / +3347 files, larger than the GPU plugin deps `defs.bzl` already
-# calls too expensive to attach reflexively. This costs 0.6 MB.
+# `__init__.py` alone, with none of the package's dependencies. `package_test`
+# needs exactly this: it imports the package — which, being lazy, pulls no hash —
+# and reads nothing else. Depending on `//hash_frx` there would drag every pip
+# requirement into a 4 ms test's runfiles, measured at +595 MB / +3347 files,
+# larger than the GPU plugin deps `defs.bzl` already calls too expensive to
+# attach reflexively.
+#
+# With frx absent from those runfiles the laziness is enforced rather than
+# merely asserted: an eager re-export cannot quietly initialize a backend here,
+# it fails to import at all.
 py_library(
     name = "package_init",
     srcs = ["__init__.py"],
-    data = [":package_sources"],
-    visibility = ["//hash_frx:__subpackages__"],
-)
-
-# The `.py` layout, as data rather than as importable deps — what the
-# submodule-collision glob reads. Without it the glob sees only `__init__.py`
-# and the assertion passes vacuously.
-filegroup(
-    name = "package_sources",
-    srcs = glob(
-        ["*.py"],
-    ) + [
-        "//hash_frx/ascon:sources",
-        "//hash_frx/blake2b:sources",
-        "//hash_frx/blake3:sources",
-        "//hash_frx/grostl:sources",
-        "//hash_frx/keccak:sources",
-        "//hash_frx/poseidon:sources",
-        "//hash_frx/poseidon2:sources",
-        "//hash_frx/vision:sources",
-    ],
     visibility = ["//hash_frx:__subpackages__"],
 )
 

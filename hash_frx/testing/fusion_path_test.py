@@ -19,7 +19,6 @@ from __future__ import annotations
 from unittest import mock
 
 import frx
-import numpy as np
 from absl.testing import absltest
 from zk_dtypes import binary_field_t5
 
@@ -32,34 +31,31 @@ from hash_frx.ascon import ascon as ascon_mod
 from hash_frx.ascon.ascon import AsconHash256
 from hash_frx.blake2b import blake2b as blake2b_mod
 from hash_frx.blake2b.blake2b import Blake2b
-from hash_frx.blake2b.byte_hashes import HostBlake2b
-from hash_frx.blake2s import Blake2s, HostBlake2s
+from hash_frx.blake2s import Blake2s
 from hash_frx.blake3 import byte_hashes as blake3_rows
-from hash_frx.blake3.byte_hashes import Blake3, HostBlake3
+from hash_frx.blake3.byte_hashes import Blake3
 from hash_frx.compression import Compression, CompressionParams
 from hash_frx.duplex_sponge import DuplexSponge
 from hash_frx.fusion import FusionPath
 from hash_frx.grostl import grostl as grostl_mod
 from hash_frx.grostl.grostl import Grostl256
 from hash_frx.keccak import permutation as keccak_perm_mod
-from hash_frx.keccak.byte_hashes import HostSha3_256, Sha3_256
+from hash_frx.keccak.byte_hashes import Sha3_256
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.poseidon import poseidon as poseidon_mod
 from hash_frx.poseidon import sparse as sparse_mod
 from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.ripemd160 import Ripemd160
-from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.sha256 import Sha256
 from hash_frx.sha512 import (
-    HostSha384,
-    HostSha512,
-    HostSha512_256,
     Sha384,
     Sha512,
     Sha512_256,
 )
-from hash_frx.sm3 import HostSm3, Sm3
+from hash_frx.sm3 import Sm3
 from hash_frx.sponge import Sponge, SpongeParams
+from hash_frx.testing.rows import HOST_ROWS
 from hash_frx.vision import vision as vision_mod
 from hash_frx.vision.params import vision_mark32_params
 from hash_frx.vision.vision import Vision
@@ -160,19 +156,12 @@ class DeviceCellTest(absltest.TestCase):
 
 class HostCellTest(absltest.TestCase):
     def test_host_rows_are_host_on_every_leg(self) -> None:
-        for row in (
-            HostSha256(),
-            HostSha512(),
-            HostSha384(),
-            HostSha512_256(),
-            HostSha3_256(),
-            HostBlake3(),
-            HostBlake2b(),
-            HostBlake2s(),
-            HostSm3(),
-        ):
-            with self.subTest(row=type(row).__name__):
-                self.assertIs(row.fusion_path, FusionPath.HOST)
+        # Driven off the shipped-row registry rather than a literal tuple: the
+        # literal had drifted to nine of the fourteen host rows, missing
+        # HostSha3_512, both HostShake sizes and the two keyed BLAKE3 rows.
+        for case in HOST_ROWS:
+            with self.subTest(row=case.name):
+                self.assertIs(case.make().fusion_path, FusionPath.HOST)
 
 
 class ConstructionDelegationTest(absltest.TestCase):
@@ -185,18 +174,6 @@ class ConstructionDelegationTest(absltest.TestCase):
         ):
             with self.subTest(construction=type(c).__name__):
                 self.assertIs(c.fusion_path, perm.fusion_path)
-
-
-class TraceabilityTest(absltest.TestCase):
-    def test_is_traceable_agrees_with_the_return_type(self) -> None:
-        # The seam's rule: the return type is the authority and the attribute
-        # answers to it. One cheap pair proves the tie on both sides.
-        msg = np.zeros((1, 3), dtype=np.uint8)
-        device, host = Sha256(), HostSha256()
-        self.assertTrue(device.fusion_path.is_traceable)
-        self.assertNotIsInstance(device.digest(msg), np.ndarray)
-        self.assertFalse(host.fusion_path.is_traceable)
-        self.assertIsInstance(host.digest(msg), np.ndarray)
 
 
 if __name__ == "__main__":

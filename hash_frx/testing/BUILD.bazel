@@ -84,6 +84,20 @@ py_test(
 
 # Every shipped `ByteHash` row, as one list. testonly library so the
 # conformance suite and any later re-layering step walk the same list.
+# How to enumerate the package's shipped modules, written once. Two completeness
+# guards need it and each had re-derived it; the `relative_to(root)` subtlety is
+# what the second copy dropped.
+py_library(
+    name = "package_sweep",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "package_sweep.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = ["//hash_frx:package_init"],
+)
+
 py_library(
     name = "rows",
     testonly = True,
@@ -104,6 +118,7 @@ py_test(
     size = "large",
     srcs = ["row_conformance_test.py"],
     deps = [
+        ":package_sweep",
         ":rows",
         "//hash_frx",
         requirement("absl_py"),
@@ -127,6 +142,7 @@ py_test(
     # the default backend at module load, and the cuda leg refuses to
     # initialize without the plugin wheels in runfiles.
     deps = [
+        ":package_sweep",
         "//hash_frx",
         "//hash_frx:blake2s",
         "//hash_frx:markers",
@@ -152,6 +168,7 @@ py_test(
     size = "medium",
     srcs = ["fusion_path_test.py"],
     deps = [
+        ":rows",
         "//hash_frx:blake2s",
         "//hash_frx:byte_hash",
         "//hash_frx:compression",
@@ -352,7 +369,6 @@ py_library(
     deps = [
         ":ripemd160_reference",
         "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
         requirement("frx"),
         requirement("numpy"),
     ],

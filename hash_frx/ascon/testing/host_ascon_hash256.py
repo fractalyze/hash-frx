@@ -44,8 +44,6 @@ class HostAsconHash256(HostRow):
     """
 
     digest_size = ASCON_HASH256_DIGEST_SIZE
-    # The one legitimate class constant of the taxonomy: a host row is HOST on
-    # every backend, so nothing here varies with the pin.
 
     def _hash_one(self, data: ReadableBuffer) -> bytes:
         return ascon_hash256(bytes(data))

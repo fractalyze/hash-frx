@@ -20,13 +20,3 @@ py_library(
         requirement("numpy"),
     ],
 )
-
-# This subpackage's `.py` layout, for `//hash_frx:package_sources`. A glob in
-# the parent BUILD cannot reach here — Bazel globs stop at package boundaries —
-# and without it `package_test`'s submodule-collision check would not see this
-# package at all, passing vacuously for it.
-filegroup(
-    name = "sources",
-    srcs = glob(["*.py"]),
-    visibility = ["//hash_frx:__subpackages__"],
-)

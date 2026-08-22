@@ -11,11 +11,9 @@ fails here rather than drifting silently.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from absl.testing import absltest
 
-import hash_frx
 from hash_frx import blake2s, ripemd160, sha256, sha512, sm3, sponge
 from hash_frx.ascon import ascon
 from hash_frx.blake2b import blake2b
@@ -32,6 +30,7 @@ from hash_frx.markers import (
 )
 from hash_frx.poseidon import poseidon, sparse
 from hash_frx.poseidon2 import poseidon2
+from hash_frx.testing.package_sweep import shipped_sources
 from hash_frx.vision import vision
 
 # Every emitting module's (name, version) pair, read from the constants the
@@ -79,14 +78,8 @@ class MarkerRegistryTest(absltest.TestCase):
         # sees what this test's BUILD deps place in runfiles, so a new hash
         # package joins those deps when it joins the registry.
         pattern = re.compile(r'^[A-Z0-9_]*MARKER = "(hash_frx\.[a-z0-9_.]+)"', re.M)
-        root = Path(next(iter(hash_frx.__path__)))
         found: set[str] = set()
-        for path in root.rglob("*.py"):
-            # Package-relative parts: under bazel the absolute path runs
-            # through this test's own `…/testing/markers_test.runfiles/…`
-            # prefix, which would otherwise skip every file.
-            if "testing" in path.relative_to(root).parts:
-                continue
+        for _name, path in shipped_sources():
             found |= set(pattern.findall(path.read_text()))
         self.assertEqual(found, {m.name for m in MARKERS})
 
