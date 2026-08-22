@@ -27,8 +27,8 @@
 absl-py
 numpy
 blake3
-frx==0.10.2.dev20260821142028
-frxlib==0.10.2.dev20260821142028
-frx-cuda12-pjrt==0.10.2.dev20260821142028
-frx-cuda12-plugin==0.10.2.dev20260821142028
+frx==0.10.2.dev20260822060712
+frxlib==0.10.2.dev20260822060712
+frx-cuda12-pjrt==0.10.2.dev20260822060712
+frx-cuda12-plugin==0.10.2.dev20260822060712
 zk-dtypes==0.0.16
