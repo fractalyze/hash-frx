@@ -19,8 +19,9 @@ process-wide defaults. The five words ride as one `[B, 5]` grid per half
 are grid-wise: the S-box needs no bit extraction — the words ARE the bit
 planes, and its word-crossing terms are static rolls of the grid — while the
 per-word Σ rotations split the grid the way Grøstl's ShiftBytes splits rows.
-`_permutation` states why the grid, and not ten loose half arrays, is the
-shape that survives lowering.
+[`permutation.py`](permutation.py) states why the grid, and not ten loose
+half arrays, is the shape that survives lowering, and carries Ascon-p itself as
+a `Permutation` — the seam a generic sponge takes.
 
 **Byte order is the final SP's, not the classic Ascon papers'.** SP 800-232
 switched the word convention to little-endian (§1.2's change log; §A.1: the
@@ -48,22 +49,16 @@ from typing import TYPE_CHECKING
 import frx
 import frx.numpy as fnp
 import numpy as np
-from frx import Array, lax
+from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.ascon.permutation import WORDS, masks, permutation
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.fusion import FusionPath, fused_region, routing
-from hash_frx.word import pack_le, roll, split, unpack_le
-from hash_frx.word64 import rotr64
+from hash_frx.word import pack_le, split, unpack_le
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
-
-U32 = fnp.uint32
-
-# A 64-bit quantity as (low 32 bits, high 32 bits) of equal shape. The state
-# is one such pair of uint32 [B, 5] grids — word i in column i.
-_Lane = tuple[Array, Array]
 
 ASCON_HASH256_MARKER = "hash_frx.digest.ascon_hash256"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI
@@ -99,22 +94,6 @@ def _routes_to_dedicated_emitter() -> bool:
 
 
 _RATE = 8  # bytes: §5.1, rate 64 bits / capacity 256
-_ROUNDS = 12  # §5.1: every phase runs Ascon-p[12]
-
-# Round i of Ascon-p[rnd] XORs c_i = const_{16-rnd+i} into S2 (§3.2, eqs.
-# 3-4; Table 5) — for rnd = 12 that is const_4..const_15, listed here in
-# round order. Only the low 8 bits are ever set, so the XOR touches the low
-# half alone, as Python-int scalar literals in the traced body (the
-# `keccak._iota` arrangement: a scalar is a literal in the emitted module,
-# never a host-materialised array, so the operand-lifting rule does not
-# apply and the ABI stays three operands).
-_ROUND_CONSTANTS = (
-    0xF0, 0xE1, 0xD2, 0xC3, 0xB4, 0xA5, 0x96, 0x87, 0x78, 0x69, 0x5A, 0x4B,
-)  # fmt: skip
-
-# The Σ_i rotation pairs (§3.4, eqs. 8-12): S_i ^= (S_i ⋙ r1) ^ (S_i ⋙ r2).
-_SIGMA_ROTATIONS = ((19, 28), (61, 39), (1, 6), (10, 17), (7, 41))
-
 # The initialization S = Ascon-p[12](IV ‖ 0^256) for IV = 0x0000080100cc0002
 # (§5.1 eq. 54; Table 14), precomputed — the SP publishes the result (§A.3,
 # Table 12), transcribed here and split into halves on the host, where Python
@@ -152,108 +131,6 @@ def _padding_tail(length: int) -> np.ndarray:
     return tail
 
 
-# The three word-position masks the substitution layer applies, as uint32 [5]
-# 0/1 grids (`_masks`): which words take the leading XOR of their predecessor,
-# which the trailing one, and which is complemented.
-_Masks = tuple[Array, Array, Array]
-
-
-def _masks() -> _Masks:
-    """The S-box layer's word-position masks, derived from `iota` on device.
-
-    Host-built 0/1 vectors would be arrays the decomposition materialises,
-    which `lax.composite` lifts into unnamed operands ahead of the declared
-    ABI — so they are counted on device instead, the `iota` remedy of
-    docs/reference/conventions.md (`blake3._counters` is the precedent).
-    Computed once per digest and shared by every round.
-
-    - ``pre``: words {0, 2, 4} — the even positions, `(i & 1) ^ 1`.
-    - ``post``: words {0, 1, 3} — the positions where i + 1 keeps no bit of
-      i (i + 1 a power of two or i = 0), `((i + 1) & i) == 0`.
-    - ``word2``: word {2} alone, for the constant XOR and the complement.
-    """
-    idx = lax.iota(U32, 5)
-    one = U32(1)
-    pre = (idx & one) ^ one
-    post = lax.convert_element_type(((idx + one) & idx) == 0, U32)
-    word2 = lax.convert_element_type(idx == U32(2), U32)
-    return pre, post, word2
-
-
-def _substitution(lo: Array, hi: Array, masks: _Masks) -> _Lane:
-    """p_S (§3.3): the 5-bit S-box across the five words, grid-wise.
-
-    The substitution is 64 parallel S-box applications with word S_i
-    supplying bit plane x_i (eq. 5) — the state is already bitsliced, so no
-    per-bit extraction happens anywhere. This is the Figure 3 circuit with
-    its word-crossing wires spelled as static rolls of the [B, 5] grid:
-
-    - the leading XORs x0 ^= x4, x2 ^= x1, x4 ^= x3 all read word i - 1
-      into word i, at the even positions — `roll(x, 1)` masked by ``pre``;
-    - the χ core t_i = ~x_i & x_{i+1}, x_i ^= t_{i+1} is
-      x ^= ~roll(x, -1) & roll(x, -2), the `keccak._chi` spelling;
-    - the trailing XORs x1 ^= x0, x0 ^= x4, x3 ^= x2 again read word i - 1,
-      at positions {0, 1, 3} — the same roll masked by ``post``;
-    - x2 is complemented, an XOR with ``word2`` stretched to all-ones.
-
-    Each masked stage's reads all land on values none of its writes touch,
-    which is what lets the standard's sequential assignments run as one
-    parallel grid op per stage. Every gate is element-wise and bit-parallel,
-    so one spelling serves the lo and hi planes; `ascon_test` holds it to
-    the oracle's Table 6 lookup on all 32 inputs.
-    """
-    pre, post, word2 = masks
-    lo = lo ^ (roll(lo, 1, axis=-1) * pre)
-    hi = hi ^ (roll(hi, 1, axis=-1) * pre)
-    lo = lo ^ ((~roll(lo, -1, axis=-1)) & roll(lo, -2, axis=-1))
-    hi = hi ^ ((~roll(hi, -1, axis=-1)) & roll(hi, -2, axis=-1))
-    lo = lo ^ (roll(lo, 1, axis=-1) * post)
-    hi = hi ^ (roll(hi, 1, axis=-1) * post)
-    invert = word2 * U32(0xFFFFFFFF)
-    return lo ^ invert, hi ^ invert
-
-
-def _linear_diffusion(lo: Array, hi: Array) -> _Lane:
-    """p_L (§3.4): S_i ^= (S_i ⋙ r1) ^ (S_i ⋙ r2), the Σ_i pairs — the one
-    step where the halves interact, through the shared `word64.rotr64`. Each
-    word carries its own rotation pair, so the grid splits into static
-    columns and stacks back, the way Grøstl's ShiftBytes splits rows."""
-    out_lo, out_hi = [], []
-    for i, (r1, r2) in enumerate(_SIGMA_ROTATIONS):
-        w = (lo[:, i], hi[:, i])
-        a = rotr64(w, r1)
-        b = rotr64(w, r2)
-        out_lo.append(w[0] ^ a[0] ^ b[0])
-        out_hi.append(w[1] ^ a[1] ^ b[1])
-    return fnp.stack(out_lo, axis=-1), fnp.stack(out_hi, axis=-1)
-
-
-def _permutation(lo: Array, hi: Array, masks: _Masks) -> _Lane:
-    """Ascon-p[12] (§3) on the (lo, hi) uint32 [B, 5] grids: twelve rounds
-    of p_C -> p_S -> p_L. The round loop is a Python-unrolled `for` — the
-    count is static and small, and a `lax` loop would be a control-flow
-    boundary (docs/reference/conventions.md). p_C touches only S2's low
-    half: the constants are 8-bit, masked to word 2 like the complement.
-
-    The grid is load-bearing for the lowering, not a style choice. Spelled
-    over ten loose [B] half arrays the whole digest is one deep element-wise
-    DAG, and this toolchain's CPU pipeline first cancels any exact-inverse
-    repack a body inserts (aligned slice-of-concatenate forwarding), then
-    fuses the barrier-free chain into single kLoop kernels thousands of
-    instructions deep — measured on this body, a lone [4, 1]-message digest
-    stopped returning inside a 900s test timeout. The grid steps' rolls and
-    per-word stacks are *load-bearing* data movement the canonicalizer
-    keeps, so fusion regions stay round-sized (the Grøstl/Keccak texture:
-    ~1.5K kernels for a 13-permutation digest, compiled and run in
-    milliseconds).
-    """
-    for rc in _ROUND_CONSTANTS:
-        lo = lo ^ (masks[2] * U32(rc))
-        lo, hi = _substitution(lo, hi, masks)
-        lo, hi = _linear_diffusion(lo, hi)
-    return lo, hi
-
-
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
 # emission, and a Merkle commit emits one digest call per tree level — so the
 # uncached re-trace of the multi-permutation body would dominate the
@@ -287,9 +164,9 @@ def ascon_hash256_bytes(msg: Array) -> Array:
     host-materialised array captured by the body would be lifted into an
     unnamed operand *ahead* of these, one per call site, leaving no layout to
     write down. The twelve 8-bit round constants are NOT operands: they ride
-    as scalar literals in the body (`_ROUND_CONSTANTS` states why that is
-    lifting-safe), and the S-box masks are derived from `iota` on device
-    (`_masks`); the three-operand count is pinned in `ascon_test`. `tail` is
+    as scalar literals in the body (`permutation.ROUND_CONSTANTS` states why that
+    is lifting-safe), and the S-box masks are derived from `iota` on device
+    (`permutation.masks`); the three-operand count is pinned in `ascon_test`. `tail` is
     derivable from the static L — a recognizing emitter reads it rather than
     re-deriving it — and load-bearing for the inlined decomposition.
     """
@@ -300,9 +177,9 @@ def ascon_hash256_bytes(msg: Array) -> Array:
         # Blocks as (lo, hi) uint32 pairs, packed little-endian (§A.1):
         # [B, nblocks, 2], [..., 0] the low half.
         words = pack_le(padded.reshape(b, padded.shape[-1] // _RATE, _RATE))
-        lo = fnp.broadcast_to(init[:, 0], (b, 5))
-        hi = fnp.broadcast_to(init[:, 1], (b, 5))
-        masks = _masks()
+        lo = fnp.broadcast_to(init[:, 0], (b, WORDS))
+        hi = fnp.broadcast_to(init[:, 1], (b, WORDS))
+        m = masks()
         # Absorbing (§5.1): every 64-bit block XORs into S0 — column 0,
         # patched by slice + concatenate so the other four words see no op
         # (the `keccak._patch_lane_zero` spelling and its reasoning) — each
@@ -311,13 +188,13 @@ def ascon_hash256_bytes(msg: Array) -> Array:
         for i in range(padded.shape[-1] // _RATE):  # static, small
             lo = fnp.concatenate([lo[:, :1] ^ words[:, i, :1], lo[:, 1:]], axis=-1)
             hi = fnp.concatenate([hi[:, :1] ^ words[:, i, 1:], hi[:, 1:]], axis=-1)
-            lo, hi = _permutation(lo, hi, masks)
+            lo, hi = permutation(lo, hi, m)
         # Squeezing (§5.1): H_0..H_3 read S0 with the permutation between
         # reads; H = H_0 ‖ H_1 ‖ H_2 ‖ H_3 (eq. 63), each word written back
         # little-endian.
         h = [lo[:, 0], hi[:, 0]]
         for _ in range(3):
-            lo, hi = _permutation(lo, hi, masks)
+            lo, hi = permutation(lo, hi, m)
             h += [lo[:, 0], hi[:, 0]]
         return unpack_le(fnp.stack(h, axis=-1))
 

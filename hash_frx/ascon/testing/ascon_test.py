@@ -1,14 +1,14 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""Ascon-Hash256 — KAT values, the S-box circuit, the marker, and the seam.
+"""Ascon-Hash256 — KAT values, the initial state, the marker, and the seam.
 
 Values are held to the SP 800-232 KAT directly (the vectors `reference_test`
 anchors across three independent sources) and to the oracle differentially at
 lengths the transcription does not carry, so agreement means agreement with
-Ascon-Hash256 rather than with a second copy of one misreading. The bitsliced
-S-box circuit gets its own exhaustive case: it is the one component whose frx
-spelling shares *nothing* with the oracle's table, and a wrong gate corrupts
-every digest identically on both jit legs. The precomputed initial state is
-pinned the other way around — the device module transcribes Table 12, the
+Ascon-Hash256 rather than with a second copy of one misreading. The round
+body itself is Ascon-p's, so its cases — the bitsliced S-box circuit against
+Table 6, the reference agreement, the operand ABI — live with the permutation
+in `permutation_test`. The precomputed initial state is pinned the other way
+around — the device module transcribes Table 12, the
 oracle derives it from the IV, and the two must meet.
 
 The lowering assertions are the usual half that values cannot see: the digest
@@ -32,7 +32,7 @@ from frx import Array
 from hash_frx.ascon import ascon
 from hash_frx.ascon.ascon import AsconHash256
 from hash_frx.ascon.testing.host_ascon_hash256 import HostAsconHash256
-from hash_frx.ascon.testing.reference import INITIAL_STATE, KAT_VECTORS, SBOX
+from hash_frx.ascon.testing.reference import INITIAL_STATE, KAT_VECTORS
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.jit_cache import assert_single_trace
@@ -73,37 +73,6 @@ class AsconHash256KatTest(parameterized.TestCase):
             np.asarray(AsconHash256().digest(msgs)),
             np.asarray(HostAsconHash256().digest(msgs)),
         )
-
-
-class SboxCircuitTest(absltest.TestCase):
-    def test_the_circuit_matches_the_standard_table_for_all_32_inputs(
-        self,
-    ) -> None:
-        # The masked-roll grid circuit against the table-defined S-box,
-        # exhaustively — the two sides share no spelling (the oracle's table
-        # is transcribed from Table 6 and corner-anchored in
-        # `reference_test`). Word i's low half packs bit x_i of every 5-bit
-        # value, bit position j carrying input j — the bitsliced orientation
-        # the state grid has, x0 the most significant index bit (Table 6's
-        # convention); the high halves ride the same gates, so zeros there
-        # only re-check column 0x00.
-        planes = [0, 0, 0, 0, 0]
-        for j in range(32):
-            for i in range(5):
-                planes[i] |= ((j >> (4 - i)) & 1) << j
-        lo = fnp.asarray(np.array([planes], dtype=np.uint32))
-        hi = fnp.asarray(np.zeros((1, 5), dtype=np.uint32))
-        out_lo, _ = frx.jit(lambda lo, hi: ascon._substitution(lo, hi, ascon._masks()))(
-            lo, hi
-        )
-        out = np.asarray(out_lo)[0]
-        got = []
-        for j in range(32):
-            y = 0
-            for i in range(5):
-                y |= (int(out[i]) >> j & 1) << (4 - i)
-            got.append(y)
-        self.assertEqual(tuple(got), SBOX)
 
 
 class InitialStateTest(absltest.TestCase):
