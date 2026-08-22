@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""Merkle-Damgard: the schedule that feeds a `CompressionFunction` a message.
+"""Merkle-Damgard: the schedule that feeds a compression function a message.
 
 Seven families in this package run this schedule and, until now, each ran its
 own copy of it. The clearest measure was `_padding_tail`, defined nine times

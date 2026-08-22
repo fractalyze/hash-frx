@@ -22,7 +22,6 @@ py_library(
         ":blake2s",
         ":byte_hash",
         ":compression",
-        ":compression_function",
         ":duplex_sponge",
         ":fusion",
         ":hkdf",
@@ -61,18 +60,6 @@ py_library(
     name = "package_init",
     srcs = ["__init__.py"],
     visibility = ["//hash_frx:__subpackages__"],
-)
-
-# The second primitive seam: state x block -> state, the n->m kind. Data-only
-# Protocol, so reading it pulls nothing.
-py_library(
-    name = "compression_function",
-    srcs = ["compression_function.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":fusion",
-        requirement("frx"),
-    ],
 )
 
 # The one place `lax.composite` is spelled — every marker in this package routes

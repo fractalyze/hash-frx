@@ -1,7 +1,7 @@
 load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
-# Merkle-Damgard: the schedule that feeds a `CompressionFunction`. Two halves —
+# Merkle-Damgard: the schedule that feeds a compression function. Two halves —
 # `PadRule`, host arithmetic over a message LENGTH and never its bytes, and
 # `chain`, the marked compression loop. The second is device code, so this
 # target does carry frx; it still materializes nothing at import.
