@@ -69,6 +69,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
 from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import Pair, add64, rotr64, xor64
@@ -198,20 +199,19 @@ def _initial_state(digest_size: int) -> np.ndarray:
     return _pairs_le(words)
 
 
-@lru_cache(maxsize=None)
+# How this family pads, as the axes `extension/md.py` names.
+# RFC 7693 §3.3 — HAIFA, as BLAKE2s.
+_PAD = PadRule(128, Trailer.NONE)
+
+
 def _padding_tail(length: int) -> np.ndarray:
-    """What RFC 7693 §3.3 appends to a `length`-byte message: uint8 [P] of
-    zeros, P = (−length) mod 128 — the final block zero-padded to the block
-    boundary, plus the special case that an unkeyed empty message still
-    processes one all-zero block (dd = 1). Unlike the SHA-2/RIPEMD tails
-    there is no 0x80 marker and no length field: the length enters through
-    the `t` counter instead (HAIFA), which is what makes the tail all zeros —
-    and empty at a block multiple, where the operand rides zero-length. A
-    function of the static length alone, so `digest` can take a traced
-    message (the `sha256._padding_tail` arrangement)."""
-    if length == 0:
-        return np.zeros(_BLOCK, dtype=np.uint8)
-    return np.zeros((-length) % _BLOCK, dtype=np.uint8)
+    """The bytes appended to a `length`-byte message.
+
+    Built from the length alone, so it is a host constant the marked region
+    takes as an operand — which is what lets `digest` take a traced message.
+    `_PAD` memoizes, as the hand-written copy this replaces did.
+    """
+    return _PAD.tail(length)
 
 
 def _fold_counter(row: Array, v12: int, v14: int) -> Array:

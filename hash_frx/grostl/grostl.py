@@ -29,7 +29,7 @@ itself be traced. Requires no x64; everything is uint8.
 
 from __future__ import annotations
 
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -39,6 +39,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import roll
 
@@ -109,25 +110,19 @@ _IVd = fnp.asarray(_IV)
 _RC_Pd = fnp.asarray(_RC_P)
 _RC_Qd = fnp.asarray(_RC_Q)
 
+# How this family pads, as the axes `extension/md.py` names.
+# Grøstl v2.0.1 §3.1 — the trailer counts BLOCKS, not bits.
+_PAD = PadRule(64, Trailer.BLOCK_COUNT)
 
-@lru_cache(maxsize=None)
+
 def _padding_tail(length: int) -> np.ndarray:
-    """What §3.6 appends to a `length`-byte message: uint8 [P].
+    """The bytes appended to a `length`-byte message.
 
-    `0x80 ‖ 0x00* ‖ toByte(t, 8)` where `t` is the 512-bit **block count of
-    the padded message** — (N + w + 65)/ℓ in the spec's bit-level terms, NOT
-    the bit length a SHA-2-shaped reading expects. Every term is a function of
-    the length alone, so the tail is a host constant built *from the length*
-    rather than written *into the message* — which is what lets `digest` take
-    a traced message (the `sha256._padding_tail` arrangement).
-
-    Shared by the whole batch, since one call hashes messages of one length.
+    Built from the length alone, so it is a host constant the marked region
+    takes as an operand — which is what lets `digest` take a traced message.
+    `_PAD` memoizes, as the hand-written copy this replaces did.
     """
-    nblocks = (length + 8) // _BLOCK + 1  # room for the 0x80 byte + the count
-    tail = np.zeros(nblocks * _BLOCK - length, dtype=np.uint8)
-    tail[0] = 0x80
-    tail[-8:] = np.frombuffer(np.uint64(nblocks).byteswap().tobytes(), dtype=np.uint8)
-    return tail
+    return _PAD.tail(length)
 
 
 def _to_state(block: Array) -> Array:

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -31,6 +31,7 @@ from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
 
@@ -176,25 +177,19 @@ _H0 = np.array(
 
 _Kd = fnp.asarray(_K)
 
+# How this family pads, as the axes `extension/md.py` names.
+# FIPS 180-4 §5.1.1.
+_PAD = PadRule(64, Trailer.BIT_LENGTH)
 
-@lru_cache(maxsize=None)
+
 def _padding_tail(length: int) -> np.ndarray:
-    """What FIPS 180-4 §5.1.1 appends to a `length`-byte message: uint8 [P].
+    """The bytes appended to a `length`-byte message.
 
-    `0x80 ‖ 0x00* ‖ toByte(8·length, 8)`, and every term is a function of the
-    length alone. So the tail is a host constant built *from the length* rather
-    than written *into the message* — which is what lets `digest` take a traced
-    message: the padding never has to read one.
-
-    Shared by the whole batch, since one call hashes messages of one length.
+    Built from the length alone, so it is a host constant the marked region
+    takes as an operand — which is what lets `digest` take a traced message.
+    `_PAD` memoizes, as the hand-written copy this replaces did.
     """
-    nblocks = (length + 8) // 64 + 1  # room for the 0x80 byte + 8-byte length
-    tail = np.zeros(nblocks * 64 - length, dtype=np.uint8)
-    tail[0] = 0x80
-    tail[-8:] = np.frombuffer(
-        np.uint64(length * 8).byteswap().tobytes(), dtype=np.uint8
-    )
-    return tail
+    return _PAD.tail(length)
 
 
 def _compress(state: Array, w16: Array, k: Array) -> Array:

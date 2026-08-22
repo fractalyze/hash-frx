@@ -22,6 +22,7 @@ py_library(
         ":blake2s",
         ":byte_hash",
         ":compression",
+        ":compression_function",
         ":duplex_sponge",
         ":fusion",
         ":hkdf",
@@ -37,6 +38,7 @@ py_library(
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
         "//hash_frx/blake3",
+        "//hash_frx/extension:md",
         "//hash_frx/grostl",
         "//hash_frx/keccak",
         "//hash_frx/poseidon",
@@ -59,6 +61,18 @@ py_library(
     name = "package_init",
     srcs = ["__init__.py"],
     visibility = ["//hash_frx:__subpackages__"],
+)
+
+# The second primitive seam: state x block -> state, the n->m kind. Data-only
+# Protocol, so reading it pulls nothing.
+py_library(
+    name = "compression_function",
+    srcs = ["compression_function.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fusion",
+        requirement("frx"),
+    ],
 )
 
 # The one place `lax.composite` is spelled — every marker in this package routes
@@ -149,6 +163,7 @@ py_library(
         ":byte_hash",
         ":fusion",
         ":word",
+        "//hash_frx/extension:md",
         requirement("frx"),
         requirement("numpy"),
     ],
@@ -167,6 +182,7 @@ py_library(
         ":fusion",
         ":word",
         ":word64",
+        "//hash_frx/extension:md",
         requirement("frx"),
         requirement("numpy"),
     ],
@@ -184,6 +200,7 @@ py_library(
         ":byte_hash",
         ":fusion",
         ":word",
+        "//hash_frx/extension:md",
         requirement("frx"),
         requirement("numpy"),
     ],
@@ -201,6 +218,7 @@ py_library(
         ":byte_hash",
         ":fusion",
         ":word",
+        "//hash_frx/extension:md",
         requirement("frx"),
         requirement("numpy"),
     ],
@@ -220,6 +238,7 @@ py_library(
         ":byte_hash",
         ":fusion",
         ":word",
+        "//hash_frx/extension:md",
         requirement("frx"),
         requirement("numpy"),
     ],

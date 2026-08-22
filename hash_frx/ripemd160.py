@@ -41,7 +41,7 @@ most current builds, and a host row that fails by default is worse than none
 
 from __future__ import annotations
 
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
@@ -51,6 +51,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, rotl, unpack_le
 
@@ -154,26 +155,19 @@ _S_RIGHT = (
     # fmt: on
 )
 
+# How this family pads, as the axes `extension/md.py` names.
+# the designers' pseudocode — little-endian throughout, the opposite of SHA-2.
+_PAD = PadRule(64, Trailer.BIT_LENGTH, big_endian=False)
 
-@lru_cache(maxsize=None)
+
 def _padding_tail(length: int) -> np.ndarray:
-    """What RIPEMD-160 appends to a `length`-byte message: uint8 [P].
+    """The bytes appended to a `length`-byte message.
 
-    `0x80 ‖ 0x00* ‖ toByte_le(8·length, 8)` — padding "identical to that of
-    MD4" (the designers' pseudocode), so the 64-bit bit-length field is
-    **little-endian**: the opposite byte order of `sha256._padding_tail`'s
-    field, and the documented trap. Every term is a function of the length
-    alone, so the tail is a host constant built *from the length* rather than
-    written *into the message* — which is what lets `digest` take a traced
-    message (the `sha256._padding_tail` arrangement).
-
-    Shared by the whole batch, since one call hashes messages of one length.
+    Built from the length alone, so it is a host constant the marked region
+    takes as an operand — which is what lets `digest` take a traced message.
+    `_PAD` memoizes, as the hand-written copy this replaces did.
     """
-    nblocks = (length + 8) // _BLOCK + 1  # room for the 0x80 byte + the length
-    tail = np.zeros(nblocks * _BLOCK - length, dtype=np.uint8)
-    tail[0] = 0x80
-    tail[-8:] = np.frombuffer((length * 8).to_bytes(8, "little"), dtype=np.uint8)
-    return tail
+    return _PAD.tail(length)
 
 
 def _f1(x: Array, y: Array, z: Array) -> Array:

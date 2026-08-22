@@ -18,6 +18,7 @@ py_library(
         "//hash_frx:fusion",
         "//hash_frx:word",
         "//hash_frx:word64",
+        "//hash_frx/extension:md",
         requirement("frx"),
         requirement("numpy"),
     ],

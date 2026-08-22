@@ -1,0 +1,15 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Merkle-Damgard: the schedule that feeds a `CompressionFunction`. Host-only
+# arithmetic over numpy — the padding is a function of the message LENGTH, never
+# of its bytes — so this pulls no frx and initializes no backend.
+py_library(
+    name = "md",
+    srcs = [
+        "__init__.py",
+        "md.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [requirement("numpy")],
+)
