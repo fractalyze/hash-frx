@@ -69,7 +69,7 @@ from hash_frx.byte_hash import (
     host_digest,
     padded_batch,
 )
-from hash_frx.extension.md import PadRule, Trailer
+from hash_frx.extension.md import PadRule, Trailer, haifa_counter
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, rotr, unpack_le
 
@@ -362,11 +362,7 @@ def blake2s_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         iv_a, iv_b = iv[0:4], iv[4:8]
         nblocks = words.shape[1]
         for i in range(nblocks):  # static, small
-            last = i == nblocks - 1
-            # t = bytes hashed through the end of this block (§3.2): a full
-            # block's worth per interior block, the true length on the final
-            # one (§3.3) — the zero pad is never counted.
-            t = ll if last else (i + 1) * _BLOCK
+            t, last = haifa_counter(i, nblocks, ll, _BLOCK)
             state = _compress(state, iv_a, iv_b, words[:, i], t, last)
         return unpack_le(state)  # little-endian serialization: [B, 32]
 

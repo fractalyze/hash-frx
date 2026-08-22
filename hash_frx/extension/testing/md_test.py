@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.extension.md import PadRule, Trailer
+from hash_frx.extension.md import PadRule, Trailer, haifa_counter
 
 SHA256 = PadRule(64, Trailer.BIT_LENGTH)
 SHA512 = PadRule(128, Trailer.BIT_LENGTH, reserve=16)
@@ -137,6 +137,37 @@ class PadRuleTailIsSafeToShareTest(absltest.TestCase):
         first, second = SHA256.tail(55), SHA256.tail(55)
         self.assertIs(first, second)
         np.testing.assert_array_equal(first, second)
+
+
+class HaifaCounterTest(absltest.TestCase):
+    """RFC 7693's §3.2/§3.3 split, which is where a wrong BLAKE2 digest hides."""
+
+    def test_interior_blocks_count_a_full_block(self) -> None:
+        # §3.2: an interior block reports the bytes through its own end.
+        self.assertEqual(haifa_counter(0, 3, 200, 64), (64, False))
+        self.assertEqual(haifa_counter(1, 3, 200, 64), (128, False))
+
+    def test_the_final_block_reports_the_true_length(self) -> None:
+        # §3.3, and the whole point: 200 bytes is 3 blocks of 64 with 8 bytes of
+        # zero pad, and the pad must NOT be counted. Reporting 192 here — the
+        # padded length — is a wrong digest for every message that is not a
+        # block multiple, and right for every one that is.
+        self.assertEqual(haifa_counter(2, 3, 200, 64), (200, True))
+
+    def test_a_block_multiple_agrees_either_way(self) -> None:
+        # Which is why the bug is easy to ship: at a block multiple the padded
+        # and true lengths coincide, so the cases that would catch it are
+        # exactly the ones a round-numbered test misses.
+        self.assertEqual(haifa_counter(1, 2, 128, 64), (128, True))
+
+    def test_the_empty_message_still_has_one_final_block(self) -> None:
+        # HAIFA pads the empty message to a whole block, so there is a block to
+        # compress and it reports zero bytes.
+        self.assertEqual(haifa_counter(0, 1, 0, 64), (0, True))
+
+    def test_blake2b_uses_the_wider_block(self) -> None:
+        self.assertEqual(haifa_counter(0, 2, 200, 128), (128, False))
+        self.assertEqual(haifa_counter(1, 2, 200, 128), (200, True))
 
 
 if __name__ == "__main__":

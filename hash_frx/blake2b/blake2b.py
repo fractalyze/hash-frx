@@ -69,7 +69,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
-from hash_frx.extension.md import PadRule, Trailer
+from hash_frx.extension.md import PadRule, Trailer, haifa_counter
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import Pair, add64, rotr64, xor64
@@ -402,11 +402,7 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         iv_lo, iv_hi = iv[0:16:2], iv[1:16:2]  # [8] halves, low at even index
         nblocks = words.shape[1]
         for i in range(nblocks):  # static, small
-            last = i == nblocks - 1
-            # t = bytes hashed through the end of this block (§3.2): a full
-            # block's worth per interior block, the true length on the final
-            # one (§3.3) — the zero pad is never counted.
-            t = ll if last else (i + 1) * _BLOCK
+            t, last = haifa_counter(i, nblocks, ll, _BLOCK)
             state = _compress(state, iv_lo, iv_hi, words[:, i], t, last)
         return unpack_le(state)  # little-endian serialization: [B, 64]
 

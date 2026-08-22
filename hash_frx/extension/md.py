@@ -340,3 +340,26 @@ class MdStream:
         return fnp.where(
             two_blocks, self.chain(state.h, words), self.chain(state.h, words[:, :1])
         )
+
+
+def haifa_counter(
+    index: int, nblocks: int, length: int, block_size: int
+) -> tuple[int, bool]:
+    """BLAKE2's per-block `(t, last)`: bytes hashed through the end of block
+    `index`, and whether it is the final one.
+
+    HAIFA is Merkle-Damgard with the length fed to the compression rather than
+    into the message, which is why these rows pad with a bare zero fill
+    (`Trailer.NONE`) — and why the count here is the TRUE message length on the
+    final block rather than the padded one. RFC 7693 §3.2 counts a full block
+    per interior block; §3.3 has the final block report the real length, so the
+    zero pad is never counted. Getting that wrong is a wrong digest on exactly
+    the messages whose length is not a block multiple.
+
+    Shared by BLAKE2b and BLAKE2s, whose copies were identical down to the
+    comment. Not folded into a general bytes-in chain: measured across the four
+    bytes-in families, such a helper would share three lines out of forty to
+    fifty-six and need five callbacks to do it, so the loop stays where it reads.
+    """
+    last = index == nblocks - 1
+    return (length if last else (index + 1) * block_size), last
