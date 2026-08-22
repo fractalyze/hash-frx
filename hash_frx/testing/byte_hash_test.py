@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx.typing import ArrayLike
@@ -76,12 +75,13 @@ class DeviceMessageTest(absltest.TestCase):
     `[L]` — and without the seam check it surfaced from inside a marked
     region's trace as a reshape or concatenate error naming neither the seam
     nor the rank.
-    """
 
-    def test_accepts_a_batch_and_coerces_to_uint8(self) -> None:
-        got = device_message(np.zeros((3, 8), dtype=np.uint8))
-        self.assertEqual(got.shape, (3, 8))
-        self.assertEqual(got.dtype, fnp.uint8)
+    Only the rejection is asserted here, and that is the point: the check runs
+    before the conversion, so it needs no backend, and this file must keep
+    running with none — it is the seam's test, held to a double rather than to
+    any implementation. What the accepting path returns is pinned by every
+    family's own digest tests, which have a substrate to run on.
+    """
 
     def test_rejects_a_message_that_is_not_a_batch(self) -> None:
         for bad in [np.zeros(8, dtype=np.uint8), np.zeros((1, 2, 3), dtype=np.uint8)]:

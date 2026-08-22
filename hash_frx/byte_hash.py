@@ -104,11 +104,16 @@ def device_message(msg: ArrayLike) -> Array:
     surfaces as a reshape or concatenate error naming neither the seam nor the
     rank. A 1-D message is the common miss: a single message is `B = 1`, not a
     bare `[L]`.
+
+    Checked *before* the conversion, so a wrong rank never reaches a device and
+    the check itself needs no backend — which is what lets the seam's own test
+    stay substrate-free, as a seam test must. `np.ndim` reads `.ndim` where
+    there is one (an array, a tracer) and only falls back to converting for a
+    plain sequence, so this holds under `jit` too.
     """
-    message = fnp.asarray(msg, dtype=fnp.uint8)
-    if message.ndim != 2:
-        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
-    return message
+    if np.ndim(msg) != 2:
+        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={np.ndim(msg)}")
+    return fnp.asarray(msg, dtype=fnp.uint8)
 
 
 def host_digest(
