@@ -15,12 +15,21 @@ def default_external_matrix(width: int, dtype: Any) -> Array:
 
     M[i][j] = M4[i%4][j%4] * (2 if same 4-block). Built list -> fnp.array so
     HLO sees a kConstant. Determined wholly by (width, dtype); carries no
-    field/scheme identity. `width` must be a positive multiple of 4. (At width == 4
-    the canonical Poseidon2 external matrix is plain M4; the 2x-diagonal-block form
-    here matches references for width >= 8.)
+    field/scheme identity. `width` must be a multiple of 4 and at least 8.
+
+    Width 4 is refused rather than served: the formula degenerates to `2 * M4`
+    there, where the canonical Poseidon2 external matrix is plain `M4`, so a
+    default would hand back a permutation that is not the one the references
+    define. A width-4 caller passes its own `external_matrix`.
     """
     if width % 4 != 0:
         raise ValueError(f"external matrix default needs width % 4 == 0, got {width}")
+    if width < 8:
+        raise ValueError(
+            f"external matrix default needs width >= 8, got {width}: at width 4 "
+            "this formula is 2*M4, where canonical Poseidon2 is plain M4 — pass "
+            "external_matrix explicitly"
+        )
     m4 = [[2, 3, 1, 1], [1, 2, 3, 1], [1, 1, 2, 3], [3, 1, 1, 2]]
     mds = [
         [m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(width)]
@@ -66,6 +75,12 @@ class Poseidon2Params:
     internal_j_scale: Array | None = None
 
     def __post_init__(self) -> None:
+        # `F` and `np.dtype(F)` name one dtype but hash differently (they only
+        # compare equal), so an unnormalized field makes two jit cache keys out
+        # of one parameterization and silently re-traces. The scalar type is the
+        # canonical spelling — `np.dtype(x).type` round-trips — and it is the
+        # one that stays callable for the zero comparisons below.
+        object.__setattr__(self, "dtype", np.dtype(self.dtype).type)
         if self.alpha < 1:
             raise ValueError(f"alpha must be a positive int, got {self.alpha}")
         w = self.width

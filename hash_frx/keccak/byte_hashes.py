@@ -211,6 +211,10 @@ class _HostKeccak:
     fusion_path = FusionPath.HOST
 
     def __init__(self, digest_size: int) -> None:
+        # The device rows refuse a zero-length output at the sponge; a host row
+        # that accepted it would make the pair disagree on what is a hash.
+        if digest_size < 1:
+            raise ValueError(f"digest_size ({digest_size}) must be >= 1")
         self.digest_size = digest_size
 
     def _hash_one(self, data: ReadableBuffer) -> bytes:

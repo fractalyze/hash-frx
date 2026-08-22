@@ -45,6 +45,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.byte_hash import device_message
 from hash_frx.fusion import fused_region_over
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
@@ -59,6 +60,33 @@ U32 = fnp.uint32
 # module docstring keeps apart.
 KECCAK_SPONGE_MARKER = "hash_frx.digest.keccak_sponge"
 KECCAK_SPONGE_MARKER_VERSION = 1
+
+
+def validate_sponge_params(rate: int, suffix: int) -> None:
+    """Reject a rate or domain suffix the sponge cannot represent.
+
+    Shared by the one-shot `KeccakSponge` and the incremental `shake_init`,
+    which is not only de-duplication: the two spell the pad terminator
+    differently (`|= 0x80` on the host tail here, `^ 0x80` on the traced block
+    there), so a suffix with bit 7 set produced *different digests* from the
+    two paths. That bit belongs to `pad10*1`'s trailing 1 — FIPS 202 section
+    5.1 — and no standard suffix uses it (SHA-3 `0x06`, SHAKE `0x1F`, cSHAKE
+    `0x04`, Keccak `0x01`), so it is rejected rather than defined.
+    """
+    if rate <= 0 or rate % BYTES_PER_WORD:
+        raise ValueError(
+            f"rate ({rate}) must be a positive multiple of " f"{BYTES_PER_WORD} bytes"
+        )
+    if rate >= KeccakF1600.width * BYTES_PER_WORD:
+        raise ValueError(
+            f"rate ({rate} bytes) leaves no capacity in a "
+            f"{KeccakF1600.width * BYTES_PER_WORD}-byte state"
+        )
+    if not 0 <= suffix < 0x80:
+        raise ValueError(
+            f"suffix ({suffix:#x}) must be a byte below 0x80: bit 7 carries "
+            "pad10*1's trailing 1 (FIPS 202 section 5.1)"
+        )
 
 
 @lru_cache(maxsize=None)
@@ -197,18 +225,7 @@ class KeccakSponge:
     output_size: int
 
     def __post_init__(self) -> None:
-        if self.rate <= 0 or self.rate % BYTES_PER_WORD:
-            raise ValueError(
-                f"rate ({self.rate}) must be a positive multiple of "
-                f"{BYTES_PER_WORD} bytes"
-            )
-        if self.rate >= KeccakF1600.width * BYTES_PER_WORD:
-            raise ValueError(
-                f"rate ({self.rate} bytes) leaves no capacity in a "
-                f"{KeccakF1600.width * BYTES_PER_WORD}-byte state"
-            )
-        if not 0 <= self.suffix <= 0xFF:
-            raise ValueError(f"suffix ({self.suffix:#x}) must be one byte")
+        validate_sponge_params(self.rate, self.suffix)
         if self.output_size < 1:
             raise ValueError(f"output_size ({self.output_size}) must be >= 1")
 
@@ -223,10 +240,7 @@ class KeccakSponge:
         squeeze to one `hash_frx.keccak_sponge` region; otherwise each permute is
         its own marked region and the XOR glue between them stays outside.
         """
-        message = fnp.asarray(msg, dtype=fnp.uint8)
-        if message.ndim != 2:
-            raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
-
+        message = device_message(msg)
         batch, length = message.shape
         tail = _padding_tail(length, self.rate, self.suffix)
         padded = fnp.concatenate(

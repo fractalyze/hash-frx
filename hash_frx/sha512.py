@@ -52,7 +52,7 @@ from frx import Array
 from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import host_digest
+from hash_frx.byte_hash import device_message, host_digest
 from hash_frx.fusion import FusionPath, fused_region
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
@@ -470,7 +470,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     built from the static length and never reads the message (`_padding_tail`),
     which is the same property `sha256.digest` states.
     """
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     return sha512_merkle_damgard(INITIAL_STATE, _padded_words(msg))
 
 
@@ -486,7 +486,7 @@ def sha384_digest(msg: ArrayLike) -> fnp.ndarray:
     or concrete, like `digest` — and since `h0`'s AVAL is the same uint32 [16]
     for every variant, all three share one trace of the chain per message
     shape."""
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     return sha512_merkle_damgard(INITIAL_STATE_384, _padded_words(msg))[:, :48]
 
 
@@ -497,7 +497,7 @@ def sha512_256_digest(msg: ArrayLike) -> fnp.ndarray:
     by the caller-side slice — `sha384_digest`'s arrangement at the other
     §5.3 table. The 64-bit-word road to a length-extension-safe 256-bit
     digest (truncation hides the final state, unlike SHA-512 itself)."""
-    msg = fnp.asarray(msg, dtype=fnp.uint8)
+    msg = device_message(msg)
     return sha512_merkle_damgard(INITIAL_STATE_512_256, _padded_words(msg))[:, :32]
 
 

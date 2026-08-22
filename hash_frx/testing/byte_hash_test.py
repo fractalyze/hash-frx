@@ -14,7 +14,7 @@ import numpy as np
 from absl.testing import absltest
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import ByteHash
+from hash_frx.byte_hash import ByteHash, device_message
 from hash_frx.fusion import FusionPath
 
 
@@ -66,6 +66,27 @@ if TYPE_CHECKING:
     # mypy-enforced seam conformance — the pin every instance module carries,
     # exercised here so the seam is known pinnable before one exists.
     _bh: type[ByteHash] = _ByteHashDouble
+
+
+class DeviceMessageTest(absltest.TestCase):
+    """The rank check every device row shares (#215).
+
+    A 1-D message is the common miss — a single message is `B = 1`, not a bare
+    `[L]` — and without the seam check it surfaced from inside a marked
+    region's trace as a reshape or concatenate error naming neither the seam
+    nor the rank.
+
+    Only the rejection is asserted here, and that is the point: the check runs
+    before the conversion, so it needs no backend, and this file must keep
+    running with none — it is the seam's test, held to a double rather than to
+    any implementation. What the accepting path returns is pinned by every
+    family's own digest tests, which have a substrate to run on.
+    """
+
+    def test_rejects_a_message_that_is_not_a_batch(self) -> None:
+        for bad in [np.zeros(8, dtype=np.uint8), np.zeros((1, 2, 3), dtype=np.uint8)]:
+            with self.assertRaisesRegex(ValueError, "2-D uint8"):
+                device_message(bad)
 
 
 if __name__ == "__main__":

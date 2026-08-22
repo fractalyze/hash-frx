@@ -292,5 +292,29 @@ class Blake2sByteHashTest(absltest.TestCase):
                     blake2s.digest(np.zeros((1, 1), dtype=np.uint8), size)
 
 
+class SeamContractTest(absltest.TestCase):
+    """The two seam invariants BLAKE2s landed alongside and so missed.
+
+    A zero-row batch is a valid batch — the block-count reshape used to spell
+    the count as `-1`, which a zero-sized total makes ambiguous (#211) — and a
+    1-D message is rejected at the seam rather than from inside the marked
+    region's trace (#215).
+    """
+
+    def test_zero_rows_digest_to_zero_rows(self) -> None:
+        rows: list[tuple[ByteHash, int]] = [
+            (Blake2s(), 32),
+            (HostBlake2s(), 32),
+        ]
+        for hasher, size in rows:
+            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+            self.assertEqual(got.shape, (0, size))
+            self.assertEqual(got.dtype, np.uint8)
+
+    def test_a_1d_message_is_rejected_at_the_seam(self) -> None:
+        with self.assertRaisesRegex(ValueError, "2-D uint8"):
+            blake2s.digest(fnp.zeros(64, dtype=fnp.uint8))
+
+
 if __name__ == "__main__":
     absltest.main()
