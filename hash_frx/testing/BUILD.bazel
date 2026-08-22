@@ -18,6 +18,12 @@ py_library(
     ],
 )
 
+# Deliberately absl + //hash_frx and nothing else, and deliberately no
+# GPU_PLUGIN_DEPS. Its central case asserts that importing the package imports
+# no hash and therefore initializes no backend; a dep that pulled a family into
+# the process would not fail the build, it would just quietly make that case
+# untrue. The half of the public-API guard that DOES resolve every export is
+# `public_api_test`, split out for the same reason.
 py_test(
     name = "package_test",
     size = "small",
@@ -28,9 +34,28 @@ py_test(
     ],
 )
 
-# The registry's drift guard. The deps are its sweep's coverage boundary: the
-# completeness case walks the package files these targets place in runfiles,
-# so a new hash package joins this list when it joins the registry.
+# Resolves every name in `_EXPORTS` against the module that defines it, so a
+# wrong module path fails here rather than in a consumer on the one name nobody
+# exercised. Touching an export imports its module, which materializes constant
+# tables on the default backend — hence GPU_PLUGIN_DEPS, and hence the split
+# from `package_test`.
+py_test(
+    name = "public_api_test",
+    size = "small",
+    srcs = ["public_api_test.py"],
+    deps = [
+        "//hash_frx",
+        "//hash_frx:pbkdf2",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# The registry's drift guard. Its completeness case walks the package files
+# that reach runfiles, so what is listed here bounds what the sweep can see.
+# `//hash_frx` now carries the whole package (it has to, for the public
+# re-exports to resolve), which already covers that sweep; the explicit list is
+# kept as the direct-dep statement and as the guard that survives `//hash_frx`
+# ever being trimmed back.
 py_test(
     name = "markers_test",
     size = "small",
