@@ -70,8 +70,8 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake3 import blake3
-from hash_frx.byte_hash import host_digest
-from hash_frx.fusion import FusionPath, routing
+from hash_frx.byte_hash import DeviceRow, HostRow, host_digest
+from hash_frx.fusion import routing
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
@@ -96,7 +96,7 @@ def _routes_to_dedicated_emitter() -> bool:
     return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
-class _Blake3Hash:
+class _Blake3Hash(DeviceRow):
     """The shared body of the three modes — everything but which mode it is.
 
     A subclass supplies the row: `_read`, which of `blake3`'s mode functions
@@ -113,11 +113,7 @@ class _Blake3Hash:
         if output_size < 1:
             raise ValueError(f"output_size must be at least 1, got {output_size}")
         self.digest_size = output_size
-        # Per instance rather than on the class: the emitter switch is a
-        # property of the pin and the backend, and a value read at import would
-        # pin the answer before anything could vary it (`_KeccakHash` states
-        # the same rule).
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(_routes_to_dedicated_emitter)
 
     def _read(self, msg: ArrayLike) -> Array:
         raise NotImplementedError
@@ -128,14 +124,6 @@ class _Blake3Hash:
 
     def digest(self, msg: ArrayLike) -> Array:
         return self._read(msg)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self._parameters() == other._parameters()
-
-    def __hash__(self) -> int:
-        return hash((type(self), self._parameters()))
 
 
 class Blake3(_Blake3Hash):
@@ -208,7 +196,7 @@ class Blake3DeriveKey(_Blake3Hash):
         return (*super()._parameters(), self._context)
 
 
-class _HostBlake3Hash:
+class _HostBlake3Hash(HostRow):
     """The shared body of the three host siblings — `blake3` per message.
 
     The same `_read` / `_parameters` split as `_Blake3Hash`, and for the same
@@ -220,8 +208,6 @@ class _HostBlake3Hash:
     The loop `_read` runs under is [`byte_hash.host_digest`](../byte_hash.py),
     shared with every other host row in the package.
     """
-
-    fusion_path = FusionPath.HOST
 
     def __init__(self, output_size: int = blake3.DIGEST_LEN) -> None:
         if output_size < 1:
@@ -237,14 +223,6 @@ class _HostBlake3Hash:
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._read, self.digest_size, msg)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self._parameters() == other._parameters()
-
-    def __hash__(self) -> int:
-        return hash((type(self), self._parameters()))
 
 
 class HostBlake3(_HostBlake3Hash):

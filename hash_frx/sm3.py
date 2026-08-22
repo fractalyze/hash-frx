@@ -42,8 +42,8 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import device_message, host_digest
-from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.fusion import fused_region, routing
 from hash_frx.word import pack_be, rotl, unpack_be
 
 if TYPE_CHECKING:
@@ -314,7 +314,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     return sm3_merkle_damgard(INITIAL_STATE, _padded_words(msg))
 
 
-class Sm3:
+class Sm3(DeviceRow):
     """`ByteHash` for device SM3 — `digest` runs the batch on the
     `hash_frx.digest.sm3` marker. No plugin recognizes that name yet, so
     `fusion_path` reads `GENERIC` on every backend today: the marker inlines,
@@ -328,28 +328,13 @@ class Sm3:
     digest_size = 32
 
     def __init__(self) -> None:
-        # Read per instance rather than pinned on the class: the emitter
-        # switch is a property of the pin and the backend, and a value read
-        # at import would pin the answer before anything could vary it.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(_routes_to_dedicated_emitter)
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest
 
-    def __eq__(self, other: object) -> bool:
-        # By type, because SM3 is parameterless — the `Sha256` form, stated
-        # there: `type(other) is not type(self)` rather than `isinstance`,
-        # which is asymmetric under subclassing and blocks Python's
-        # reflected-`__eq__` fallback.
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
 
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-class HostSm3:
+class HostSm3(HostRow):
     """`ByteHash` for host SM3 over `hashlib.new("sm3")`.
 
     Not a guaranteed constructor: the name reaches `hashlib` through OpenSSL,
@@ -362,20 +347,11 @@ class HostSm3:
     digest_size = 32
     # The one legitimate class constant of the taxonomy: a host row is HOST
     # on every backend, so nothing here varies with the pin.
-    fusion_path = FusionPath.HOST
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
             lambda row: hashlib.new("sm3", row).digest(), self.digest_size, msg
         )
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
-
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 if TYPE_CHECKING:

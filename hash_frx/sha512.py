@@ -52,8 +52,8 @@ from frx import Array
 from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import device_message, host_digest
-from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.fusion import fused_region, routing
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -694,7 +694,7 @@ def sha512_stream_finalize(state: Sha512State, extras: Array) -> Array:
 # strictly-sequential host caller (the crossover measured there; this family is
 # un-fused today, so its device batch case starts from the GENERIC path).
 # ---------------------------------------------------------------------------
-class Sha512:
+class Sha512(DeviceRow):
     """`ByteHash` for device SHA-512 — `digest` runs the batch on the
     `hash_frx.digest.sha512` marker. No plugin recognizes that name yet, so
     `fusion_path` reads `GENERIC` on every backend today: the marker inlines,
@@ -709,28 +709,13 @@ class Sha512:
     digest_size = 64
 
     def __init__(self) -> None:
-        # Read per instance rather than pinned on the class: the emitter switch
-        # is a property of the pin and the backend, and a value read at import
-        # would pin the answer before anything could vary it.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(_routes_to_dedicated_emitter)
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
 
-    def __eq__(self, other: object) -> bool:
-        # By type, because SHA-512 is parameterless — the `Sha256` form, stated
-        # there: `type(other) is not type(self)` rather than `isinstance`,
-        # which is asymmetric under subclassing and blocks Python's
-        # reflected-`__eq__` fallback.
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
 
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-class HostSha512:
+class HostSha512(HostRow):
     """`ByteHash` for host SHA-512 — `digest` loops `hashlib` per message on the
     host (eager, no device kernel), so `fusion_path = HOST`. The fast path for a
     strictly-sequential byte challenger, and the signing-path row issue #66
@@ -744,20 +729,11 @@ class HostSha512:
     digest_size = 64
     # The one legitimate class constant of the taxonomy: a host row is HOST on
     # every backend, so nothing here varies with the pin.
-    fusion_path = FusionPath.HOST
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
             lambda row: hashlib.sha512(row).digest(), self.digest_size, msg
         )
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
-
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +744,7 @@ class HostSha512:
 # like `Sha512`'s, and the distinct types are what keep a family holding
 # several rows from colliding.
 # ---------------------------------------------------------------------------
-class Sha384:
+class Sha384(DeviceRow):
     """`ByteHash` for device SHA-384 — `sha384_digest`, i.e. the
     `hash_frx.digest.sha512` marker from the §5.3.4 initial state with the
     48-byte truncation outside. The fusion story is therefore `Sha512`'s,
@@ -778,22 +754,13 @@ class Sha384:
     digest_size = 48
 
     def __init__(self) -> None:
-        # Per instance, not per class — the `Sha512.__init__` rationale.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(_routes_to_dedicated_emitter)
 
     def digest(self, msg: ArrayLike) -> Array:
         return sha384_digest(msg)
 
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
 
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-class Sha512_256:
+class Sha512_256(DeviceRow):
     """`ByteHash` for device SHA-512/256 — `sha512_256_digest` on the shared
     marker, the §5.3.6 initial state, the 32-byte truncation outside. The
     64-bit-word answer to a length-extension-safe 256-bit digest."""
@@ -801,44 +768,27 @@ class Sha512_256:
     digest_size = 32
 
     def __init__(self) -> None:
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(_routes_to_dedicated_emitter)
 
     def digest(self, msg: ArrayLike) -> Array:
         return sha512_256_digest(msg)
 
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
 
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-class HostSha384:
+class HostSha384(HostRow):
     """`ByteHash` for host SHA-384 over `hashlib.sha384` — a guaranteed
     `hashlib` constructor, so the row ships unconditionally like
     `HostSha512`: the fast path for a strictly-sequential byte caller (TLS
     transcripts, JWT PS384/ES384 verification one signature at a time)."""
 
     digest_size = 48
-    fusion_path = FusionPath.HOST
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
             lambda row: hashlib.sha384(row).digest(), self.digest_size, msg
         )
 
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
 
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-class HostSha512_256:
+class HostSha512_256(HostRow):
     """`ByteHash` for host SHA-512/256 over `hashlib.new("sha512_256")`.
 
     Not a guaranteed constructor: the name reaches `hashlib` through OpenSSL,
@@ -849,7 +799,6 @@ class HostSha512_256:
     the first digest."""
 
     digest_size = 32
-    fusion_path = FusionPath.HOST
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
@@ -857,14 +806,6 @@ class HostSha512_256:
             self.digest_size,
             msg,
         )
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
-
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 if TYPE_CHECKING:

@@ -68,8 +68,8 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
-from hash_frx.byte_hash import device_message
-from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.fusion import fused_region, routing
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -447,7 +447,7 @@ def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
     return full[:, :digest_size]
 
 
-class Blake2b:
+class Blake2b(DeviceRow):
     """`ByteHash` for device unkeyed BLAKE2b — `digest` runs the batch through
     the `hash_frx.digest.blake2b` marker. No plugin recognizes that name yet,
     so `fusion_path` reads `GENERIC` on every backend today: the marker
@@ -476,25 +476,17 @@ class Blake2b:
                 f"{digest_size}"
             )
         self.digest_size = digest_size
-        # Read per instance rather than pinned on the class: the emitter
-        # switch is a property of the pin and the backend, and a value read
-        # at import would pin the answer before anything could vary it.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(_routes_to_dedicated_emitter)
+
+    def _parameters(self) -> tuple[object, ...]:
+        """The output length is part of the hash, not a formatting
+        choice — RFC 7693 folds it into the initial state and the
+        Keccak rows read it out of a different rate — so two lengths
+        are two hashes and must key apart."""
+        return (self.digest_size,)
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg, self.digest_size)  # the module-level marker digest
-
-    def __eq__(self, other: object) -> bool:
-        # By value over `digest_size` (`type(other) is not type(self)` rather
-        # than `isinstance`, which is asymmetric under subclassing and blocks
-        # Python's reflected-`__eq__` fallback) — so a device row never
-        # equals the host row, and swapping substrate re-traces.
-        if type(other) is not type(self):
-            return NotImplemented
-        return self.digest_size == other.digest_size
-
-    def __hash__(self) -> int:
-        return hash((type(self), self.digest_size))
 
 
 if TYPE_CHECKING:

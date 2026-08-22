@@ -50,8 +50,8 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import device_message
-from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.fusion import fused_region, routing
 from hash_frx.word import pack_le, rotl, unpack_le
 
 if TYPE_CHECKING:
@@ -324,7 +324,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     return ripemd160_bytes(msg)
 
 
-class Ripemd160:
+class Ripemd160(DeviceRow):
     """`ByteHash` for device RIPEMD-160 — `digest` runs the batch through the
     `hash_frx.digest.ripemd160` marker. No plugin recognizes that name yet, so
     `fusion_path` reads `GENERIC` on every backend today: the marker inlines,
@@ -342,25 +342,10 @@ class Ripemd160:
     digest_size = RIPEMD160_DIGEST_SIZE
 
     def __init__(self) -> None:
-        # Read per instance rather than pinned on the class: the emitter
-        # switch is a property of the pin and the backend, and a value read at
-        # import would pin the answer before anything could vary it.
-        self.fusion_path = FusionPath.from_routing(_routes_to_dedicated_emitter())
+        super().__init__(_routes_to_dedicated_emitter)
 
     def digest(self, msg: ArrayLike) -> Array:
         return digest(msg)  # the module-level marker digest above
-
-    def __eq__(self, other: object) -> bool:
-        # By type, because RIPEMD-160 is parameterless — the `Sha256` form,
-        # stated there: `type(other) is not type(self)` rather than
-        # `isinstance`, which is asymmetric under subclassing and blocks
-        # Python's reflected-`__eq__` fallback.
-        if type(other) is not type(self):
-            return NotImplemented
-        return True
-
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 if TYPE_CHECKING:

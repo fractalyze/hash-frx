@@ -96,6 +96,71 @@ class ByteHash(Protocol):
         ...
 
 
+class Row:
+    """What every `ByteHash` row repeats: the equality contract.
+
+    A row's `__eq__`/`__hash__` is its **jit cache key** — two instances that
+    compare equal share a trace, two that do not each get their own — so getting
+    it wrong in the lenient direction serves one parameterization's compiled
+    executable for another's, silently and with the right shape. The contract
+    was written out thirty-two times in three different spellings (`return
+    True`, a `digest_size` comparison, and `_parameters()`), which is three
+    chances to get a jit cache key wrong.
+
+    `_parameters` is the one thing a row overrides. It defaults to empty, which
+    is right for a parameterless row and wrong the moment a row gains a
+    parameter and forgets to name it here — so it is worth stating that the
+    forgetting does not error: it compares two different keys equal and serves
+    one key's trace for the other. `row_conformance_test` builds every
+    parameterized row twice, with different parameters, and requires them to
+    differ.
+    """
+
+    digest_size: int
+    fusion_path: FusionPath
+
+    def _parameters(self) -> tuple[object, ...]:
+        """Everything two instances of this row compare on, beyond their type."""
+        return ()
+
+    def __eq__(self, other: object) -> bool:
+        # `type(other) is not type(self)` rather than `isinstance`: isinstance is
+        # asymmetric under subclassing, and returning False instead of
+        # NotImplemented would block Python's reflected-`__eq__` fallback.
+        if type(other) is not type(self):
+            return NotImplemented
+        return self._parameters() == other._parameters()
+
+    def __hash__(self) -> int:
+        return hash((type(self), self._parameters()))
+
+
+class DeviceRow(Row):
+    """A row whose `digest` returns a device `Array`.
+
+    `fusion_path` is derived per instance from the family's routing gate, never
+    pinned on the class: the emitter switch is a property of the pin and the
+    backend, and a value read at import would fix the answer before anything
+    could vary it. The gate arrives as a callable rather than a bool so it is
+    read at construction — and so the module attribute stays the seam the
+    family's own tests patch.
+    """
+
+    def __init__(self, routes: Callable[[], bool]) -> None:
+        self.fusion_path = FusionPath.from_routing(routes())
+
+
+class HostRow(Row):
+    """A row backed by a host library: `digest` returns `np.ndarray` and can
+    never take a tracer, because it reads the message bytes.
+
+    `fusion_path` is the one legitimate class constant on this seam — a host
+    path is `HOST` on every backend.
+    """
+
+    fusion_path = FusionPath.HOST
+
+
 def device_message(msg: ArrayLike) -> Array:
     """A message as the uint8 `[B, L]` batch every device row hashes.
 

@@ -38,8 +38,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import host_digest
-from hash_frx.fusion import FusionPath
+from hash_frx.byte_hash import HostRow, host_digest
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
@@ -50,14 +49,12 @@ if TYPE_CHECKING:
 MAX_DIGEST_SIZE = 64
 
 
-class HostBlake2b:
+class HostBlake2b(HostRow):
     """`ByteHash` for host BLAKE2b — `hashlib.blake2b` looped per message.
 
     The loop it runs under is [`byte_hash.host_digest`](../byte_hash.py),
     shared with every other host row in the package.
     """
-
-    fusion_path = FusionPath.HOST
 
     def __init__(self, digest_size: int = MAX_DIGEST_SIZE) -> None:
         # Range-checked here rather than left to `hashlib` at the first
@@ -72,16 +69,15 @@ class HostBlake2b:
     def _hash_one(self, data: ReadableBuffer) -> bytes:
         return hashlib.blake2b(data, digest_size=self.digest_size).digest()
 
+    def _parameters(self) -> tuple[object, ...]:
+        """The output length is part of the hash, not a formatting
+        choice — RFC 7693 folds it into the initial state and the
+        Keccak rows read it out of a different rate — so two lengths
+        are two hashes and must key apart."""
+        return (self.digest_size,)
+
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._hash_one, self.digest_size, msg)
-
-    def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self):
-            return NotImplemented
-        return self.digest_size == other.digest_size
-
-    def __hash__(self) -> int:
-        return hash((type(self), self.digest_size))
 
 
 if TYPE_CHECKING:
