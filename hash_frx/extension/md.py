@@ -250,9 +250,17 @@ class MdStream:
         combined = combined_src[src_idx]  # valid prefix [0:new_len]
 
         # The live block count depends on pending_len by AT MOST one — (pl + L)
-        # // block spans {L // block, (block - 1 + L) // block} — so run the
-        # chain at both static candidates and select. The discarded candidate is
-        # the only one that ever sees the gap-shifted junk tail block.
+        # // block spans {L // block, (block - 1 + L) // block} — so both static
+        # candidates are computed and selected between. The discarded one is the
+        # only thing that ever sees the gap-shifted junk tail block.
+        #
+        # The two candidates share a PREFIX, which is what keeps this from
+        # costing two full passes: the low one is the chain over the first
+        # `min_blocks`, and the high one continues from it over the single block
+        # that separates them. That composition is just Merkle-Damgard's resume
+        # property, the same one that lets a stream pick up from a midstate.
+        # Running both from `h` instead costs min + max compressions — 2N - 1,
+        # measured at 31 for a 1000-byte absorb where 16 suffice.
         h = state.h
         min_blocks = length // block
         if max_blocks == 0:
@@ -261,15 +269,17 @@ class MdStream:
             words = self.block_to_words(
                 combined[: max_blocks * block].reshape(1, max_blocks * block)
             )
-            h_hi = self.deserialize(self.chain(h, words))[0]
             if min_blocks == max_blocks:
-                h_new = h_hi
+                h_new = self.deserialize(self.chain(h, words))[0]
             else:
                 h_lo = (
                     self.deserialize(self.chain(h, words[:, :min_blocks]))[0]
                     if min_blocks > 0
                     else h
                 )
+                h_hi = self.deserialize(
+                    self.chain(h_lo, words[:, min_blocks:max_blocks])
+                )[0]
                 h_new = fnp.where(active_blocks == max_blocks, h_hi, h_lo)
 
         tail_len = new_len - active_blocks * block
