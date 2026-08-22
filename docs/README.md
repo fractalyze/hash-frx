@@ -19,7 +19,7 @@ tests share.
 | Question                                                                                   | Where                                             |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
 | The rules a hash primitive is written to — fusion authoring, the seam and pin requirements, byte-exactness, and the assertions that must bite | [`reference/conventions.md`](reference/conventions.md) |
-| Why the layer is shaped this way — two seams, what may live here at all, the SHA-256 pair, fusion as a design property | [`blocks/hash.md`](blocks/hash.md)                 |
+| Why the layer is shaped this way — two seams, what may live here at all, the SHA-256 pair, which hashes get a host row, fusion as a design property | [`blocks/hash.md`](blocks/hash.md)                 |
 | Getting a dev loop — backend selection, the CUDA version trap, an unreleased XLA, the compile cache | [`reference/development.md`](reference/development.md) |
 
 ## Seams — the surfaces a consumer codes against
