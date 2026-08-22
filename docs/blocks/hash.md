@@ -177,9 +177,16 @@ rows ride `hashlib`; the standard library has no BLAKE3 and will not grow one, s
 `HostBlake3` and its keyed and derive-key siblings are built on `blake3`, the
 BLAKE3 team's own Rust binding, and it is a declared runtime dependency of this
 package. What clears that bar is the property the row exists for: native speed is
-the whole reason to choose a host row, and a plain-Python implementation is
-slower than the device dispatch it would be standing in for — which is why
-`HostKeccak256` is `testonly` and these are not.
+the whole reason to choose a host row, and a plain-Python implementation is two
+orders of magnitude off what a `Host*` name promises.
+
+Keccak-256 is where that bar bites, because its plain-Python sponge is not
+simply slow: at `B = 1` on a leg without the emitters it beats the device row
+several times over, and by a further two orders of magnitude once message
+lengths vary. That win is the ~90 ms compilation term rather than the sponge,
+so it is the half of condition 1 a marker ABI can retire — which is why it does
+not earn a shipped row, and why paying a dependency to make the row genuinely
+native was judged not worth it either. Keccak-256 has no shipped host row.
 
 The dependency buys a second thing the published vectors cannot: a differential
 partner that is not this tree. The binding wraps the reference implementation the
@@ -193,6 +200,74 @@ It also narrows one row. The binding takes a derive-key context as a `str`, so
 `HostBlake3DeriveKey` refuses a context that is not valid UTF-8 where
 `Blake3DeriveKey` hashes it. The standard names that context UTF-8, so a caller
 following it never meets the narrowing.
+
+## Which hashes get a host row
+
+A `Host*` row ships when two conditions hold together:
+
+1. the host path is faster than the device path **at the batch shape the
+   consumer lives at**, and
+2. a **host-shaped consumer** exists — one that is not tracing, and needs the
+   result bytes for ordinary Python control flow.
+
+Both are load-bearing, and the set they carve out is the whole reason the
+`Host*` names look the way they do: the `hashlib` families and BLAKE3 ship
+because both hold, and Keccak-256, RIPEMD-160, Grøstl-256 and Ascon-Hash256
+have no shipped host row because the first fails.
+
+Condition 1 reads as a claim about kernel speed, and that is its smaller half.
+`digest` takes `uint8[B, L]`, so the message length is part of the *input
+shape*, and the block count and the pad are static by construction —
+[`keccak/sponge.py`](../../hash_frx/keccak/sponge.py) states the trade in one
+line ("every loop bound here is static … that is what lets `digest` take a
+tracer"), and `_padding_tail` builds the pad as a host constant *from* the
+static length. So an eager caller whose messages are not all one length pays a
+**compilation per length**, not a kernel per call. On the CPU backend at
+`B = 1`:
+
+| one `Sha256` digest | cost |
+|---|---:|
+| first call at a fresh message length | ~90 ms |
+| compiled and warm, operand already resident | 3.9 us |
+| the `hashlib` row | 1.5 us |
+
+The gap a host row closes is therefore ~90 ms where lengths vary and ~2 us
+where they do not, and the two have different causes. A dedicated emitter
+changes neither: a hash whose marker the CPU leg routes and one whose marker it
+does not compile within a few percent of each other, because compilation
+dominates. Naming the causes is what keeps the condition honest, because it
+also says what would retire it — a marker ABI taking the length as an operand,
+with the block loop inside the emitter, deletes the ~90 ms term and leaves a
+host row resting on ~2 us of dispatch.
+
+`Permutation` has **no host category at all**, and that is a different
+statement from a byte hash having no shipped host row. A permutation fails both
+conditions rather than one: there is no native standard to wrap, and it runs
+inside a circuit, where a tracer's bytes cannot be read. `HostPoseidon` is not
+missing, it is categorically absent — so the absence needs no per-hash
+justification the way Keccak-256's does.
+
+**Why not emit a host-side composite from XLA instead.** A `ByteHash` is a
+finished product, so the question recurs: why keep `hashlib` at all rather than
+mark a host-side region and delete the device/host split? It is a category
+error. A composite exists only inside HLO, and reaching HLO means tracing —
+while the moment a host row is wanted is exactly the moment there is no HLO,
+because the caller is not tracing and needs concrete bytes (a KAT comparison, a
+sequential byte transcript, assembling a Merkle tree). Handing `np.ndarray` to
+a marked region leaves nothing to wrap. Running the *device* row on the CPU
+backend is possible and gives the right bytes; it is condition 1 restated, at
+the two costs measured above.
+
+**Dropping host rows wholesale is a seam change, not a third option.** It is
+worth naming because it keeps being re-proposed as though it were cheap. The
+measurements above are what rule it out — every sequential caller pays the two
+costs, and the host-shaped consumers of condition 2 exist today. What it would
+*entail* is recorded separately, because a consequence is not an argument:
+`FusionPath.HOST` goes dead, `is_traceable` becomes trivially true for every
+value so [`pbkdf2.py`](../../hash_frx/pbkdf2.py)'s guard becomes unreachable,
+and `DEDICATED`/`GENERIC` is a boolean — the shape `FusionPath` exists to
+replace. That collapse is correct bookkeeping *if* host rows genuinely go; it
+is not itself the reason they stay.
 
 ## Names say the construction, not the shape
 
