@@ -15,7 +15,7 @@ on the one axis that does not merge, the **loop form**:
 
 A body parameterized on which of those two it is would be two bodies behind one
 name, so they are two functions sharing one vocabulary — `pad.SpongePad`,
-`merge_into_rate`, and the squeeze rule below. The parent epic's XLA spike
+`squeeze_blocks`, and the squeeze rule below. The parent epic's XLA spike
 reached the same split from the other side: byte and field absorbs differ only
 in lane load and merge, but field trip counts are runtime operands where byte
 ones are static, so the envelopes keep both forms.
@@ -30,10 +30,28 @@ wrong shifts every output block by one permutation. That is a wrong digest, not 
 slow one, and it is the same class of error as the duplex squeeze fix that
 `duplex_sponge.py` carries.
 
-Neither function emits an op of its own: every array operation is the caller's,
-reached through `absorb` / `permute` / `read`. That is what lets one schedule
+`absorb_squeeze` emits no op of its own: every array operation is the caller's,
+reached through `absorb` / `permute` / `read`, which is what lets one schedule
 serve a flat `[B, 50]` uint32 state and a pair of `[B, 5]` word grids without
-either family's lowering moving.
+either family's lowering moving. `field_absorb` owns its `while_loop` and the
+carry around it — precisely the axis that does not merge — and nothing else.
+
+**The merge is deliberately not here.** Both byte sponges combine a block into
+the rate with the same slice-and-concatenate, but they emit it in opposite order:
+Keccak packs its block before merging, so the block's ops precede the state
+slice, while Ascon slices S0 first. A helper takes its block as an argument, so
+the block is always emitted first — one order, and only one of the two can have
+it. The shared form therefore folds the two *Keccak* spellings and lives with
+them (`keccak.sponge._xor_into_rate`); Ascon keeps its own two lines. What
+generalizes here is the schedule, which emits nothing and so has no order to
+impose.
+
+**The squeeze trim is the caller's**, for the same reason: the schedule reads
+whole rate blocks, so a request that is not a multiple of the rate overshoots
+and the caller slices. Keccak slices unconditionally, Ascon only when the
+request is not a multiple of 8 — because Ascon-Hash256's 32 bytes are four exact
+blocks and an unconditional slice would put an op in its region that was never
+there.
 """
 
 from __future__ import annotations
@@ -51,34 +69,6 @@ from frx import Array, lax
 S = TypeVar("S")
 # One squeeze block, in whatever shape the caller reads it out as.
 R = TypeVar("R")
-
-
-def merge_into_rate(
-    state: Array, block: Array, op: Callable[[Array, Array], Array]
-) -> Array:
-    """Combine `block` into the state's rate prefix with `op`, leaving the
-    capacity untouched: the prefix is `state[..., :n]` for `n = block.shape[-1]`.
-
-    Written as two static slices and a concatenate rather than
-    `state.at[:n].set(...)`: an in-place update lowers to a scatter, which is a
-    fusion boundary and — on a GPU — one XLA serializes
-    (`docs/reference/conventions.md`).
-
-    Indexed on the trailing axis, so one spelling serves both state ranks the
-    Keccak family carries: the batched `[B, 50]` lanes the one-shot sponge
-    absorbs into, and the unbatched `(50,)` the incremental SHAKE holds. Those
-    were two transcriptions of this concatenate.
-
-    **Ascon's merge is the same concatenate and deliberately does not come
-    through here.** Its rate is column 0 of a `[B, 5]` word grid, which fits;
-    what does not is the order. Keccak packs its block before merging, so the
-    block's ops precede the state slice, while Ascon slices S0 first — and a
-    helper takes its block as an argument, so the block is always emitted
-    before the state slice. Routing both through one spelling therefore moves
-    one family's lowered StableHLO, for no change in what either computes.
-    """
-    n = block.shape[-1]
-    return fnp.concatenate([op(state[..., :n], block), state[..., n:]], axis=-1)
 
 
 def squeeze_blocks(output_size: int, rate: int) -> int:

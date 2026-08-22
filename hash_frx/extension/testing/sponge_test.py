@@ -19,7 +19,6 @@ byte-exactness suite catches if the oracle is transcribed from the same mistake.
 
 from __future__ import annotations
 
-import operator
 from dataclasses import dataclass, field
 
 import frx
@@ -27,12 +26,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
-from hash_frx.extension.sponge import (
-    absorb_squeeze,
-    field_absorb,
-    merge_into_rate,
-    squeeze_blocks,
-)
+from hash_frx.extension.sponge import absorb_squeeze, field_absorb, squeeze_blocks
 
 
 @dataclass
@@ -146,53 +140,6 @@ class SqueezeBlocksTest(absltest.TestCase):
         # Ascon-Hash256: 32 bytes at an 8-byte rate is the four reads its
         # schedule used to spell as one peeled read plus a loop of three.
         self.assertEqual(squeeze_blocks(32, 8), 4)
-
-
-class MergeIntoRateTest(absltest.TestCase):
-    def test_only_the_rate_prefix_changes(self) -> None:
-        state = fnp.asarray(np.arange(10, dtype=np.uint32))
-        block = fnp.asarray(np.array([0xFF, 0xFF, 0xFF], dtype=np.uint32))
-        got = np.asarray(merge_into_rate(state, block, operator.xor))
-        want = np.arange(10, dtype=np.uint32)
-        want[:3] ^= np.uint32(0xFF)
-        np.testing.assert_array_equal(got, want)
-
-    def test_one_spelling_serves_both_state_ranks(self) -> None:
-        # The batched sponge and the incremental one carry the same state at
-        # different ranks; the trailing-axis indexing is what lets one helper
-        # serve both, and a rank-0-indexed one would silently merge along the
-        # batch axis instead.
-        row = np.arange(10, dtype=np.uint32)
-        block = np.array([1, 2, 3], dtype=np.uint32)
-        unbatched = np.asarray(
-            merge_into_rate(fnp.asarray(row), fnp.asarray(block), operator.xor)
-        )
-        batched = np.asarray(
-            merge_into_rate(
-                fnp.asarray(np.stack([row, row + 100])),
-                fnp.asarray(np.stack([block, block])),
-                operator.xor,
-            )
-        )
-        np.testing.assert_array_equal(batched[0], unbatched)
-
-    def test_the_operation_is_the_caller_s(self) -> None:
-        # XOR for the byte sponges; the parameter exists so a construction that
-        # merges differently is not a second copy of the concatenate.
-        state = fnp.asarray(np.arange(5, dtype=np.uint32))
-        block = fnp.asarray(np.array([10, 10], dtype=np.uint32))
-        np.testing.assert_array_equal(
-            np.asarray(merge_into_rate(state, block, operator.add))[:2],
-            np.array([10, 11], dtype=np.uint32),
-        )
-
-    def test_a_full_width_block_leaves_no_capacity(self) -> None:
-        state = fnp.asarray(np.zeros(4, dtype=np.uint32))
-        block = fnp.asarray(np.arange(4, dtype=np.uint32))
-        np.testing.assert_array_equal(
-            np.asarray(merge_into_rate(state, block, operator.xor)),
-            np.arange(4, dtype=np.uint32),
-        )
 
 
 class FieldAbsorbTest(absltest.TestCase):

@@ -54,7 +54,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.ascon.permutation import WORDS, masks, permutation
+from hash_frx.ascon.permutation import WORDS, Lane, masks, permutation
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.pad import SpongePad
 from hash_frx.extension.sponge import absorb_squeeze, squeeze_blocks
@@ -63,10 +63,6 @@ from hash_frx.word import pack_le, split, unpack_le
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
-
-# The sponge state as this hash carries it: the five words as a (lo, hi) pair
-# of uint32 [B, 5] grids, word i in column i.
-_State = tuple[Array, Array]
 
 ASCON_HASH256_MARKER = "hash_frx.digest.ascon_hash256"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI
@@ -153,12 +149,6 @@ _XOF128_INITIAL_STATEd = fnp.asarray(_XOF128_INITIAL_STATE)
 _PAD = SpongePad(rate=_RATE, head=0x01, final_bit=False)
 
 
-# Module-level jit zone: `lax.composite` re-traces its decomposition on every
-# emission, and a Merkle commit emits one digest call per tree level — so the
-# uncached re-trace of the multi-permutation body would dominate the
-# first-trace floor (cf. sha256_bytes and grostl256_bytes). `inline=True`
-# splices the cached jaxpr into the enclosing trace, so the emitted module
-# (one composite marker per digest) is unchanged.
 def _digest_decomposition(output_size: int) -> Callable[..., Array]:
     """The absorb-and-squeeze body both Ascon rows run, over the operand ABI
     below. `output_size` is the only thing that differs between them — it fixes
@@ -190,7 +180,7 @@ def _digest_decomposition(output_size: int) -> Callable[..., Array]:
         # while this one slices S0 first. A helper takes its block as an
         # argument, so it can only have the one order — and moving either family
         # to the other's would be a lowering change with no value behind it.
-        def absorb(state: _State, i: int) -> _State:
+        def absorb(state: Lane, i: int) -> Lane:
             lo, hi = state
             return (
                 fnp.concatenate([lo[:, :1] ^ words[:, i, :1], lo[:, 1:]], axis=-1),
@@ -224,6 +214,12 @@ def _digest_decomposition(output_size: int) -> Callable[..., Array]:
     return decomposition
 
 
+# Module-level jit zone: `lax.composite` re-traces its decomposition on every
+# emission, and a Merkle commit emits one digest call per tree level — so the
+# uncached re-trace of the multi-permutation body would dominate the
+# first-trace floor (cf. sha256_bytes and grostl256_bytes). `inline=True`
+# splices the cached jaxpr into the enclosing trace, so the emitted module
+# (one composite marker per digest) is unchanged.
 @partial(frx.jit, inline=True)
 def ascon_hash256_bytes(msg: Array) -> Array:
     """Whole-message Ascon-Hash256 over raw bytes as ONE marked region:

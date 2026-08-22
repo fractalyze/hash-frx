@@ -74,10 +74,6 @@ class ReferenceAnchorTest(parameterized.TestCase):
             self.assertEqual((length + len(pad(length))) % 8, 0)
 
 
-if __name__ == "__main__":
-    absltest.main()
-
-
 class XofReferenceAnchorTest(parameterized.TestCase):
     """The XOF oracle against the same published record as the hash's."""
 
@@ -108,3 +104,7 @@ class XofReferenceAnchorTest(parameterized.TestCase):
         # a zero output length, which is how "arbitrary output" is encoded.
         self.assertEqual(XOF_IV, 0x0000080000CC0003)
         self.assertEqual(XOF_INITIAL_STATE, tuple(permutation([XOF_IV, 0, 0, 0, 0])))
+
+
+if __name__ == "__main__":
+    absltest.main()

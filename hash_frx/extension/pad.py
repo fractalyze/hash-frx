@@ -186,22 +186,16 @@ class SpongePad:
             raise ValueError(f"rate ({self.rate}) must be >= 1")
         if not 0 <= self.head <= 0xFF:
             raise ValueError(f"head ({self.head:#x}) must be a byte")
-        # Bit 7 belongs to `pad10*1`'s trailing 1 wherever there is one. A head
-        # that sets it would collide on a one-byte pad, where the two ends land
-        # on the same byte — and the two spellings of that byte (`|= 0x80` on a
-        # host tail, `^ 0x80` on a traced block) then disagree, which is a
-        # different digest rather than an error. No standard suffix uses it
-        # (SHA-3 0x06, SHAKE 0x1F, cSHAKE 0x04, Keccak 0x01), so it is rejected.
+        # Bit 7 belongs to `pad10*1`'s trailing 1 wherever there is one, so a
+        # head that sets it collides on a one-byte pad. What that collision cost
+        # in practice — two spellings of the same byte disagreeing on the digest
+        # — is in `keccak.sponge.validate_sponge_params`, which enforces the
+        # same rule on the path that does not build a `SpongePad`.
         if self.final_bit and self.head >= 0x80:
             raise ValueError(
                 f"head ({self.head:#x}) must be a byte below 0x80: bit 7 carries "
                 "pad10*1's trailing 1 (FIPS 202 section 5.1)"
             )
-
-    def blocks(self, length: int) -> int:
-        """Padded blocks a `length`-byte message spans. Never zero: the pad is
-        never empty, so even the empty message absorbs one block."""
-        return length // self.rate + 1
 
     # Memoized and handed out read-only for the reason `PadRule.tail` states:
     # keying is by VALUE, so two rows with equal parameters share one entry and

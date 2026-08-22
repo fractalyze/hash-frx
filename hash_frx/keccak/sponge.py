@@ -37,10 +37,9 @@ reordering is needed here (`params.py`).
 
 from __future__ import annotations
 
-import operator
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
+from functools import cached_property, partial
 
 import frx
 import frx.numpy as fnp
@@ -93,6 +92,33 @@ def validate_sponge_params(rate: int, suffix: int) -> None:
         )
 
 
+def _xor_into_rate(state: Array, block: Array) -> Array:
+    """XOR a packed block into the rate prefix, leaving the capacity untouched:
+    the prefix is `state[..., :n]` for `n = block.shape[-1]`.
+
+    Written as two static slices and a concatenate rather than
+    `state.at[:n].set(...)`: an in-place update lowers to a scatter, which is a
+    fusion boundary and — on a GPU — one XLA serializes
+    (`docs/reference/conventions.md`).
+
+    Indexed on the trailing axis, so one spelling serves both state ranks this
+    family carries: the batched `[B, 50]` lanes the one-shot sponge absorbs into
+    and the unbatched `(50,)` the incremental SHAKE holds
+    (`streaming._absorb_block`). Those were two transcriptions of this
+    concatenate.
+
+    Keccak's rather than `extension.sponge`'s, even though Ascon's merge is the
+    same concatenate on a `[B, 5]` word grid: the two emit it in opposite order —
+    Keccak packs its block before merging, Ascon slices S0 first — and a helper
+    takes its block as an argument, so the block's ops always come first. Only
+    one of the two orders is available to a shared helper, and moving either
+    family to the other's would change its lowered StableHLO for no change in
+    what it computes.
+    """
+    n = block.shape[-1]
+    return fnp.concatenate([state[..., :n] ^ block, state[..., n:]], axis=-1)
+
+
 def _absorb_squeeze(
     padded: Array,
     rate: int,
@@ -121,8 +147,8 @@ def _absorb_squeeze(
         state,
         blocks=padded.shape[-1] // rate,
         squeezes=sponge_ext.squeeze_blocks(output_size, rate),
-        absorb=lambda s, i: sponge_ext.merge_into_rate(
-            s, pack_le(padded[:, i * rate : (i + 1) * rate]), operator.xor
+        absorb=lambda s, i: _xor_into_rate(
+            s, pack_le(padded[:, i * rate : (i + 1) * rate])
         ),
         permute=permute,
         read=lambda s: s[:, :n],
@@ -202,6 +228,16 @@ class KeccakSponge:
         if self.output_size < 1:
             raise ValueError(f"output_size ({self.output_size}) must be >= 1")
 
+    @cached_property
+    def _pad(self) -> SpongePad:
+        """This row's `pad10*1` rule. Built once per row rather than per `hash`,
+        like every other family's module-level rule — its parameters are this
+        row's, so it cannot be a module constant, but it is no more per-call
+        than they are. `__post_init__` has already run
+        `validate_sponge_params`, which subsumes every check `SpongePad` makes.
+        """
+        return SpongePad(rate=self.rate, head=self.suffix)
+
     def hash(self, msg: ArrayLike) -> Array:
         """Absorb a batch of equal-length messages and squeeze: uint8 `[B, L]` ->
         uint8 `[B, output_size]`.
@@ -215,8 +251,7 @@ class KeccakSponge:
         """
         message = device_message(msg)
         _batch, length = message.shape
-        pad = SpongePad(rate=self.rate, head=self.suffix)
-        padded = padded_batch(message, fnp.asarray(pad.tail(length)))
+        padded = padded_batch(message, fnp.asarray(self._pad.tail(length)))
 
         # Built per call rather than hoisted: the permutation reads the emitter
         # switch at construction, so a module-level instance would pin the

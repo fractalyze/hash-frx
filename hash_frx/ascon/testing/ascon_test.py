@@ -238,10 +238,6 @@ class EmptyBatchTest(absltest.TestCase):
             self.assertEqual(got.dtype, np.uint8)
 
 
-if __name__ == "__main__":
-    absltest.main()
-
-
 class AsconXof128KatTest(parameterized.TestCase):
     """Ascon-XOF128 (§5.2) — the SP's own vectors, then the oracle differentially."""
 
@@ -268,11 +264,14 @@ class AsconXof128KatTest(parameterized.TestCase):
 
     def test_a_short_read_is_a_prefix_of_a_long_one(self) -> None:
         # The XOF property on the device path: fewer bytes asked for must not
-        # be different bytes. The rate is 8, so these straddle the boundary the
-        # squeeze truncation sits on.
+        # be different bytes. `output_size` is a static argname, so every entry
+        # here is a whole-region compile — two are enough to cross the 8-byte
+        # rate boundary the trim sits on (7 reads one block and trims, 33 reads
+        # five and trims), and the oracle carries the dense sweep
+        # (`reference_test.test_a_short_read_is_a_prefix_of_a_long_one`).
         msg = _message(20)
         full = np.asarray(ascon.xof128(msg, 64))
-        for n in (1, 7, 8, 9, 33, 64):
+        for n in (7, 33):
             np.testing.assert_array_equal(np.asarray(ascon.xof128(msg, n)), full[:, :n])
 
     def test_the_xof_is_not_the_hash_at_the_same_length(self) -> None:
@@ -325,25 +324,21 @@ class AsconXof128MarkerTest(absltest.TestCase):
 
 
 class AsconXof128ByteHashTest(absltest.TestCase):
-    def test_impl_satisfies_the_seam(self) -> None:
-        self.assertIsInstance(AsconXof128(32), ByteHash)
+    """What the shared row sweeps do NOT cover.
 
-    def test_the_output_length_is_part_of_the_value_identity(self) -> None:
-        # `AsconXof128(64)` is a different hash from `AsconXof128(32)`, not one
-        # hash asked for more bytes — so the two must not share a jit cache key.
-        self.assertEqual(AsconXof128(32), AsconXof128(32))
-        self.assertNotEqual(AsconXof128(32), AsconXof128(64))
-        self.assertNotEqual(hash(AsconXof128(32)), hash(AsconXof128(64)))
+    The row is registered in `testing.rows.ALL_ROWS` and in
+    `fusion_path_test`'s matrix, so seam conformance, the `__eq__`/`__hash__`
+    parameter law and the (row, backend) fusion-path cell are asserted there
+    against every other row rather than restated here. What is left is the part
+    that is specific to an extendable-output hash.
+    """
 
     def test_digest_shape_and_dtype(self) -> None:
+        # An output length that is NOT a multiple of the 8-byte rate, so the
+        # squeeze overshoots and the trim runs.
         got = AsconXof128(37).digest(_message(5))
         self.assertEqual(got.shape, (4, 37))
         self.assertEqual(got.dtype, fnp.uint8)
-
-    def test_fusion_path_pins_the_substrate(self) -> None:
-        # No plugin recognizes the name yet, so every leg reads GENERIC —
-        # a device row, traceable, whose marker inlines.
-        self.assertIs(AsconXof128(32).fusion_path, FusionPath.GENERIC)
 
     def test_rejects_a_zero_length_output(self) -> None:
         with self.assertRaisesRegex(ValueError, "output_size"):
@@ -357,3 +352,7 @@ class AsconXof128ByteHashTest(absltest.TestCase):
         np.testing.assert_array_equal(
             np.asarray(frx.jit(row.digest)(msg)), np.asarray(row.digest(msg))
         )
+
+
+if __name__ == "__main__":
+    absltest.main()

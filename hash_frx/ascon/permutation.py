@@ -16,7 +16,7 @@ sponge schedule drive both.
 
 The round steps are grid-wise over the five words rather than over ten loose
 half arrays, which is load-bearing for the lowering rather than a style choice —
-`_permutation` states the measurement. Every step is written against the
+`permutation` carries the measurement. Every step is written against the
 trailing axis alone, so the same body serves the unbatched `(10,)` state this
 seam promises and the `[B, 5]` grids `ascon.ascon_hash256_bytes` absorbs into.
 
@@ -131,7 +131,7 @@ def masks() -> Masks:
     return pre, post, word2
 
 
-def substitution(lo: Array, hi: Array, m: Masks) -> Lane:
+def _substitution(lo: Array, hi: Array, m: Masks) -> Lane:
     """p_S (§3.3): the 5-bit S-box across the five words, grid-wise.
 
     The substitution is 64 parallel S-box applications with word S_i
@@ -164,7 +164,7 @@ def substitution(lo: Array, hi: Array, m: Masks) -> Lane:
     return lo ^ invert, hi ^ invert
 
 
-def linear_diffusion(lo: Array, hi: Array) -> Lane:
+def _linear_diffusion(lo: Array, hi: Array) -> Lane:
     """p_L (§3.4): S_i ^= (S_i ⋙ r1) ^ (S_i ⋙ r2), the Σ_i pairs — the one
     step where the halves interact, through the shared `word64.rotr64`. Each
     word carries its own rotation pair, so the grid splits into static
@@ -205,12 +205,12 @@ def permutation(lo: Array, hi: Array, m: Masks) -> Lane:
     """
     for rc in ROUND_CONSTANTS:
         lo = lo ^ (m[2] * U32(rc))
-        lo, hi = substitution(lo, hi, m)
-        lo, hi = linear_diffusion(lo, hi)
+        lo, hi = _substitution(lo, hi, m)
+        lo, hi = _linear_diffusion(lo, hi)
     return lo, hi
 
 
-def unpack(state: Array) -> Lane:
+def _unpack(state: Array) -> Lane:
     """`(10,)` interleaved -> the (lo, hi) `(5,)` word grids.
 
     The strided slices are static, so they lower to `slice` rather than a
@@ -220,7 +220,7 @@ def unpack(state: Array) -> Lane:
     return state[0::2], state[1::2]
 
 
-def pack(lo: Array, hi: Array) -> Array:
+def _pack(lo: Array, hi: Array) -> Array:
     """The (lo, hi) word grids back to the `(10,)` interleaved state."""
     return fnp.stack([lo, hi], axis=1).reshape(WIDTH)
 
@@ -229,9 +229,9 @@ def _rounds(state: Array, **_attrs: object) -> Array:
     """The twelve rounds over the flat seam state — the decomposition the
     marked region runs. `_attrs` is marker metadata passed through, which the
     body does not read."""
-    lo, hi = unpack(state)
+    lo, hi = _unpack(state)
     lo, hi = permutation(lo, hi, masks())
-    return pack(lo, hi)
+    return _pack(lo, hi)
 
 
 def _abi_operands(state: Array) -> tuple[Array, ...]:

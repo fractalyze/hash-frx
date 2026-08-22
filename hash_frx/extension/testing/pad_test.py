@@ -176,10 +176,6 @@ class HaifaCounterTest(absltest.TestCase):
         self.assertEqual(haifa_counter(1, 2, 200, 128), (200, True))
 
 
-if __name__ == "__main__":
-    absltest.main()
-
-
 # The two sponge rules `SpongePad` replaced. FIPS 202 section 6 fixes the Keccak
 # suffixes; SP 800-232 Algorithm 2 fixes Ascon's.
 SHA3_256_PAD = SpongePad(rate=136, head=0x06)
@@ -238,12 +234,6 @@ class SpongePadVectorTest(parameterized.TestCase):
         for pad in (SHA3_256_PAD, ASCON_PAD):
             for length in range(0, 3 * pad.rate + 1):
                 self.assertEqual((length + pad.tail(length).size) % pad.rate, 0)
-
-    def test_blocks_counts_the_padded_message(self) -> None:
-        for pad in (SHA3_256_PAD, ASCON_PAD):
-            for length in range(0, 3 * pad.rate + 1):
-                padded = length + pad.tail(length).size
-                self.assertEqual(pad.blocks(length), padded // pad.rate)
 
 
 class SpongePadAxisTest(absltest.TestCase):
@@ -313,3 +303,7 @@ class SpongePadTailIsSafeToShareTest(absltest.TestCase):
         # must NOT share; two spellings of one rule must.
         self.assertIsNot(SHA3_256_PAD.tail(1), SHAKE256_PAD.tail(1))
         self.assertIs(SHA3_256_PAD.tail(1), SpongePad(rate=136, head=0x06).tail(1))
+
+
+if __name__ == "__main__":
+    absltest.main()

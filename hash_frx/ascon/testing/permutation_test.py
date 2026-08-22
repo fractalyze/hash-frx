@@ -41,14 +41,14 @@ from hash_frx.ascon.permutation import (
     WORDS,
     AsconP,
     _abi_operands,
+    _pack,
     _permute_body,
     _rounds,
+    _substitution,
+    _unpack,
     masks,
-    pack,
-    substitution,
-    unpack,
 )
-from hash_frx.ascon.testing.reference import SBOX
+from hash_frx.ascon.testing.reference import INITIAL_STATE, SBOX
 from hash_frx.ascon.testing.reference import permutation as reference_permutation
 from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
@@ -60,15 +60,12 @@ from hash_frx.word import split
 _STATES: dict[str, tuple[int, ...]] = {
     # All-zero, the degenerate input every step must still move.
     "zeros": (0, 0, 0, 0, 0),
-    # Ascon-Hash256's own initial state (SP 800-232 §A.3, Table 12), so one
-    # case runs the words the shipped hash actually permutes.
-    "hash256_init": (
-        0x9B1E5494E934D681,
-        0x4BC3A01E333751D2,
-        0xAE65396C6B34B81A,
-        0x3C7FD4A4D56A4DB3,
-        0x1A5C464906C5976D,
-    ),
+    # Ascon-Hash256's own initial state, so one case runs the words the shipped
+    # hash actually permutes. Taken from the oracle, which DERIVES it by
+    # permuting IV ‖ 0^256 (`reference.INITIAL_STATE`) and is anchored to SP
+    # 800-232 Table 12 in `reference_test` — a third hand-transcription here
+    # could disagree with both and still pass every case in this file.
+    "hash256_init": INITIAL_STATE,
     # Every byte position distinct, so a misplaced half or a wrong-way rotation
     # cannot cancel out.
     "counter": (
@@ -197,10 +194,10 @@ class AsconPStateLayoutTest(absltest.TestCase):
 
     def test_unpack_and_pack_round_trip(self) -> None:
         state = _device_state(_STATES["counter"])
-        lo, hi = unpack(state)
+        lo, hi = _unpack(state)
         self.assertEqual(lo.shape, (WORDS,))
         self.assertEqual(hi.shape, (WORDS,))
-        np.testing.assert_array_equal(np.asarray(pack(lo, hi)), np.asarray(state))
+        np.testing.assert_array_equal(np.asarray(_pack(lo, hi)), np.asarray(state))
 
     def test_word_i_sits_at_elements_2i_and_2i_plus_one(self) -> None:
         words = _STATES["counter"]
@@ -249,7 +246,7 @@ class SboxCircuitTest(absltest.TestCase):
                 planes[i] |= ((j >> (4 - i)) & 1) << j
         lo = fnp.asarray(np.array([planes], dtype=np.uint32))
         hi = fnp.asarray(np.zeros((1, WORDS), dtype=np.uint32))
-        out_lo, _ = frx.jit(lambda a, b: substitution(a, b, masks()))(lo, hi)
+        out_lo, _ = frx.jit(lambda a, b: _substitution(a, b, masks()))(lo, hi)
         out = np.asarray(out_lo)[0]
         got = []
         for j in range(32):
