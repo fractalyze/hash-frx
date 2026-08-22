@@ -42,7 +42,13 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.byte_hash import (
+    DeviceRow,
+    HostRow,
+    device_message,
+    host_digest,
+    padded_batch,
+)
 from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotl, unpack_be
@@ -236,11 +242,7 @@ def _padded_words(msg: Array) -> Array:
     concatenation and a reshape, so it holds a tracer as readily as a
     concrete array (the `sha256._padded_words` arrangement)."""
     tail = fnp.asarray(_padding_tail(msg.shape[-1]))
-    return block_to_words(
-        fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
-        )
-    )
+    return block_to_words(padded_batch(msg, tail))
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every

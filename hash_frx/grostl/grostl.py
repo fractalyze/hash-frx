@@ -38,7 +38,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import roll
@@ -417,9 +417,7 @@ def grostl256_bytes(msg: Array) -> Array:
         iv: Array, rc_p: Array, rc_q: Array, msg: Array, tail: Array, **_attrs: object
     ) -> Array:
         b = msg.shape[0]
-        padded = fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
-        )
+        padded = padded_batch(msg, tail)
         h = fnp.broadcast_to(iv, (b, _BLOCK))
         for i in range(padded.shape[-1] // _BLOCK):  # static, small
             h = _compress(h, padded[:, i * _BLOCK : (i + 1) * _BLOCK], rc_p, rc_q)

@@ -68,7 +68,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
-from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, roll, split, unpack_le
@@ -394,9 +394,7 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
         h0: Array, iv: Array, msg: Array, tail: Array, **_attrs: object
     ) -> Array:
         b, ll = msg.shape
-        padded = fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
-        )
+        padded = padded_batch(msg, tail)
         words = pack_le(
             padded.reshape(b, padded.shape[-1] // _BLOCK, _BLOCK)
         )  # [B, nblocks, 32]

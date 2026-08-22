@@ -199,6 +199,28 @@ def device_message(msg: ArrayLike) -> Array:
     return fnp.asarray(msg, dtype=fnp.uint8)
 
 
+def padded_batch(msg: Array, tail: Array) -> Array:
+    """`msg` with its padding appended: uint8 `[B, L]` + `[T]` -> `[B, L + T]`.
+
+    The tail is one row — it is a function of the message LENGTH, which every
+    row of a batch shares — so it broadcasts across the batch rather than being
+    materialized per row.
+
+    Shared by both extensions rather than living with either. Nine files built
+    this concatenate: the seven Merkle-Damgard families and both byte sponges.
+    It is not an MD step and not a sponge step; it is the last thing that
+    happens to a message before whichever schedule reads it, which is why it
+    sits next to `device_message` on the seam.
+
+    What each caller does NEXT is genuinely its own: SHA-2 and SM3 pack the
+    result big-endian, RIPEMD-160 and BLAKE2 little-endian, and the sponges read
+    lanes. Only the append is common, so only the append moved.
+    """
+    return fnp.concatenate(
+        [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
+    )
+
+
 def host_digest(
     hash_one: Callable[[ReadableBuffer], bytes], digest_size: int, msg: ArrayLike
 ) -> np.ndarray:

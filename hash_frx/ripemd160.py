@@ -50,7 +50,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, device_message
+from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, rotl, unpack_le
@@ -280,9 +280,7 @@ def ripemd160_bytes(msg: Array) -> Array:
 
     def decomposition(h0: Array, msg: Array, tail: Array, **_attrs: object) -> Array:
         b = msg.shape[0]
-        padded = fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (b, tail.shape[0]))], axis=-1
-        )
+        padded = padded_batch(msg, tail)
         words = pack_le(
             padded.reshape(b, padded.shape[-1] // _BLOCK, _BLOCK)
         )  # [B, nblocks, 16]

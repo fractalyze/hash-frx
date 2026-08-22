@@ -52,7 +52,13 @@ from frx import Array
 from frx.tree_util import register_dataclass
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
+from hash_frx.byte_hash import (
+    DeviceRow,
+    HostRow,
+    device_message,
+    host_digest,
+    padded_batch,
+)
 from hash_frx.extension.md import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, split, unpack_be
@@ -366,11 +372,7 @@ def _padded_words(msg: Array, tail: Array | None = None) -> Array:
     """
     if tail is None:
         tail = fnp.asarray(_padding_tail(msg.shape[-1]))
-    return block_to_words(
-        fnp.concatenate(
-            [msg, fnp.broadcast_to(tail, (msg.shape[0], tail.shape[0]))], axis=-1
-        )
-    )
+    return block_to_words(padded_batch(msg, tail))
 
 
 def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array:
