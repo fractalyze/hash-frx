@@ -34,6 +34,38 @@ py_test(
     ],
 )
 
+# The re-layering gate: lowered StableHLO, byte for byte, across a refactor that
+# is supposed to move code and nothing else. Ships as a library because the
+# steps that consume it live in each family's own test package.
+py_library(
+    name = "lowering_golden",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "lowering_golden.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("frx")],
+)
+
+# The gate's own gate. Every case is a wire-surface change the byte-exactness
+# suites cannot see — a renamed marker, a reordered operand, a bumped version, a
+# dropped attr, a lost composite — made deliberately against a marked region
+# built for the purpose, plus the negative case that a renamed entry function
+# must NOT fire.
+py_test(
+    name = "lowering_golden_test",
+    size = "small",
+    srcs = ["lowering_golden_test.py"],
+    deps = [
+        ":lowering_golden",
+        "//hash_frx:fusion",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 # Resolves every name in `_EXPORTS` against the module that defines it, so a
 # wrong module path fails here rather than in a consumer on the one name nobody
 # exercised. Touching an export imports its module, which materializes constant
