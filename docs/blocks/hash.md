@@ -32,16 +32,27 @@ several independent axes, and one config object holding two of them is not reuse
 sibling: `digest(uint8[B, L]) -> uint8[B, digest_size]`, byte-identical to the
 hash's standard. A consumer reads `digest_size` and calls `digest`.
 
-There is not yet a byte-side `Sponge` seam. The one was deliberately deferred —
-a surface generalized from a single implementation encodes that implementation's
-accidents as the family's — until a second byte sponge existed to shape it
-against. Ascon ([`ascon/`](../../hash_frx/ascon)) is that second sponge, so the
-condition is met and the generalization is the open work item, not the wait:
-[`keccak/sponge.py`](../../hash_frx/keccak/sponge.py) and
-[`ascon/ascon.py`](../../hash_frx/ascon/ascon.py) currently carry the same
-schedule (pad, pack, XOR into the rate, permute, squeeze the prefix) with the
-pad rule, the initial state and the state layout as the family-specific
-residue.
+The byte-side sponge schedule is shared, and it was deliberately not
+generalized until it could be shaped against two implementations — a surface
+generalized from a single one encodes that implementation's accidents as the
+family's. Ascon ([`ascon/`](../../hash_frx/ascon)) was the second, so
+[`extension/sponge.py`](../../hash_frx/extension/sponge.py) carries the schedule
+both run (absorb a block and permute; then read the rate and permute between
+reads, with none after the last) and
+[`extension/pad.py`](../../hash_frx/extension/pad.py) carries `SpongePad`. What
+stays family-specific is what actually differs: the state and its packing, the
+pad parameters, and the initial state.
+
+The **field** sponge ([`sponge.py`](../../hash_frx/sponge.py)) shares that
+vocabulary and not that schedule, and the reason is the loop form rather than
+the merge. Its block count is read at runtime through a `lax.while_loop` so a
+concrete and a symbolic `n` lower alike, where both byte sponges are
+Python-unrolled over static counts; it also has no batch axis, no padding, and a
+single truncating read instead of an iterated squeeze. A body parameterized on
+which loop it is would be two bodies behind one name, so the two schedules are
+siblings in `extension/sponge.py`. The same split holds one layer down: field
+trip counts are runtime operands where byte ones are static, so the XLA
+envelopes keep both forms too.
 
 The split is load-bearing because the two have no common surface below `digest`.
 A byte hash's internal construction differs per family — Merkle–Damgård chains a

@@ -6,22 +6,22 @@ FIPS 202 section 4 over `KeccakF1600`. One sponge parameterized by
 that table rather than three constructions (`byte_hashes.py`), and Keccak-256 is a
 fourth row rather than a code change.
 
-**Keccak-f[1600]-local, for now.** The permutation is bound here rather than
-taken as a `Permutation`, because when this was written nothing else in the
-package needed a byte-oriented sponge and the seam would have bought generality
-with no second consumer. Ascon is that second consumer now
-([`ascon/ascon.py`](../ascon/ascon.py) re-implements this schedule), so widening
-this to take a permutation is open work rather than a deferral; Keccak-p[1600,
-12] — TurboSHAKE, KangarooTwelve — would ride the same widening with only the
-round count to vary.
+**The schedule is shared; the permutation binding is not.** Absorb, squeeze and
+the pad rule live in [`extension/sponge.py`](../extension/sponge.py) and
+[`extension/pad.py`](../extension/pad.py), which Ascon runs too — it was the
+second byte sponge the seam waited for. What is still bound here is
+`KeccakF1600` itself: taking a `Permutation` instead is what Keccak-p[1600, 12]
+(TurboSHAKE, KangarooTwelve) would need, and it stays open work because it also
+means routing the marker's permutation through the region ABI rather than
+hard-coding the emitter, which is Phase 2's question rather than this layer's.
 
-**Not `hash_frx.sponge.Sponge`.** That one absorbs by *overwriting* the rate
-lanes, pads not at all, and squeezes by truncating the final state, and it takes
-1-D field elements where this takes a `[B, L]` byte batch. The absorb/pad/squeeze
-differences read like mode flags; the input domain does not, and it is the
-decisive one — a merged form would carry a byte-packing layer used by one row and
-a batch axis the other row lacks. `duplex_sponge.py` already made this call in
-writing for the same reason.
+**Not `hash_frx.sponge.Sponge`.** The two share the vocabulary and not the
+schedule. That one absorbs by *overwriting* the rate lanes, pads not at all,
+squeezes by truncating the final state, and takes 1-D field elements where this
+takes a `[B, L]` byte batch — but the decisive difference is the loop form: its
+block count is read at runtime through a `lax.while_loop` where every bound here
+is static, so the two are siblings in `extension/sponge.py` rather than one body
+with the loop as a parameter. `extension/sponge.py` carries the measurement.
 
 Every loop bound here is static. `ByteHash` fixes the message length `L`, and the
 output length is a parameter, so the block count and the squeeze count are known
@@ -187,10 +187,10 @@ class KeccakSponge:
     surface generalized from a single instance encodes that instance's
     accidents (the XOR absorb, the multi-rate padding split, the 4-byte lane
     packing) as if they were the family's, so the seam waited for a second
-    implementation to shape it against. Ascon is that implementation, and
-    `ascon.ascon_hash256_bytes` currently repeats this schedule rather than
-    sharing it — the residue that stays family-specific is the pad rule, the
-    initial state, and the state layout.
+    implementation to shape it against. Ascon is that implementation, and the
+    schedule it shaped is now `extension.sponge.absorb_squeeze`, which both
+    run. What stays family-specific is what actually differs: the lane state
+    and its 4-byte packing, the `SpongePad` parameters, and the initial state.
     """
 
     rate: int

@@ -9,7 +9,8 @@ words S0..S4, an 8-byte rate, and one permutation — Ascon-p[12], twelve rounds
 of constant addition (§3.2), a 5-bit S-box applied bitsliced across the five
 words (§3.3), and per-word linear diffusion of two rotated copies (§3.4) —
 used for initialization, absorbing and squeezing alike (§5.1). Its value in
-this package is the second byte sponge (#169's unblock condition) and the
+this package is the second byte sponge — the one the shared schedule in
+[`extension/sponge.py`](../extension/sponge.py) was shaped against — and the
 duplex-seam exercise #157 queued it for.
 
 **A state word is a (lo, hi) pair of uint32 halves, never a uint64** — the

@@ -17,7 +17,7 @@ are siblings here instead, which is where the shared three lines are cheap
 enough to spell twice and the dead axes cost nothing.
 
 **The rule is parameterized against all seven, not generalized from SHA-2.**
-That distinction is what #169 paid for by deferring the byte-sponge seam until a
+That distinction is what the byte-sponge seam paid for by waiting until a
 second byte sponge existed: a surface shaped from one implementation encodes
 that implementation's accidents as if they were the family's. Reading all seven
 first is what surfaced these, and only the first would have survived a

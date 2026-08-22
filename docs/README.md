@@ -34,6 +34,8 @@ tests share.
 | Question                                                                                   | Where                                               |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | One-shot sponge hash — padding-free or Merkle–Damgård, selected per call                    | [`sponge.py`](../hash_frx/sponge.py)                 |
+| The sponge schedules themselves — the byte one over static counts, the field one over a runtime count, and why they are two | [`extension/sponge.py`](../hash_frx/extension/sponge.py) |
+| How a message becomes whole blocks — `PadRule` for Merkle–Damgård, `SpongePad` for the sponges | [`extension/pad.py`](../hash_frx/extension/pad.py) |
 | Interleaved absorb/squeeze with add-mode absorb, for a classic Fiat-Shamir prover            | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
 | n-to-1 truncated-permutation compression, for a hash tree                                   | [`compression.py`](../hash_frx/compression.py)       |
 
@@ -60,7 +62,7 @@ tests share.
 | BLAKE2s — the 32-bit RFC 7693 sibling at native uint32: device and host rows on its own digest marker | [`blake2s.py`](../hash_frx/blake2s.py) |
 | SM3 — the GB/T 32905 ShangMi hash, SHA-256's structural cousin: device and host rows on its own digest marker | [`sm3.py`](../hash_frx/sm3.py) |
 | Grøstl-256 — the AES-round Merkle–Damgård `ByteHash` over GF(2^8), with a bitsliced S-box and a testonly host partner | [`grostl/`](../hash_frx/grostl) |
-| Ascon-Hash256 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` over uint32 lane halves, with a testonly host partner | [`ascon/`](../hash_frx/ascon) |
+| Ascon-Hash256 and Ascon-XOF128 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` rows over uint32 word halves, plus Ascon-p[12] as a `Permutation`, with a testonly host partner | [`ascon/`](../hash_frx/ascon) |
 | RIPEMD-160 — the little-endian Merkle–Damgård `ByteHash` (Bitcoin HASH160's second half), with a testonly host partner | [`ripemd160.py`](../hash_frx/ripemd160.py) |
 | SHA3-256, SHA3-512, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
 
@@ -95,9 +97,9 @@ constraint is what shapes the code — the authoring rules it forces are in
 [`reference/conventions.md`](reference/conventions.md#a-marked-body-is-authored-to-lower-not-to-read).
 
 **Name-routed** — spelled `hash_frx.<kind>.<name>` by fusible-unit kind:
-`hash_frx.perm.{poseidon, poseidon_sparse, poseidon2, keccak_f, vision}`,
+`hash_frx.perm.{poseidon, poseidon_sparse, poseidon2, keccak_f, vision, ascon_p}`,
 `hash_frx.compress.{blake3, blake3_parent}`, and
-`hash_frx.digest.{sha256, sha512, field_sponge, keccak_sponge, blake3, grostl256, ascon_hash256, ripemd160, blake2b, blake2s, sm3}`
+`hash_frx.digest.{sha256, sha512, field_sponge, keccak_sponge, blake3, grostl256, ascon_hash256, ascon_xof128, ripemd160, blake2b, blake2s, sm3}`
 (`hash_frx/markers.py` is the registry). Each goes to a
 dedicated emitter that owns its own operand ABI and, unlike the generic path,
 tolerates reductions and calls; the recognizers also still accept the
