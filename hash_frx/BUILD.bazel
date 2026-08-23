@@ -33,6 +33,7 @@ py_library(
         ":sponge",
         "//hash_frx/adapter:block_size",
         "//hash_frx/adapter:dual",
+        "//hash_frx/adapter:duplex",
         "//hash_frx/adapter:hkdf",
         "//hash_frx/adapter:hmac",
         "//hash_frx/adapter:mgf1",

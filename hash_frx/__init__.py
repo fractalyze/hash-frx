@@ -84,7 +84,11 @@ _EXPORTS: dict[str, str] = {
     # -- extensions and the constructions over them ------------------------
     "Compression": "hash_frx.compression",
     "CompressionParams": "hash_frx.compression",
+    "DEFAULT_CONVENTION": "hash_frx.duplex_sponge",
+    "DuplexConvention": "hash_frx.duplex_sponge",
     "DuplexSponge": "hash_frx.duplex_sponge",
+    "RateLanes": "hash_frx.duplex_sponge",
+    "SpillPermute": "hash_frx.duplex_sponge",
     "KeccakSponge": "hash_frx.keccak.sponge",
     "Sponge": "hash_frx.sponge",
     "SpongeParams": "hash_frx.sponge",
@@ -141,6 +145,8 @@ _EXPORTS: dict[str, str] = {
     "shake256_init": "hash_frx.keccak.streaming",
     "shake_init": "hash_frx.keccak.streaming",
     # -- adapters ----------------------------------------------------------
+    "ARK_0_3": "hash_frx.adapter.duplex",
+    "ARK_0_5": "hash_frx.adapter.duplex",
     "Dual": "hash_frx.adapter.dual",
     "Hmac": "hash_frx.adapter.hmac",
     "Mgf1": "hash_frx.adapter.mgf1",
@@ -183,6 +189,8 @@ def __dir__() -> list[str]:
 if TYPE_CHECKING:
     from hash_frx.adapter.block_size import block_size as block_size
     from hash_frx.adapter.dual import Dual as Dual
+    from hash_frx.adapter.duplex import ARK_0_3 as ARK_0_3
+    from hash_frx.adapter.duplex import ARK_0_5 as ARK_0_5
     from hash_frx.adapter.hkdf import hkdf_expand as hkdf_expand
     from hash_frx.adapter.hkdf import hkdf_extract as hkdf_extract
     from hash_frx.adapter.hmac import Hmac as Hmac
@@ -207,7 +215,11 @@ if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash as ByteHash
     from hash_frx.compression import Compression as Compression
     from hash_frx.compression import CompressionParams as CompressionParams
+    from hash_frx.duplex_sponge import DEFAULT_CONVENTION as DEFAULT_CONVENTION
+    from hash_frx.duplex_sponge import DuplexConvention as DuplexConvention
     from hash_frx.duplex_sponge import DuplexSponge as DuplexSponge
+    from hash_frx.duplex_sponge import RateLanes as RateLanes
+    from hash_frx.duplex_sponge import SpillPermute as SpillPermute
     from hash_frx.fusion import FUSED_REGION_MARKER as FUSED_REGION_MARKER
     from hash_frx.fusion import FusionPath as FusionPath
     from hash_frx.fusion import fused_region as fused_region

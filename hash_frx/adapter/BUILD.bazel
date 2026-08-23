@@ -123,3 +123,17 @@ py_library(
         requirement("frx"),
     ],
 )
+
+# Named duplex conventions — which released implementation a sponge reproduces.
+# The axes live on the construction (`//hash_frx:duplex_sponge`); only the
+# members that pair them with ark-sponge 0.3 / ark-crypto-primitives 0.5 are
+# here, because a convention is a claim about an external codebase.
+py_library(
+    name = "duplex",
+    srcs = [
+        "__init__.py",
+        "duplex.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["//hash_frx:duplex_sponge"],
+)
