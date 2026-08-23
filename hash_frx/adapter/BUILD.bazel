@@ -86,3 +86,40 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+# `Xof` — the type a variable-output family is held as, before a length is
+# chosen. Deps NOTHING, and the seam import is annotation-only for that reason:
+# the `ByteHash` in the alias is a forward reference, so a purely-typing consumer
+# reads the name without pulling frx (`block_size` above records what that
+# costs).
+py_library(
+    name = "xof",
+    srcs = [
+        "__init__.py",
+        "xof.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# `Dual` — the device/host pairing table, and the per-call selection over it.
+# Deps every row module that ships a host sibling, unavoidably: the table names
+# the row TYPES because it has to hand one back, which is also why it cannot
+# live on the seam every one of them imports (`dual.py` docstring).
+py_library(
+    name = "dual",
+    srcs = [
+        "__init__.py",
+        "dual.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:blake2s",
+        "//hash_frx:sha256",
+        "//hash_frx:sha512",
+        "//hash_frx:sm3",
+        "//hash_frx/blake2b",
+        "//hash_frx/blake3",
+        "//hash_frx/keccak",
+        requirement("frx"),
+    ],
+)
