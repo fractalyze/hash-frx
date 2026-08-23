@@ -25,6 +25,41 @@ is also what makes them testable without a device, which is the layer these rule
 actually live on — a case written over BLAKE3 alone passes with the schedule
 wrong and BLAKE3's own spelling right.
 
+**`compress_block` is a plain callback, and not a `CompressionFunction`.** The
+seam was proposed for this module and is declined here, with the three
+signatures that would have to fit it on the table. #228 added one, removed it
+again inside the same branch, and recorded why — it had no implementors and the
+shape had been chosen before the families were read. The honest candidate set is
+the three that take a per-block counter and flag at all, so those three were read
+before deciding:
+
+- BLAKE3 `compress(cv[B,8], block[B,16], counter[B,2], block_len[B], flags[B],
+  iv[8]) -> [B,16]`
+- BLAKE2b `_compress(state[B,16], iv_lo[8], iv_hi[8], w32[B,32], t: int, f: bool)
+  -> [B,16]`
+- BLAKE2s `_compress(state[B,8], iv_a[4], iv_b[4], w32[B,16], t: int, f: bool)
+  -> [B,8]`
+
+They disagree on every axis a seam would have to fix. BLAKE3's counter and flags
+are **device operands**, because chunks batch and the counter varies per row;
+BLAKE2's `t` and `f` are **host values** folded into the working vector as
+scalar-literal XORs, because the message length is static. That is the same
+concept on opposite sides of the host/device boundary, and a seam spanning it has
+to move one of them across: pushing BLAKE2's scalars onto the device adds
+operands to a marked region, which is an ABI change, and pulling BLAKE3's onto the
+host is not possible at all. The IV arrives as one array, two halves, or two
+4-lane rows respectively — pre-split by the caller in BLAKE2's case, deliberately.
+BLAKE3 carries a `block_len` operand for the partial trailing block (spec section
+2.4) that neither BLAKE2 has, and returns **double** its state width where both
+BLAKE2s return their own.
+
+A seam is worth its cost when it lets one consumer name several implementations.
+This one would name three families that cannot be called through it without
+changing one of their wire ABIs, in a package that already spells `Compression`
+for an unrelated construction (`hash_frx/compression.py`, truncated-permutation
+n-to-1). So the schedule takes the callback, and the seam lands if and when a
+second tree hash gives it an implementor to be designed against.
+
 **The three rules, and they are the whole module.**
 
 - A chunk is a *chain*: every block feeds the next, so there is no parallelism
