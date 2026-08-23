@@ -68,9 +68,9 @@ py_test(
 )
 
 py_test(
-    name = "byte_hashes_test",
+    name = "rows_test",
     size = "medium",
-    srcs = ["byte_hashes_test.py"],
+    srcs = ["rows_test.py"],
     deps = [
         ":emitter",
         ":vectors",

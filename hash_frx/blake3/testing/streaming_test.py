@@ -27,15 +27,13 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
-from hash_frx.blake3 import blake3
-from hash_frx.blake3.blake3 import (
+from hash_frx.blake3.modes import BLOCK_LEN, CHUNK_LEN, DIGEST_LEN
+from hash_frx.blake3.rows import BLAKE3_MARKER, HostBlake3
+from hash_frx.blake3.streaming import (
     BLAKE3_COMPRESS_MARKER,
-    BLOCK_LEN,
-    CHUNK_LEN,
-    DIGEST_LEN,
+    Blake3Stream,
+    blake3_stream_init,
 )
-from hash_frx.blake3.byte_hashes import HostBlake3
-from hash_frx.blake3.streaming import Blake3Stream, blake3_stream_init
 
 
 def _u8(data: bytes) -> np.ndarray:
@@ -181,7 +179,7 @@ class PytreeThreadingTest(absltest.TestCase):
         # `assertIn` passes with one of them marked and the rest inline — which
         # is exactly the state this replaced. Three hops finish a node (the
         # absorb path's block, the subtree merge, finalize's stack fold); the
-        # root read is a batch of output blocks and stays with `blake3.py`.
+        # root read is a batch of output blocks and stays with `modes.py`.
         block = frx.device_put(_u8(b"x" * BLOCK_LEN))
 
         def absorb_then_finalize(part: frx.Array) -> frx.Array:
@@ -191,7 +189,7 @@ class PytreeThreadingTest(absltest.TestCase):
         self.assertEqual(text.count(f'"{BLAKE3_COMPRESS_MARKER}"'), 3)
         # A whole-hash marker here would mean the resumable path fell back to
         # the one region that cannot express it.
-        self.assertNotIn(f'"{blake3.BLAKE3_MARKER}"', text)
+        self.assertNotIn(f'"{BLAKE3_MARKER}"', text)
 
 
 class AbsorbValidationTest(absltest.TestCase):

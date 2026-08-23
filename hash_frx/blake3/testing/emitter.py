@@ -16,7 +16,7 @@ points. Each site states what it gives up.
 
 Both legs now have one, so on `cpu` and `gpu` nothing is capped and the tables
 read the shipped entry points. The condition is read off the production switch
-in `byte_hashes` — the same pin+backend conjunction that derives the rows'
+in `rows` — the same pin+backend conjunction that derives the rows'
 `fusion_path` — so the caps and the seam cannot disagree about which legs pay
 the cliff, and a leg gaining an emitter lifts every cap when the production
 tuple moves. A backend absent there — Metal today — still inlines the marker
@@ -25,7 +25,7 @@ and still pays it.
 
 from __future__ import annotations
 
-from hash_frx.blake3.byte_hashes import _routes_to_dedicated_emitter
+from hash_frx.blake3.rows import _routes_to_dedicated_emitter
 
 # Measured on the CPU leg when the emitters landed (fractalyze/xla#499 gpu,
 # #507 cpu): every entry point — `digest` at one block, one chunk and three

@@ -91,9 +91,9 @@ _EXPORTS: dict[str, str] = {
     "AsconXof128": "hash_frx.ascon.ascon",
     "Blake2b": "hash_frx.blake2b.blake2b",
     "Blake2s": "hash_frx.blake2s",
-    "Blake3": "hash_frx.blake3.byte_hashes",
-    "Blake3DeriveKey": "hash_frx.blake3.byte_hashes",
-    "Blake3Keyed": "hash_frx.blake3.byte_hashes",
+    "Blake3": "hash_frx.blake3.rows",
+    "Blake3DeriveKey": "hash_frx.blake3.rows",
+    "Blake3Keyed": "hash_frx.blake3.rows",
     "Grostl256": "hash_frx.grostl.grostl",
     "Keccak256": "hash_frx.keccak.byte_hashes",
     "Ripemd160": "hash_frx.ripemd160",
@@ -109,9 +109,9 @@ _EXPORTS: dict[str, str] = {
     # -- rows: host (never traceable, return `np.ndarray`) -----------------
     "HostBlake2b": "hash_frx.blake2b.byte_hashes",
     "HostBlake2s": "hash_frx.blake2s",
-    "HostBlake3": "hash_frx.blake3.byte_hashes",
-    "HostBlake3DeriveKey": "hash_frx.blake3.byte_hashes",
-    "HostBlake3Keyed": "hash_frx.blake3.byte_hashes",
+    "HostBlake3": "hash_frx.blake3.rows",
+    "HostBlake3DeriveKey": "hash_frx.blake3.rows",
+    "HostBlake3Keyed": "hash_frx.blake3.rows",
     "HostSha256": "hash_frx.sha256",
     "HostSha384": "hash_frx.sha512",
     "HostSha3_256": "hash_frx.keccak.byte_hashes",
@@ -180,12 +180,12 @@ if TYPE_CHECKING:
     from hash_frx.blake2b.byte_hashes import HostBlake2b as HostBlake2b
     from hash_frx.blake2s import Blake2s as Blake2s
     from hash_frx.blake2s import HostBlake2s as HostBlake2s
-    from hash_frx.blake3.byte_hashes import Blake3 as Blake3
-    from hash_frx.blake3.byte_hashes import Blake3DeriveKey as Blake3DeriveKey
-    from hash_frx.blake3.byte_hashes import Blake3Keyed as Blake3Keyed
-    from hash_frx.blake3.byte_hashes import HostBlake3 as HostBlake3
-    from hash_frx.blake3.byte_hashes import HostBlake3DeriveKey as HostBlake3DeriveKey
-    from hash_frx.blake3.byte_hashes import HostBlake3Keyed as HostBlake3Keyed
+    from hash_frx.blake3.rows import Blake3 as Blake3
+    from hash_frx.blake3.rows import Blake3DeriveKey as Blake3DeriveKey
+    from hash_frx.blake3.rows import Blake3Keyed as Blake3Keyed
+    from hash_frx.blake3.rows import HostBlake3 as HostBlake3
+    from hash_frx.blake3.rows import HostBlake3DeriveKey as HostBlake3DeriveKey
+    from hash_frx.blake3.rows import HostBlake3Keyed as HostBlake3Keyed
     from hash_frx.blake3.streaming import Blake3Stream as Blake3Stream
     from hash_frx.blake3.streaming import blake3_stream_init as blake3_stream_init
     from hash_frx.byte_hash import ByteHash as ByteHash

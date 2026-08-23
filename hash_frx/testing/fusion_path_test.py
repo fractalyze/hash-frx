@@ -32,8 +32,8 @@ from hash_frx.ascon.ascon import AsconHash256, AsconXof128
 from hash_frx.blake2b import blake2b as blake2b_mod
 from hash_frx.blake2b.blake2b import Blake2b
 from hash_frx.blake2s import Blake2s
-from hash_frx.blake3 import byte_hashes as blake3_rows
-from hash_frx.blake3.byte_hashes import Blake3
+from hash_frx.blake3 import rows as blake3_rows
+from hash_frx.blake3.rows import Blake3
 from hash_frx.compression import Compression, CompressionParams
 from hash_frx.duplex_sponge import DuplexSponge
 from hash_frx.fusion import FusionPath
