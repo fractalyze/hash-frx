@@ -33,6 +33,12 @@ beyond the call itself. The rows that satisfy it are plain classes that predate
 the name, so a Protocol would be a base to inherit or a registration to
 remember, and would check nothing a structural `Callable` does not already.
 
+It sits under `adapter/` for dep-freeness rather than because it is an adapter:
+it builds nothing over a finished hash, it is a statement about the seam. The
+seam's own module imports `frx` at run time, so hosting the alias there would
+charge a typing-only consumer the whole backend — which is the one thing this
+module is shaped to avoid.
+
 `ByteHash` is a forward reference and the import is `TYPE_CHECKING`-only, so
 reading this type costs no backend — the same reason
 [`block_size.py`](block_size.py) keeps its own table dep-free, and it matters

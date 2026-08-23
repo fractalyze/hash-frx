@@ -31,28 +31,28 @@ from hash_frx.adapter.dual import _HOST_SIBLINGS, Dual
 from hash_frx.blake3.rows import Blake3Keyed, HostBlake3Keyed
 from hash_frx.keccak.byte_hashes import HostShake128, Shake128
 from hash_frx.sha256 import HostSha256, Sha256
-from hash_frx.testing.rows import ALL_ROWS
+from hash_frx.testing.rows import DEVICE_ROWS, HOST_ROWS
 
 _MSG = np.arange(3 * 40, dtype=np.uint8).reshape(3, 40)
 
+# Shipped rows by class NAME, which is what the `Host` prefix is a statement
+# about. The device/host SPLIT is not restated by that prefix: `rows.py` derives
+# it from `DeviceRow`/`HostRow` and its own comment declines to restate it, so
+# reading its two tuples keeps this test checking the law rather than the
+# labelling — and a row whose name broke the convention would land on the right
+# side here and fail the pairing assertions instead of quietly leaving the
+# universe.
+_DEVICE_TYPES = {t.__name__: t for t in (type(c.make()) for c in DEVICE_ROWS)}
+_HOST_TYPES = {t.__name__: t for t in (type(c.make()) for c in HOST_ROWS)}
 
-def _index_shipped_rows() -> dict[str, type]:
-    """Every shipped row by class NAME — which is what the `Host` prefix is a
-    statement about — rather than by `RowCase.name`, a test label free to
-    diverge from it."""
-    index: dict[str, type] = {}
-    for case in ALL_ROWS:
-        row_type = type(case.make())
-        index[row_type.__name__] = row_type
-    return index
-
-
-_SHIPPED = _index_shipped_rows()
-_DEVICE_NAMES = sorted(n for n in _SHIPPED if not n.startswith("Host"))
 # Device rows whose family ships no host sibling. Derived rather than listed, so
 # a host row that ships later moves the family into `PairingTableTest` instead
 # of leaving a stale expectation behind.
-_UNPAIRED = [(n, _SHIPPED[n]) for n in _DEVICE_NAMES if f"Host{n}" not in _SHIPPED]
+_UNPAIRED = [
+    (name, row)
+    for name, row in _DEVICE_TYPES.items()
+    if f"Host{name}" not in _HOST_TYPES
+]
 
 
 class PairingTableTest(absltest.TestCase):
@@ -65,8 +65,8 @@ class PairingTableTest(absltest.TestCase):
         # wrong, and wrong at their call site rather than here.
         missing = [
             name
-            for name in _DEVICE_NAMES
-            if f"Host{name}" in _SHIPPED and _SHIPPED[name] not in _HOST_SIBLINGS
+            for name, row in _DEVICE_TYPES.items()
+            if f"Host{name}" in _HOST_TYPES and row not in _HOST_SIBLINGS
         ]
         self.assertEqual(
             missing,
@@ -79,46 +79,35 @@ class PairingTableTest(absltest.TestCase):
         # The other direction: an entry naming a row that no longer ships, or
         # pairing two rows that are not the same family. A rename catches here
         # rather than becoming a `Dual` that hands back a hash nobody asked for.
-        by_type = {t: n for n, t in _SHIPPED.items()}
+        #
+        # The key must be a shipped DEVICE row and the value a shipped HOST one,
+        # read off the class rather than the prefix. That is also what pins the
+        # pair against being spelled the wrong way round — which would select
+        # backwards in both directions, while every digest it produced stayed
+        # right bytes.
         for device, host in _HOST_SIBLINGS.items():
             with self.subTest(device=device.__name__):
-                self.assertIn(device, by_type, "device row no longer ships")
-                self.assertIn(host, by_type, "host row no longer ships")
-                self.assertEqual(by_type[host], f"Host{by_type[device]}")
-
-    def test_no_entry_is_keyed_by_a_host_row(self) -> None:
-        # A pair spelled the wrong way round selects backwards in both
-        # directions, and every digest it produced would still be right bytes.
-        for device in _HOST_SIBLINGS:
-            with self.subTest(device=device.__name__):
-                self.assertFalse(device.__name__.startswith("Host"))
+                self.assertIs(_DEVICE_TYPES.get(device.__name__), device)
+                self.assertIs(_HOST_TYPES.get(host.__name__), host)
+                self.assertEqual(host.__name__, f"Host{device.__name__}")
 
 
 class DeliberateAbsencesTest(parameterized.TestCase):
     """A family with no host row must decline, and say why."""
 
     @parameterized.named_parameters(*_UNPAIRED)
-    def test_an_unpaired_family_declines(self, device: type) -> None:
-        with self.assertRaises(LookupError):
+    def test_an_unpaired_family_declines_and_says_why(self, device: type) -> None:
+        # Both properties in one method, as `block_size_test` does for the same
+        # table shape. The file name because a caller hitting this needs to know
+        # it is a registry gap rather than a bug in their own code; the reason
+        # because the absences carry an argument — no `hashlib` Grøstl or Ascon,
+        # no pre-FIPS Keccak, RIPEMD-160 behind OpenSSL 3's legacy provider —
+        # which is pinned rather than left to a comment on the table.
+        with self.assertRaises(LookupError) as caught:
             Dual(device)
-
-    @parameterized.named_parameters(*_UNPAIRED)
-    def test_the_message_names_the_file_to_edit(self, device: type) -> None:
-        # A caller hitting this needs to know it is a registry gap rather than a
-        # bug in their own code — `block_size_test` pins the same property for
-        # the same reason.
-        with self.assertRaisesRegex(LookupError, r"adapter/dual\.py"):
-            Dual(device)
-
-    @parameterized.named_parameters(*_UNPAIRED)
-    def test_the_message_explains_why_there_is_nothing_to_pair(
-        self, device: type
-    ) -> None:
-        # The absences carry an argument — no `hashlib` Grostl or Ascon, no
-        # pre-FIPS Keccak, RIPEMD-160 behind OpenSSL 3's legacy provider — so it
-        # is pinned rather than left to a comment on the table.
-        with self.assertRaisesRegex(LookupError, "native library"):
-            Dual(device)
+        message = str(caught.exception)
+        self.assertIn("adapter/dual.py", message)
+        self.assertIn("native library", message)
 
 
 class SelectionTest(absltest.TestCase):

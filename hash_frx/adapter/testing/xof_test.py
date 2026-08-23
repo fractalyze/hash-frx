@@ -37,6 +37,7 @@ from hash_frx.keccak.byte_hashes import (
     Shake256,
 )
 from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.testing.rows import ALL_ROWS
 
 # `_LENGTH` is inside every family's range — BLAKE2s caps at 32 and BLAKE2b at
 # 64 — so a failure is the type's claim being wrong rather than the length being
@@ -65,6 +66,29 @@ class VariableOutputFamiliesTest(parameterized.TestCase):
     @parameterized.named_parameters(*_FAMILIES)
     def test_the_family_is_an_xof(self, family: Xof) -> None:
         self.assertEqual(family(_LENGTH).digest_size, _LENGTH)
+
+    def test_the_list_covers_every_row_that_answers_to_a_length(self) -> None:
+        # The completeness half, without which "every variable-output family"
+        # is a claim about whichever rows happened to ship when this was
+        # written — the drift `testing/rows.py` exists to end. Membership is
+        # decided by TRYING the row rather than by inspecting its signature,
+        # because answering to a length is exactly what `Xof` asserts and a row
+        # that took one and ignored it would pass an introspective check.
+        named = {name for name, _ in _FAMILIES}
+        missing = []
+        for case in ALL_ROWS:
+            row_type = type(case.make())
+            try:
+                fits = row_type(_LENGTH).digest_size == _LENGTH
+            except (TypeError, ValueError):
+                continue
+            if fits and row_type.__name__ not in named:
+                missing.append(row_type.__name__)
+        self.assertEqual(
+            missing,
+            [],
+            f"these rows satisfy `Xof` but are not covered here: {missing}",
+        )
 
 
 class ReachedThroughAPartialTest(absltest.TestCase):

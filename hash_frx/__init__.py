@@ -147,6 +147,12 @@ _EXPORTS: dict[str, str] = {
     # -- adapters ----------------------------------------------------------
     "ARK_0_3": "hash_frx.adapter.duplex",
     "ARK_0_5": "hash_frx.adapter.duplex",
+    # `Dual` names every paired row type, so importing it imports eight row
+    # modules and starts a backend: measured cold, 570 ms and 886 modules
+    # against 5.5 ms and 65 for `Xof` and `block_size` beside it. That buys a
+    # rename failing at import rather than at a consumer's call site
+    # (`adapter/dual.py`); it is called out here because nothing about this
+    # group hints at the spread.
     "Dual": "hash_frx.adapter.dual",
     "Hmac": "hash_frx.adapter.hmac",
     "Mgf1": "hash_frx.adapter.mgf1",
