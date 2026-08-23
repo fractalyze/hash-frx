@@ -16,11 +16,15 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
+from frx import Array
 
 from hash_frx import sha256
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
-from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.marker_recognized import (
+    assert_marker_recognized,
+    emitted_composites,
+)
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block
 # cutoff), 63/64 (block edge), 119/120 (multi-block).
@@ -149,11 +153,11 @@ class Sha256TracedTest(parameterized.TestCase):
 
     def test_traced_digest_still_emits_one_marker(self) -> None:
         # The marker is what makes a digest one device unit; a traced caller must
-        # not lose it by taking a different path into the compression.
+        # not lose it by taking a different path into the compression. WHICH of
+        # the three it is belongs to the routing test; this one holds that a
+        # traced caller emits exactly one, whichever the pin selects.
         msg = np.zeros((1, 64), dtype=np.uint8)
-        txt = frx.jit(sha256.digest).lower(msg).as_text()
-        self.assertIn(sha256.SHA256_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
+        self.assertEqual(len(emitted_composites(sha256.digest, msg)), 1)
 
 
 class Sha256ByteHashTest(parameterized.TestCase):
@@ -263,10 +267,13 @@ class Sha256BytesMarkerTest(parameterized.TestCase):
         assert_marker_recognized(self, "sha256_bytes", sha256.sha256_bytes, msgs)
 
     def test_emits_one_composite_with_the_bytes_name(self) -> None:
-        msg = np.zeros((2, 100), dtype=np.uint8)
-        txt = frx.jit(sha256.sha256_bytes).lower(fnp.asarray(msg)).as_text()
-        self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
+        # Whole-name match, and the list length is the composite count:
+        # this marker is a prefix of the runtime-length one.
+        msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
+        self.assertEqual(
+            emitted_composites(sha256.sha256_bytes, msg),
+            [sha256.SHA256_BYTES_MARKER],
+        )
 
     def test_jit_matches_eager(self) -> None:
         msg = np.random.default_rng(9).integers(0, 256, (3, 120), dtype=np.uint8)
@@ -280,13 +287,196 @@ class Sha256BytesMarkerTest(parameterized.TestCase):
         # `_BYTES_EMITTER_AVAILABLE` false the wire carries the blocks marker
         # only. Flipping the flag is what moves the wire — this is the test
         # that makes that flip deliberate.
+        #
+        # Matched whole (`emitted_composites`): this marker's name is a PREFIX
+        # of the runtime-length one, so a substring assertion here is satisfied
+        # by the wire carrying that one instead, which is exactly what happens
+        # wherever it routes.
         msg = np.zeros((1, 64), dtype=np.uint8)
-        txt = frx.jit(sha256.digest).lower(msg).as_text()
-        if sha256._routes_to_bytes_marker():
-            self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
+        names = emitted_composites(sha256.digest, msg)
+        if sha256._routes_to_bytes_len_marker():
+            # The runtime-length form wins where it routes; this marker is then
+            # the second choice and must NOT be on the wire.
+            self.assertEqual(names, [sha256.SHA256_BYTES_LEN_MARKER])
+        elif sha256._routes_to_bytes_marker():
+            self.assertEqual(names, [sha256.SHA256_BYTES_MARKER])
         else:
-            self.assertIn(sha256.SHA256_MARKER, txt)
-            self.assertNotIn(sha256.SHA256_BYTES_MARKER, txt)
+            self.assertEqual(names, [sha256.SHA256_MARKER])
+
+
+class Sha256BytesLenMarkerTest(parameterized.TestCase):
+    """The runtime-length marker (`sha256_bytes_len`), where the message length
+    is an operand rather than part of the message shape.
+
+    The buffer's extent is a CAPACITY here: the emitter loops on the length
+    operand and never reads past it, so every case below fills the bytes from
+    `length` to the capacity with 0xFF. A kernel that hashed the whole buffer, or
+    sized its block count from the extent, cannot accidentally agree with
+    `hashlib` under that fill — which is what makes these tests about the length
+    operand rather than about SHA-256.
+    """
+
+    @staticmethod
+    def _buffer(msg: np.ndarray, capacity: int) -> Array:
+        """`msg` in a `capacity`-wide row whose spare bytes are 0xFF."""
+        buf = np.full((msg.shape[0], capacity), 0xFF, dtype=np.uint8)
+        buf[:, : msg.shape[-1]] = msg
+        return fnp.asarray(buf)
+
+    @parameterized.product(length=_LENGTHS, slack=(0, 256))
+    def test_matches_hashlib_at_any_capacity(self, length: int, slack: int) -> None:
+        # slack 0 isolates the synthesized padding at an exact fit (`max(., 1)`
+        # is the recognizer's floor, which the empty message would sit under);
+        # slack 256 is the point of the form — a message digests as itself in a
+        # buffer far wider than it, so the padded length is what `length`
+        # implies rather than what the extent does.
+        msg = (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A))[None, :]
+        got = sha256.sha256_bytes_len(
+            self._buffer(msg, max(length + slack, 1)), np.int32(length)
+        )
+        self.assertEqual(
+            bytes(np.asarray(got)[0]), hashlib.sha256(bytes(msg[0])).digest()
+        )
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_matches_the_bytes_marker(self, length: int) -> None:
+        # Three wire forms of one digest: this must byte-equal the static-length
+        # markers, and so, transitively, every consumer's goldens.
+        msgs = np.random.default_rng(length).integers(
+            0, 256, size=(4, length), dtype=np.uint8
+        )
+        np.testing.assert_array_equal(
+            np.asarray(
+                sha256.sha256_bytes_len(self._buffer(msgs, 512), np.int32(length))
+            ),
+            np.asarray(
+                sha256.sha256_merkle_damgard(
+                    sha256.INITIAL_STATE, sha256._padded_words(fnp.asarray(msgs))
+                )
+            ),
+        )
+
+    def test_two_lengths_in_one_program_stay_distinct(self) -> None:
+        # The kernel reuse key must fold the CAPACITY and not the length: two
+        # lengths sharing one kernel is the entire point of the form, and baking
+        # a length instead returns one digest as the other. Silent either way —
+        # right shape, wrong bytes — and it is the failure a wheel shipped once
+        # for the bytes marker (fractalyze/xla#562), so the floor rests on it.
+        short, long = b"abc", b"hello world, a longer one"
+
+        def two(a: Array, la: Array, b: Array, lb: Array) -> tuple[Array, Array]:
+            return sha256.sha256_bytes_len(a, la), sha256.sha256_bytes_len(b, lb)
+
+        got_a, got_b = frx.jit(two)(
+            self._buffer(np.frombuffer(short, dtype=np.uint8)[None, :], 128),
+            np.int32(len(short)),
+            self._buffer(np.frombuffer(long, dtype=np.uint8)[None, :], 128),
+            np.int32(len(long)),
+        )
+        self.assertEqual(bytes(np.asarray(got_a)[0]), hashlib.sha256(short).digest())
+        self.assertEqual(bytes(np.asarray(got_b)[0]), hashlib.sha256(long).digest())
+
+    def test_recognized_where_routed(self) -> None:
+        # The fusion contract: where `digest` routes to the marker, the pinned
+        # plugin must claim it as one custom fusion. An unrecognized name inlines
+        # its decomposition — right bytes, no kernel — which no value-level test
+        # above can tell apart.
+        if not sha256._routes_to_bytes_len_marker():
+            self.skipTest("no runtime-length recognizer on this backend")
+        assert_marker_recognized(
+            self,
+            "sha256_bytes_len",
+            sha256.sha256_bytes_len,
+            fnp.asarray(np.zeros((2, 128), dtype=np.uint8)),
+            np.int32(100),
+        )
+
+    def test_emits_one_composite_with_the_len_name(self) -> None:
+        self.assertEqual(
+            emitted_composites(
+                sha256.sha256_bytes_len,
+                fnp.asarray(np.zeros((2, 128), dtype=np.uint8)),
+                np.int32(100),
+            ),
+            [sha256.SHA256_BYTES_LEN_MARKER],
+        )
+
+    def test_the_length_is_an_operand_not_a_baked_constant(self) -> None:
+        # What the whole form rests on: `len` reaching the marker as an operand.
+        # Baked in, every length would be a fresh module again — and the module
+        # would still compute the right bytes, so only the signature shows it.
+        txt = (
+            frx.jit(sha256.sha256_bytes_len)
+            .lower(fnp.asarray(np.zeros((1, 128), dtype=np.uint8)), np.int32(100))
+            .as_text()
+        )
+        signature = next(
+            line for line in txt.splitlines() if "func.func public @main" in line
+        )
+        self.assertIn("tensor<i32>", signature)
+
+    def test_rejects_a_zero_width_buffer(self) -> None:
+        # The recognizer declines `LMAX < 1`, which would hand the work to a
+        # decomposition that indexes the message through a clamp with no byte to
+        # clamp to. An empty message is `length = 0` in a non-empty buffer.
+        with self.assertRaisesRegex(ValueError, "LMAX >= 1"):
+            sha256.sha256_bytes_len(
+                fnp.asarray(np.zeros((1, 0), dtype=np.uint8)), np.int32(0)
+            )
+
+    def test_the_form_is_cpu_only_until_a_gpu_emitter_exists(self) -> None:
+        # Its own backend tuple, narrower than the family's `_EMITTER_BACKENDS`:
+        # only the CPU emitter carries this form. Emitting it at a backend that
+        # declines the name would cost the caller both the kernel and the
+        # compile saving, so widening this tuple is what a GPU emitter landing
+        # would change — and the GPU shape makes that a separate decision rather
+        # than a port of the CPU answer.
+        self.assertEqual(sha256._LEN_EMITTER_BACKENDS, ("cpu",))
+
+
+class Sha256CapacityTest(parameterized.TestCase):
+    """`_capacity` — the buffer width `digest` hashes out of, which is what its
+    compilation is keyed on."""
+
+    @parameterized.parameters(
+        (0, 64), (1, 64), (64, 64), (65, 128), (100, 128), (128, 128), (1000, 1024)
+    )
+    def test_a_host_message_widens_to_the_next_power_of_two(
+        self, length: int, want: int
+    ) -> None:
+        # Floored at one block, so short messages share a width rather than each
+        # compiling their own.
+        self.assertEqual(sha256._capacity(np.zeros((1, length), np.uint8)), want)
+
+    @parameterized.parameters(1, 65, 100, 1000)
+    def test_a_device_message_keeps_its_own_extent(self, length: int) -> None:
+        # Widening one would be a dispatched device op that buys the caller
+        # nothing, so only the marker changes for a batch already materialized.
+        msg = fnp.asarray(np.zeros((1, length), dtype=np.uint8))
+        self.assertEqual(sha256._capacity(msg), length)
+
+    def test_an_empty_device_message_still_clears_the_recognizer_floor(self) -> None:
+        # `LMAX >= 1`: the emitter's clamped message-side index needs a byte to
+        # land on even when no byte is live.
+        msg = fnp.asarray(np.zeros((1, 0), dtype=np.uint8))
+        self.assertEqual(sha256._capacity(msg), 1)
+
+    def test_a_capacity_below_the_message_is_rejected(self) -> None:
+        # A capacity is a buffer the message must fit in; a smaller one would
+        # truncate it into a digest of the wrong bytes rather than fail.
+        with self.assertRaisesRegex(ValueError, "must be >= the message length"):
+            sha256._at_capacity(np.zeros((1, 64), dtype=np.uint8), 32)
+
+    def test_digest_compiles_once_per_width_not_once_per_length(self) -> None:
+        # The property the form exists for. Counting compilations directly is
+        # backend-plumbing, so this counts what drives them: the distinct
+        # (capacity, length-aval) pairs `digest` hands to the marker.
+        lengths = range(20, 400, 7)
+        widths = {
+            sha256._capacity(np.zeros((1, length), np.uint8)) for length in lengths
+        }
+        self.assertLess(len(widths), len(list(lengths)) // 8)
+        self.assertEqual(widths, {64, 128, 256, 512})
 
 
 class EmptyBatchTest(absltest.TestCase):

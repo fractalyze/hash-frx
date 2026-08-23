@@ -228,9 +228,10 @@ Both are load-bearing, and the set they carve out is the whole reason the
 because both hold, and Keccak-256, RIPEMD-160, Grøstl-256 and Ascon-Hash256
 have no shipped host row because the first fails.
 
-Condition 1 reads as a claim about kernel speed, and that is its smaller half.
-`digest` takes `uint8[B, L]`, so the message length is part of the *input
-shape*, and the block count and the pad are static by construction —
+Condition 1 reads as a claim about kernel speed, and that is its smaller half
+wherever the message length is part of the *input shape*. `digest` takes
+`uint8[B, L]`, so for most families it is, and the block count and the pad are
+static by construction —
 [`keccak/sponge.py`](../../hash_frx/keccak/sponge.py) states the trade in one
 line ("every loop bound here is static … that is what lets `digest` take a
 tracer"), and `_padding_tail` builds the pad as a host constant *from* the
@@ -254,9 +255,20 @@ them by an order of magnitude, which is why they are stated as ratios here and
 measured fresh when they matter.
 
 Naming the causes is what keeps the condition honest, because it also says what
-would retire it: a marker ABI taking the length as an operand, with the block
-loop inside the emitter, compiles once per buffer size rather than once per
-length and leaves a host row resting on dispatch alone.
+retires it: a marker ABI taking the length as an operand, with the block loop
+inside the emitter, compiles once per buffer width rather than once per length.
+SHA-256 has one on the CPU backend — its runtime-length digest marker
+([`sha256.py`](../../hash_frx/sha256.py)) — so a message widened to a shared
+buffer width is hashed at its own length by a kernel every other length reuses.
+Where that holds, condition 1's larger half is gone and the host row rests on
+dispatch alone, which is a far weaker justification than the paragraphs above
+describe.
+
+Everywhere else the compile-per-length term stands as stated: every other
+family, and SHA-256 on any backend whose plugin carries no emitter for that
+ABI. So condition 1 is a question about a (hash, backend) pair rather than about
+the package, and a host row retired on the strength of one cell would be a
+regression in the others.
 
 `Permutation` has **no host category at all**, and that is a different
 statement from a byte hash having no shipped host row. A permutation fails both

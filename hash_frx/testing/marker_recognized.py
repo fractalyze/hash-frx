@@ -18,10 +18,37 @@ drops a name this repo still emits.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
 import frx
+
+_COMPOSITE_NAME = re.compile(r'stablehlo\.composite "([^"]+)"')
+
+
+def emitted_composites(fn: Callable[..., Any], *args: Any) -> list[str]:
+    """The composite names `fn` lowers to, exactly.
+
+    A marker name must be matched whole. This package's names nest by
+    construction — `hash_frx.digest.sha256` is a prefix of
+    `…sha256_bytes`, which is a prefix of `…sha256_bytes_len`, and the same
+    holds for `poseidon`/`poseidon_sparse`/`poseidon2` and
+    `blake3`/`blake3_parent` — so `assertIn(SOME_MARKER, lowered_text)` is
+    satisfied by any LONGER sibling and quietly stops testing what it says.
+    That is not hypothetical: a routing change that moves the wire from one
+    marker to a longer sibling leaves every such assertion green.
+
+    `assert_marker_recognized` already matches its routing key whole for this
+    reason; this is the same rule for the emission side, where the question is
+    which name the wire carries rather than which emitter claimed it.
+
+    Emission order, duplicates KEPT: the list length is then the composite count,
+    so one assertion pins both which marker is on the wire and how many there
+    are. Deduplicating would answer only the first and leave every caller
+    lowering the module a second time to count `stablehlo.composite` itself.
+    """
+    return _COMPOSITE_NAME.findall(frx.jit(fn).lower(*args).as_text())
 
 
 def _custom_fusion_lines(fn: Callable[..., Any], *args: Any) -> list[str]:

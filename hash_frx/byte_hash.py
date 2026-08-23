@@ -199,6 +199,19 @@ def device_message(msg: ArrayLike) -> Array:
     return fnp.asarray(msg, dtype=fnp.uint8)
 
 
+def message_length(msg: ArrayLike) -> int:
+    """The `L` of a uint8 `[B, L]` batch, read without converting the message.
+
+    The rank check runs first (`_require_batch_rank`, which carries the
+    reasoning), so a wrong rank surfaces here rather than as a confusing unpack.
+    `np.shape` reads `.shape` where there is one — an array, a tracer — so this
+    holds under `jit` too, and a caller that needs the length *before* deciding
+    what to convert the message into does not have to reach for `.shape` itself.
+    """
+    _require_batch_rank(msg)
+    return int(np.shape(msg)[-1])
+
+
 def padded_batch(msg: Array, tail: Array) -> Array:
     """`msg` with its padding appended: uint8 `[B, L]` + `[T]` -> `[B, L + T]`.
 

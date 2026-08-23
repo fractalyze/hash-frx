@@ -89,6 +89,22 @@ class PadRule:
                 f"a trailer needs at least 8 reserved bytes, got {self.reserve}"
             )
 
+    def nblocks(self, length: int) -> int:
+        """How many blocks a `length`-byte message pads to, under a trailer.
+
+        Plain `//` and `+`, so it holds over a TRACED length as readily as a host
+        one — which is what lets a runtime-length path size its block loop from
+        the rule instead of restating `block_size` and `reserve`. Restating them
+        is what let a family's batch digest and its streaming finalize disagree
+        about where the length field goes (`extension/md.py`), and `reserve`
+        is exactly the field that varies: SHA-512 claims 16 bytes where the rest
+        claim 8.
+
+        `Trailer.NONE` has no length field to make room for, so its block count
+        is not this — `tail` handles that family separately.
+        """
+        return (length + self.reserve) // self.block_size + 1
+
     # Memoized because all seven families memoized their own copy: a digest
     # rebuilds the tail on every trace otherwise, and the rule is a frozen
     # dataclass over four hashable fields, so keying on `self` is sound.
@@ -113,7 +129,7 @@ class PadRule:
                 return _frozen(np.zeros(self.block_size, dtype=np.uint8))
             return _frozen(np.zeros(-length % self.block_size, dtype=np.uint8))
 
-        nblocks = (length + self.reserve) // self.block_size + 1
+        nblocks = self.nblocks(length)
         tail = np.zeros(nblocks * self.block_size - length, dtype=np.uint8)
         tail[0] = 0x80
         value = length * 8 if self.trailer is Trailer.BIT_LENGTH else nblocks

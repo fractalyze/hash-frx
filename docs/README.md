@@ -131,6 +131,15 @@ also decides whether a `Sponge` over it wraps its whole hash as
 a plugin without the arm rejects outright, which is a failed compile rather
 than a lost kernel.
 
+`hash_frx.digest.sha256_bytes_len` is gated the same way and for a third
+reason. It takes the message length as an operand rather than as part of the
+message shape, so one compiled kernel serves every length its buffer can hold —
+but its decomposition has to derive a data-dependent block count from that
+operand, which in plain HLO means speculating every block the buffer could need.
+Inlining it is therefore *slower* than the static-length marker it replaces,
+where an unrecognized name normally costs only the fusion. Being early costs
+performance rather than nothing, so the switch tracks the pin and the backend.
+
 A permutation advertises which path it is on through `fusion_path`
 (`hash_frx.fusion.FusionPath`: `DEDICATED` / `GENERIC` / `HOST`, the last only
 on the byte seam), and hands out its operand layout through

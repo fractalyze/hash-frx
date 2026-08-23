@@ -14,7 +14,12 @@ import numpy as np
 from absl.testing import absltest
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import ByteHash, device_message, host_digest
+from hash_frx.byte_hash import (
+    ByteHash,
+    device_message,
+    host_digest,
+    message_length,
+)
 from hash_frx.fusion import FusionPath
 
 
@@ -93,6 +98,23 @@ class DeviceMessageTest(absltest.TestCase):
                 # all-rows suite covers it too, at `size = "large"`.
                 with self.assertRaisesRegex(ValueError, "2-D uint8"):
                     host_digest(lambda b: b"", 1, bad)
+
+
+class MessageLengthTest(absltest.TestCase):
+    """Reading a batch's width through the seam.
+
+    Backend-free assertions only, for the reason `DeviceMessageTest` states: the
+    rank check runs before any conversion, so it belongs in the seam's own test.
+    """
+
+    def test_reports_the_batch_width(self) -> None:
+        self.assertEqual(message_length(np.zeros((4, 37), dtype=np.uint8)), 37)
+
+    def test_reads_the_length_through_the_seam_rank_check(self) -> None:
+        # Reading `.shape[-1]` off a 1-D message would silently take the batch
+        # for a length, so this door answers like every other seam door.
+        with self.assertRaisesRegex(ValueError, "2-D uint8"):
+            message_length(np.zeros(8, dtype=np.uint8))
 
 
 if __name__ == "__main__":
