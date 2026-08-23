@@ -65,7 +65,6 @@ from typing import TYPE_CHECKING
 # because the unqualified name is this package's own `blake3` package below.
 import blake3 as blake3_py
 import frx
-import frx.numpy as fnp
 import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
@@ -75,19 +74,17 @@ from hash_frx.blake3.modes import (
     DIGEST_LEN,
     KEY_LEN,
     Mode,
-    _message,
-    chaining_value,
     context_bytes,
     derive_key_mode,
     hash_mode,
     keyed_mode,
-    parent_output,
-    root_bytes,
-    tree_output,
+    pair_bytes,
+    unmarked_hash,
+    unmarked_non_root_hash,
+    unmarked_parent_hash,
 )
-from hash_frx.byte_hash import DeviceRow, HostRow, host_digest
+from hash_frx.byte_hash import DeviceRow, HostRow, device_message, host_digest
 from hash_frx.fusion import FusionPath, fused_region, routing
-from hash_frx.word import pack_le, unpack_le
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
@@ -116,78 +113,6 @@ BLAKE3_MARKER_VERSION = 1
 # new attribute degrades wrongly.
 BLAKE3_PARENT_MARKER = "hash_frx.compress.blake3_parent"
 BLAKE3_PARENT_MARKER_VERSION = 1
-
-
-def unmarked_hash(msg: ArrayLike, mode: Mode, out_len: int) -> Array:
-    """A whole BLAKE3 hash with no marker on it: uint8 `[B, L]` -> `[B, out_len]`.
-
-    The tree and its root output, which is the entire hash — every mode, every
-    length. `tree_hash` is this under the `hash_frx.digest.blake3` composite, and an
-    unrecognized composite inlines to exactly this, so the two are one
-    implementation rather than two spellings that could drift.
-
-    Exported because the suite needs the unmarked side by name: a marked call
-    compiles its whole unrolled body, which is affordable at a block and not at a
-    chunk (`blake3_test` measures it), so the value tables read the hash here
-    while the marker is asserted on the lowered module. Byte-exactness against
-    the published vectors therefore still pins one implementation, not a test
-    double — `docs/reference/conventions.md` forbids the latter, and rightly.
-    """
-    return root_bytes(tree_output(msg, mode), out_len)
-
-
-def _pair_bytes(pairs: ArrayLike) -> Array:
-    """A parent's two children as the uint8 `[B, 2*32]` batch it compresses:
-    left ‖ right chaining values, 32 bytes each.
-
-    Checked here for the reason `_message` checks a message — a caller holding
-    the wrong width otherwise reads a reshape error against an intermediate it
-    never wrote, and a `[B, 63]` operand would reshape-fail while a `[B, 128]`
-    one would silently hash the wrong pair.
-    """
-    block = fnp.asarray(pairs, dtype=fnp.uint8)
-    if block.ndim != 2:
-        raise ValueError(
-            f"pairs must be 2-D uint8 [B, {2 * DIGEST_LEN}], got ndim={block.ndim}"
-        )
-    if block.shape[1] != 2 * DIGEST_LEN:
-        raise ValueError(
-            f"pairs must be two {DIGEST_LEN}-byte chaining values end to end, "
-            f"got {block.shape[1]} bytes"
-        )
-    return block
-
-
-def unmarked_non_root_hash(msg: ArrayLike, mode: Mode) -> Array:
-    """A whole BLAKE3 tree finished WITHOUT `ROOT`, no marker: uint8 `[B, L]`
-    -> `[B, 32]`.
-
-    `unmarked_hash`'s sibling for the non-root contract: the same tree, its
-    final node finished by `chaining_value` instead of `root_bytes`. What
-    `tree_hash(non_root=True)` inlines to when no emitter is wired, exported
-    for the same suite-needs-the-unmarked-side reason as `unmarked_hash`.
-    """
-    return unpack_le(chaining_value(tree_output(msg, mode)))
-
-
-def unmarked_parent_hash(pairs: ArrayLike, mode: Mode) -> Array:
-    """One non-root PARENT compression, no marker: uint8 `[B, 64]` -> `[B, 32]`.
-
-    `unmarked_non_root_hash`'s sibling one level up: where that finishes the
-    final node of a *message*'s tree, this compresses a pair of chaining values
-    the way every internal level of a Merkle tree over BLAKE3's own semantics
-    does. Exported by name for the same reason its siblings are — the suite
-    reads the unmarked side while the marker is asserted on the lowered module.
-
-    Not expressible as a hash of the 64 bytes: a message of that length sets
-    `CHUNK_START|CHUNK_END` and a real counter, where a parent sets `PARENT`
-    with a zero counter and opens from the key words (spec section 2.5). The
-    two produce different bytes from the same input, which is why the message
-    entry cannot be pointed at a parent level.
-    """
-    block = _pair_bytes(pairs)
-    words = pack_le(block.reshape(block.shape[0], 2, DIGEST_LEN))
-    return unpack_le(chaining_value(parent_output(words[:, 0], words[:, 1], mode)))
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
@@ -354,7 +279,7 @@ def _marked_hash(
     marker, so which of its fields is an operand and which is an attribute is
     stated once rather than at each of the entry points."""
     return tree_hash(
-        _message(msg),
+        device_message(msg),
         mode.key_words,
         out_len=out_len,
         flags=mode.flags,
@@ -415,7 +340,7 @@ def parent_digest(pairs: ArrayLike) -> Array:
     and cannot.
     """
     mode = hash_mode()
-    return parent_hash(_pair_bytes(pairs), mode.key_words, flags=mode.flags)
+    return parent_hash(pair_bytes(pairs), mode.key_words, flags=mode.flags)
 
 
 def keyed_digest(key: ArrayLike | bytes, msg: ArrayLike) -> Array:
@@ -464,6 +389,7 @@ def derive_key(
     return _marked_hash(derive_key_mode(context), key_material, out_len)
 
 
+# Whether the pinned Fractalyze XLA plugin ships the BLAKE3 emitter, and on
 # which backends. fractalyze/xla#499 registers the recognizer and rewriter on
 # the GPU compiler and #507 on the CPU one, so unlike Keccak's GPU-only tuple
 # this carries both legs; the pin floor in `pyproject.toml` is already above
@@ -484,7 +410,7 @@ def _routes_to_dedicated_emitter() -> bool:
 class _Blake3Hash(DeviceRow):
     """The shared body of the three modes — everything but which mode it is.
 
-    A subclass supplies the row: `_read`, which of `blake3`'s mode functions
+    A subclass supplies the row: `_read`, which of this module's mode functions
     reads a message, and `_parameters`, what the mode's own parameters are.
     `digest` stays here and forwards, so the seam's name and signature are
     written once however many rows there are.

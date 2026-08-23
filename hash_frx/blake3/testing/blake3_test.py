@@ -46,6 +46,8 @@ from hash_frx.blake3.modes import (
     parent_output,
     root_words,
     tree_output,
+    unmarked_hash,
+    unmarked_parent_hash,
 )
 from hash_frx.blake3.rows import (
     BLAKE3_MARKER,
@@ -57,8 +59,6 @@ from hash_frx.blake3.rows import (
     non_root_digest,
     parent_digest,
     tree_hash,
-    unmarked_hash,
-    unmarked_parent_hash,
     xof,
 )
 from hash_frx.blake3.testing import reference as ref
@@ -87,7 +87,7 @@ from hash_frx.word import split, unpack_le
 _U32 = np.uint32
 
 
-# `blake3.unmarked_hash` under each mode — the same implementation the shipped
+# `modes.unmarked_hash` under each mode — the same implementation the shipped
 # entry points run, without the marker around it. Read directly where a case
 # wants the body rather than the composite, and stood in for the shipped names by
 # the wrappers below on a leg that cannot afford to compile it.

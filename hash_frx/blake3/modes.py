@@ -71,7 +71,7 @@ from hash_frx.blake3.compress import (
     compress,
     compress_cv,
 )
-from hash_frx.byte_hash import padded_batch
+from hash_frx.byte_hash import device_message, padded_batch
 from hash_frx.extension import tree
 from hash_frx.word import pack_le, unpack_le
 
@@ -213,10 +213,10 @@ def _chain(cv: Array, words: Array, counter: Array, first: int, mode: Mode) -> A
     batch = cv.shape[0]
     full_block = fnp.full((batch,), BLOCK_LEN, dtype=U32)
 
-    def compress_block(cv: Array, i: int) -> Array:
+    def compress_block(running: Array, i: int) -> Array:
         flags = mode.flags | (CHUNK_START if first + i == 0 else 0)
         return compress_cv(
-            cv,
+            running,
             words[:, i],
             counter,
             full_block,
@@ -430,7 +430,7 @@ def root_bytes(output: Output, out_len: int) -> Array:
     if out_len < 1:
         raise ValueError(f"out_len must be at least 1, got {out_len}")
     batch = output.block.shape[0]
-    blocks = tree.stream_blocks(out_len, BLOCK_LEN)
+    blocks = tree.units(out_len, BLOCK_LEN)
     stream = root_words(_output_blocks(output, blocks))
     return unpack_le(stream).reshape(batch, blocks * BLOCK_LEN)[:, :out_len]
 
@@ -571,19 +571,6 @@ def _chunk_chaining_values(message: Array, nchunks: int, mode: Mode) -> Array:
     )
 
 
-def _message(msg: ArrayLike) -> Array:
-    """A message as the uint8 `[B, L]` batch every mode hashes.
-
-    The rank is checked here rather than left to `tree_output` so a caller
-    holding the wrong one is told so eagerly, rather than from inside the trace
-    of the marked region.
-    """
-    message = fnp.asarray(msg, dtype=fnp.uint8)
-    if message.ndim != 2:
-        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
-    return message
-
-
 def tree_output(msg: ArrayLike, mode: Mode) -> Output:
     """The root node of a message's tree, assembled but not run.
 
@@ -602,7 +589,7 @@ def tree_output(msg: ArrayLike, mode: Mode) -> Output:
     leaves a chunk's last one pending: the root is where `ROOT` and the
     extendable output live, and neither belongs to the tree that produced it.
     """
-    message = _message(msg)
+    message = device_message(msg)
     batch, length = message.shape
 
     nchunks = tree.units(length, CHUNK_LEN)
@@ -733,3 +720,91 @@ def derive_key_mode(context: str | bytes) -> Mode:
     context_pass = replace(hash_mode(), flags=DERIVE_KEY_CONTEXT)
     words = root_words(tree_output(data.reshape(1, -1), context_pass))
     return Mode(words[0, :8], DERIVE_KEY_MATERIAL)
+
+
+def unmarked_hash(msg: ArrayLike, mode: Mode, out_len: int) -> Array:
+    """A whole BLAKE3 hash with no marker on it: uint8 `[B, L]` -> `[B, out_len]`.
+
+    The tree and its root output, which is the entire hash — every mode, every
+    length. `tree_hash` is this under the `hash_frx.digest.blake3` composite, and an
+    unrecognized composite inlines to exactly this, so the two are one
+    implementation rather than two spellings that could drift.
+
+    Exported because the suite needs the unmarked side by name: a marked call
+    compiles its whole unrolled body, which is affordable at a block and not at a
+    chunk (`blake3_test` measures it), so the value tables read the hash here
+    while the marker is asserted on the lowered module. Byte-exactness against
+    the published vectors therefore still pins one implementation, not a test
+    double — `docs/reference/conventions.md` forbids the latter, and rightly.
+    """
+    return root_bytes(tree_output(msg, mode), out_len)
+
+
+def pair_bytes(pairs: ArrayLike) -> Array:
+    """A parent's two children as the uint8 `[B, 2*32]` batch it compresses:
+    left ‖ right chaining values, 32 bytes each.
+
+    Checked here for the reason `byte_hash.device_message` checks a message — a
+    caller holding the wrong width otherwise reads a reshape error against an
+    intermediate it never wrote, and a `[B, 63]` operand would reshape-fail while
+    a `[B, 128]` one would silently hash the wrong pair.
+
+    **Public where a message's coercion is the seam's**, because two callers in
+    two layers need one answer: `unmarked_parent_hash` here, and
+    `rows.parent_digest` one layer up. `context_bytes` is public in this module
+    for the same reason. It does NOT route
+    through `device_message` despite the overlapping rank check — the width is
+    BLAKE3's and so is the error a caller of `parent_digest` should read, and the
+    seam's generic "msg must be 2-D uint8 [B, L]" would name an operand nobody
+    passed.
+    """
+    block = fnp.asarray(pairs, dtype=fnp.uint8)
+    if block.ndim != 2:
+        raise ValueError(
+            f"pairs must be 2-D uint8 [B, {2 * DIGEST_LEN}], got ndim={block.ndim}"
+        )
+    if block.shape[1] != 2 * DIGEST_LEN:
+        raise ValueError(
+            f"pairs must be two {DIGEST_LEN}-byte chaining values end to end, "
+            f"got {block.shape[1]} bytes"
+        )
+    return block
+
+
+def unmarked_non_root_hash(msg: ArrayLike, mode: Mode) -> Array:
+    """A whole BLAKE3 tree finished WITHOUT `ROOT`, no marker: uint8 `[B, L]`
+    -> `[B, 32]`.
+
+    `unmarked_hash`'s sibling for the non-root contract: the same tree, its
+    final node finished by `chaining_value` instead of `root_bytes`. What
+    `tree_hash(non_root=True)` inlines to when no emitter is wired.
+
+    Named rather than inlined into that decomposition because it IS the
+    decomposition's contract across the module boundary — `rows.py` reads it,
+    and a marked region's body being a named function is what lets the marked
+    and unmarked sides be one implementation rather than two spellings. Unlike
+    its two siblings it has no test caller: `blake3_test` covers the non-root
+    path through the marked `non_root_digest` and open-codes this body where it
+    needs the unmarked side.
+    """
+    return unpack_le(chaining_value(tree_output(msg, mode)))
+
+
+def unmarked_parent_hash(pairs: ArrayLike, mode: Mode) -> Array:
+    """One non-root PARENT compression, no marker: uint8 `[B, 64]` -> `[B, 32]`.
+
+    `unmarked_non_root_hash`'s sibling one level up: where that finishes the
+    final node of a *message*'s tree, this compresses a pair of chaining values
+    the way every internal level of a Merkle tree over BLAKE3's own semantics
+    does. Exported by name for the same reason its siblings are — the suite
+    reads the unmarked side while the marker is asserted on the lowered module.
+
+    Not expressible as a hash of the 64 bytes: a message of that length sets
+    `CHUNK_START|CHUNK_END` and a real counter, where a parent sets `PARENT`
+    with a zero counter and opens from the key words (spec section 2.5). The
+    two produce different bytes from the same input, which is why the message
+    entry cannot be pointed at a parent level.
+    """
+    block = pair_bytes(pairs)
+    words = pack_le(block.reshape(block.shape[0], 2, DIGEST_LEN))
+    return unpack_le(chaining_value(parent_output(words[:, 0], words[:, 1], mode)))

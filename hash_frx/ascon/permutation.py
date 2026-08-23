@@ -115,7 +115,7 @@ def masks() -> Masks:
     Host-built 0/1 vectors would be arrays the decomposition materialises,
     which `lax.composite` lifts into unnamed operands ahead of the declared
     ABI — so they are counted on device instead, the `iota` remedy of
-    docs/reference/conventions.md (`blake3._counters` is the precedent).
+    docs/reference/conventions.md (`blake3.modes._counters` is the precedent).
     Computed once per permutation or digest and shared by every round.
 
     - ``pre``: words {0, 2, 4} — the even positions, `(i & 1) ^ 1`.
