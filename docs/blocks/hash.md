@@ -193,11 +193,13 @@ orders of magnitude off what a `Host*` name promises.
 
 Keccak-256 is where that bar bites, because its plain-Python sponge is not
 simply slow: at `B = 1` on a leg without the emitters it beats the device row
-several times over, and by a further two orders of magnitude once message
-lengths vary. That win is the ~90 ms compilation term rather than the sponge,
-so it is the half of condition 1 a marker ABI can retire — which is why it does
-not earn a shipped row, and why paying a dependency to make the row genuinely
-native was judged not worth it either. Keccak-256 has no shipped host row.
+several times over, and by two further orders of magnitude the first time a
+length is met. Both halves of that win are the substrate rather than the sponge:
+the first is the un-routed marker, which an emitter for this leg would close,
+and the second is the compilation term, which a marker ABI would. Neither is a
+reason to ship a plain-Python row — which is why Keccak-256 has no shipped host
+row, and why paying a dependency to make one genuinely native was judged not
+worth it either.
 
 The dependency buys a second thing the published vectors cannot: a differential
 partner that is not this tree. The binding wraps the reference implementation the
@@ -233,23 +235,28 @@ shape*, and the block count and the pad are static by construction —
 line ("every loop bound here is static … that is what lets `digest` take a
 tracer"), and `_padding_tail` builds the pad as a host constant *from* the
 static length. So an eager caller whose messages are not all one length pays a
-**compilation per length**, not a kernel per call. On the CPU backend at
-`B = 1`:
+**compilation per length**, not a kernel per call — and on the CPU backend at
+`B = 1` that compilation is four to five orders of magnitude above the warm
+call it enables, which is itself an order above the `hashlib` row. The host
+row's real saving is the compile, and it dwarfs the dispatch saving that the
+batch-shape table above measures.
 
-| one `Sha256` digest | cost |
-|---|---:|
-| first call at a fresh message length | ~90 ms |
-| compiled and warm, operand already resident | 3.9 us |
-| the `hashlib` row | 1.5 us |
+**A dedicated emitter does not shrink that term; it grows it.** A routed marker
+compiles a fresh length roughly an order of magnitude slower than an un-routed
+one, because the emitter's own MLIR and LLVM codegen is the cost — and it buys
+back roughly two orders on the warm call. That is the trade a dedicated kernel
+makes, and it is a good one for a traced caller and a bad one for a caller that
+meets each length once. So "ship the emitter and the host row stops paying for
+itself" is wrong twice: the emitter does not touch this term, and it raises it.
 
-The gap a host row closes is therefore ~90 ms where lengths vary and ~2 us
-where they do not, and the two have different causes. A dedicated emitter
-changes neither: a hash whose marker the CPU leg routes and one whose marker it
-does not compile within a few percent of each other, because compilation
-dominates. Naming the causes is what keeps the condition honest, because it
-also says what would retire it — a marker ABI taking the length as an operand,
-with the block loop inside the emitter, deletes the ~90 ms term and leaves a
-host row resting on ~2 us of dispatch.
+The figures move with the pin — a wheel that gains or loses an emitter moves
+them by an order of magnitude, which is why they are stated as ratios here and
+measured fresh when they matter.
+
+Naming the causes is what keeps the condition honest, because it also says what
+would retire it: a marker ABI taking the length as an operand, with the block
+loop inside the emitter, compiles once per buffer size rather than once per
+length and leaves a host row resting on dispatch alone.
 
 `Permutation` has **no host category at all**, and that is a different
 statement from a byte hash having no shipped host row. A permutation fails both
