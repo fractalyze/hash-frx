@@ -21,7 +21,10 @@ from frx import Array
 from hash_frx import sha256
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
-from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.marker_recognized import (
+    assert_marker_recognized,
+    emitted_composites,
+)
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block
 # cutoff), 63/64 (block edge), 119/120 (multi-block).
@@ -150,10 +153,12 @@ class Sha256TracedTest(parameterized.TestCase):
 
     def test_traced_digest_still_emits_one_marker(self) -> None:
         # The marker is what makes a digest one device unit; a traced caller must
-        # not lose it by taking a different path into the compression.
+        # not lose it by taking a different path into the compression. WHICH of
+        # the three it is belongs to the routing test; this one holds that a
+        # traced caller emits exactly one, whichever the pin selects.
         msg = np.zeros((1, 64), dtype=np.uint8)
         txt = frx.jit(sha256.digest).lower(msg).as_text()
-        self.assertIn(sha256.SHA256_MARKER, txt)
+        self.assertEqual(len(emitted_composites(sha256.digest, msg)), 1)
         self.assertEqual(txt.count("stablehlo.composite"), 1)
 
 
@@ -266,7 +271,11 @@ class Sha256BytesMarkerTest(parameterized.TestCase):
     def test_emits_one_composite_with_the_bytes_name(self) -> None:
         msg = np.zeros((2, 100), dtype=np.uint8)
         txt = frx.jit(sha256.sha256_bytes).lower(fnp.asarray(msg)).as_text()
-        self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
+        # Whole-name match: this marker is a prefix of the runtime-length one.
+        self.assertEqual(
+            emitted_composites(sha256.sha256_bytes, fnp.asarray(msg)),
+            [sha256.SHA256_BYTES_MARKER],
+        )
         self.assertEqual(txt.count("stablehlo.composite"), 1)
 
     def test_jit_matches_eager(self) -> None:
@@ -281,13 +290,21 @@ class Sha256BytesMarkerTest(parameterized.TestCase):
         # `_BYTES_EMITTER_AVAILABLE` false the wire carries the blocks marker
         # only. Flipping the flag is what moves the wire — this is the test
         # that makes that flip deliberate.
+        #
+        # Matched whole (`emitted_composites`): this marker's name is a PREFIX
+        # of the runtime-length one, so a substring assertion here is satisfied
+        # by the wire carrying that one instead, which is exactly what happens
+        # wherever it routes.
         msg = np.zeros((1, 64), dtype=np.uint8)
-        txt = frx.jit(sha256.digest).lower(msg).as_text()
-        if sha256._routes_to_bytes_marker():
-            self.assertIn(sha256.SHA256_BYTES_MARKER, txt)
+        names = emitted_composites(sha256.digest, msg)
+        if sha256._routes_to_bytes_len_marker():
+            # The runtime-length form wins where it routes; this marker is then
+            # the second choice and must NOT be on the wire.
+            self.assertEqual(names, [sha256.SHA256_BYTES_LEN_MARKER])
+        elif sha256._routes_to_bytes_marker():
+            self.assertEqual(names, [sha256.SHA256_BYTES_MARKER])
         else:
-            self.assertIn(sha256.SHA256_MARKER, txt)
-            self.assertNotIn(sha256.SHA256_BYTES_MARKER, txt)
+            self.assertEqual(names, [sha256.SHA256_MARKER])
 
 
 class Sha256BytesLenMarkerTest(parameterized.TestCase):
@@ -392,7 +409,14 @@ class Sha256BytesLenMarkerTest(parameterized.TestCase):
             .lower(fnp.asarray(np.zeros((2, 128), dtype=np.uint8)), np.int32(100))
             .as_text()
         )
-        self.assertIn(sha256.SHA256_BYTES_LEN_MARKER, txt)
+        self.assertEqual(
+            emitted_composites(
+                sha256.sha256_bytes_len,
+                fnp.asarray(np.zeros((2, 128), dtype=np.uint8)),
+                np.int32(100),
+            ),
+            [sha256.SHA256_BYTES_LEN_MARKER],
+        )
         self.assertEqual(txt.count("stablehlo.composite"), 1)
 
     def test_the_length_is_an_operand_not_a_baked_constant(self) -> None:
