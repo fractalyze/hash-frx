@@ -38,6 +38,7 @@ tests share.
 | How a message becomes whole blocks — `PadRule` for Merkle–Damgård, `SpongePad` for the sponges | [`extension/pad.py`](../hash_frx/extension/pad.py) |
 | The tree schedule — the unit ceiling, the intra-chunk chain, and why bottom-up pairing is the spec's own tree | [`extension/tree.py`](../hash_frx/extension/tree.py) |
 | Interleaved absorb/squeeze with add-mode absorb, for a classic Fiat-Shamir prover            | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
+| Which released duplex a sponge reproduces — `ARK_0_3` (including its spill-permute bug) and `ARK_0_5` | [`adapter/duplex.py`](../hash_frx/adapter/duplex.py) |
 | n-to-1 truncated-permutation compression, for a hash tree                                   | [`compression.py`](../hash_frx/compression.py)       |
 
 ## Constructions over a `ByteHash`
