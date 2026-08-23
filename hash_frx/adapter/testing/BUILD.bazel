@@ -90,3 +90,42 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+# The pairing table against `testing/rows.py`, plus the selection over it.
+# Deps the registry and the row modules the selection cases name; the digests
+# themselves are `row_conformance_test`'s, so nothing here re-checks bytes.
+py_test(
+    name = "dual_test",
+    size = "small",
+    srcs = ["dual_test.py"],
+    deps = [
+        "//hash_frx:sha256",
+        "//hash_frx/adapter:dual",
+        "//hash_frx/blake3",
+        "//hash_frx/keccak",
+        "//hash_frx/testing:rows",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# The alias against the rows it claims to cover. No device work of its own —
+# every case reads `digest_size` off a freshly built row — but the device
+# families are built, so the plugin deps ride along.
+py_test(
+    name = "xof_test",
+    size = "small",
+    srcs = ["xof_test.py"],
+    deps = [
+        "//hash_frx:blake2s",
+        "//hash_frx:sha256",
+        "//hash_frx/adapter:mgf1",
+        "//hash_frx/adapter:xof",
+        "//hash_frx/ascon",
+        "//hash_frx/blake2b",
+        "//hash_frx/blake3",
+        "//hash_frx/keccak",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)
