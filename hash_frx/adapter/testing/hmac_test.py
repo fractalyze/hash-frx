@@ -19,7 +19,7 @@ import frx
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.hmac import Hmac
+from hash_frx.adapter.hmac import Hmac
 from hash_frx.sha256 import HostSha256, Sha256
 
 # RFC 4231 §4 HMAC-SHA-256 rows. `trunc` is the RFC's own output truncation
@@ -189,13 +189,42 @@ class HmacTest(parameterized.TestCase):
         self.assertNotEqual(Hmac(Sha256(), 64), Hmac(Sha256(), 128))
         self.assertNotEqual(Hmac(Sha256(), 64), Hmac(HostSha256(), 64))
 
+    def test_the_block_size_defaults_through_the_table(self) -> None:
+        # What makes `adapter/block_size.py` an adapter rather than a data
+        # sheet: the caller does not have to know FIPS 198-1's B for a hash
+        # that has one.
+        self.assertEqual(Hmac(Sha256()).block_size, 64)
+        self.assertEqual(Hmac(Sha256()), Hmac(Sha256(), 64))
+
+    def test_a_hash_with_no_registered_block_is_refused(self) -> None:
+        # The absence carries an argument, so it has to reach the caller rather
+        # than being papered over with a guess.
+        from hash_frx.blake3.rows import Blake3
+
+        with self.assertRaisesRegex(LookupError, "keyed mode is native"):
+            Hmac(Blake3())
+
     def test_block_size_below_digest_rejected(self) -> None:
         with self.assertRaises(ValueError):
             Hmac(Sha256(), block_size=16)
 
     def test_unbatched_message_rejected(self) -> None:
-        with self.assertRaises(ValueError):
+        # Matched by regex against the SEAM's message, not a spelling of its
+        # own: this front door routes through `byte_hash.device_message` like
+        # the other nine, and a divergent string is how that silently stops
+        # being true. `_require_batch_rank` states the invariant.
+        with self.assertRaisesRegex(ValueError, r"msg must be 2-D uint8 \[B, L\]"):
             _hmac_sha256(Sha256).mac(np.zeros(16, np.uint8), np.zeros(40, np.uint8))
+
+    def test_a_wrong_rank_is_rejected_before_any_conversion(self) -> None:
+        # The reason the shared helper checks first: a wrong rank must not reach
+        # a device. A 3-D message would broadcast-fail somewhere inside the
+        # digest if it got that far, naming an intermediate the caller never
+        # wrote.
+        with self.assertRaisesRegex(ValueError, r"got ndim=3"):
+            _hmac_sha256(Sha256).mac(
+                np.zeros(16, np.uint8), np.zeros((2, 3, 40), np.uint8)
+            )
 
 
 if __name__ == "__main__":

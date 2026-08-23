@@ -22,7 +22,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.hmac import Hmac
+from hash_frx.adapter.hmac import Hmac
 
 
 def hkdf_extract(

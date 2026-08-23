@@ -33,7 +33,8 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import ByteHash, Row
+from hash_frx.adapter.block_size import block_size as _block_size
+from hash_frx.byte_hash import ByteHash, Row, device_message
 
 # The FIPS 198-1 §4 inner / outer pad bytes, repeated to the block. Python ints
 # here — wrapped per use — so importing this module puts nothing on a backend.
@@ -50,9 +51,18 @@ class Hmac(Row):
         (SHA-256: 64). Must be at least `H`'s digest size, because §4 replaces
         a longer-than-block key by its digest and zero-pads the result to one
         block.
+
+        Defaults to `adapter.block_size(byte_hash)`, which knows the width for
+        every family that has one. A hash with no registered width raises there
+        rather than here, and the two that raise do so for reasons worth reading
+        before passing a number to get past it: BLAKE3 keys natively, and
+        Ascon's rate is below its digest. Passing `B` explicitly stays supported
+        — it is what a caller reproducing a non-standard parameterization needs.
     """
 
-    def __init__(self, byte_hash: ByteHash, block_size: int) -> None:
+    def __init__(self, byte_hash: ByteHash, block_size: int | None = None) -> None:
+        if block_size is None:
+            block_size = _block_size(byte_hash)
         if block_size < byte_hash.digest_size:
             raise ValueError(
                 f"block_size ({block_size}) must be >= the hash's digest_size "
@@ -93,9 +103,7 @@ class Hmac(Row):
 
         `msg` and `key` may both be tracers when the hash is a device row.
         """
-        msg = fnp.asarray(msg, dtype=fnp.uint8)
-        if msg.ndim != 2:
-            raise ValueError(f"msg must be uint8 [B, L], got shape {msg.shape}")
+        msg = device_message(msg)
         k0 = fnp.broadcast_to(self.block_key(key), (msg.shape[0], self.block_size))
         inner = self.byte_hash.digest(
             fnp.concatenate([k0 ^ fnp.uint8(_IPAD), msg], axis=1)

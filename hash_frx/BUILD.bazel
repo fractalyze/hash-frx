@@ -24,16 +24,17 @@ py_library(
         ":compression",
         ":duplex_sponge",
         ":fusion",
-        ":hkdf",
-        ":hmac",
         ":markers",
-        ":pbkdf2",
         ":permutation",
         ":ripemd160",
         ":sha256",
         ":sha512",
         ":sm3",
         ":sponge",
+        "//hash_frx/adapter:block_size",
+        "//hash_frx/adapter:hkdf",
+        "//hash_frx/adapter:hmac",
+        "//hash_frx/adapter:pbkdf2",
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
         "//hash_frx/blake3",
@@ -266,47 +267,5 @@ py_library(
         ":fusion",
         ":permutation",
         requirement("frx"),
-    ],
-)
-
-# HMAC (FIPS 198-1) — the keyed MAC over a ByteHash. The block size rides the
-# construction, not the seam.
-py_library(
-    name = "hmac",
-    srcs = ["hmac.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":byte_hash",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
-# HKDF (RFC 5869) — extract-then-expand over HMAC, the KDF the composition
-# standards (HPKE, TLS-style schedules) name.
-py_library(
-    name = "hkdf",
-    srcs = ["hkdf.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":hmac",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
-# PBKDF2 (RFC 8018) — the iterated KDF over HMAC as a traced c-loop, with a
-# midstate fast path over the SHA-2 modules' public compress machinery
-# (hence the :sha256/:sha512 deps — the one construction that names hashes).
-py_library(
-    name = "pbkdf2",
-    srcs = ["pbkdf2.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":hmac",
-        ":sha256",
-        ":sha512",
-        requirement("frx"),
-        requirement("numpy"),
     ],
 )

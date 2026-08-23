@@ -63,8 +63,8 @@ incremental state has a different shape in each construction, so a common
 `absorb`/`squeeze` pair would be a fiction that fits one family.
 
 The same intersection rule decides where HMAC's block size lives. HMAC
-([`hmac.py`](../../hash_frx/hmac.py)) and HKDF over it
-([`hkdf.py`](../../hash_frx/hkdf.py)) are constructions *over* `ByteHash` the
+([`adapter/hmac.py`](../../hash_frx/adapter/hmac.py)) and HKDF over it
+([`adapter/hkdf.py`](../../hash_frx/adapter/hkdf.py)) are constructions *over* `ByteHash` the
 way `Sponge`/`Compression` are over `Permutation`, and FIPS 198-1's `B` is a
 parameter only a block-keyed construction can interpret — BLAKE3's keyed mode
 is native and has no `B` for HMAC to read. So `Hmac(hash, block_size)` carries
@@ -294,7 +294,7 @@ measurements above are what rule it out — every sequential caller pays the two
 costs, and the host-shaped consumers of condition 2 exist today. What it would
 *entail* is recorded separately, because a consequence is not an argument:
 `FusionPath.HOST` goes dead, `is_traceable` becomes trivially true for every
-value so [`pbkdf2.py`](../../hash_frx/pbkdf2.py)'s guard becomes unreachable,
+value so [`adapter/pbkdf2.py`](../../hash_frx/adapter/pbkdf2.py)'s guard becomes unreachable,
 and `DEDICATED`/`GENERIC` is a boolean — the shape `FusionPath` exists to
 replace. That collapse is correct bookkeeping *if* host rows genuinely go; it
 is not itself the reason they stay.
