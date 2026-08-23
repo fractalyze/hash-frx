@@ -107,19 +107,23 @@ class Mgf1(Row):
             )
         self._byte_hash = byte_hash
         self.digest_size = output_size
-
-    @property
-    def fusion_path(self) -> FusionPath:
-        """The underlying hash's, because the mask IS that hash's digests.
-
-        Delegated rather than resolved here, for the reason `DeviceRow` gives
-        for taking one rather than reading it: the emitter switch is a property
-        of the pin and the backend, and a value fixed at import would answer
-        before anything could vary it. `Hmac` carries none at all because its
-        region is two digests and a pair of XORs; a mask is one digest call, so
-        this one is honest.
-        """
-        return self._byte_hash.fusion_path
+        # The underlying hash's, because the mask IS that hash's digests.
+        #
+        # Read at CONSTRUCTION rather than pinned on the class, for the reason
+        # `DeviceRow` gives for taking one rather than reading it: the emitter
+        # switch is a property of the pin and the backend, and a value fixed at
+        # import would answer before anything could vary it. Taking it here is
+        # what `DeviceRow.__init__` does, and it costs nothing to be late — the
+        # underlying row resolved its own at ITS construction, so there is no
+        # later answer to wait for. `Hmac` carries none at all because its
+        # region is two digests and a pair of XORs; a mask is one digest call,
+        # so this one is honest.
+        #
+        # An attribute and not a `@property`: `ByteHash` declares `fusion_path`
+        # as a mutable attribute, and a read-only property does not satisfy one
+        # — the class stops being a `ByteHash` at all. The pin at the foot of
+        # this module is what holds that.
+        self.fusion_path: FusionPath = byte_hash.fusion_path
 
     def _parameters(self) -> tuple[object, ...]:
         # The underlying hash joins the length: `Mgf1(Sha256(), 32)` and
@@ -162,3 +166,12 @@ def mgf1(byte_hash: ByteHash, seed: ArrayLike, length: int) -> Array | np.ndarra
     so its jit cache key is stable.
     """
     return Mgf1(byte_hash, length).digest(seed)
+
+
+if TYPE_CHECKING:
+    # Seam-conformance pin (docs/reference/conventions.md). Load-bearing here
+    # rather than ceremonial: an adapter row has no in-tree consumer to fail
+    # instead, so this is the only thing holding the class to the protocol —
+    # and `fusion_path` shipped as a property the protocol does not accept for
+    # exactly as long as the pin was missing.
+    _bh_mgf1: type[ByteHash] = Mgf1
