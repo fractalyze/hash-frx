@@ -94,21 +94,23 @@ def units(length: int, size: int) -> int:
     gives a tree with no nodes and a chunk with nothing to compress, and the
     empty digest is a published vector — so getting this wrong fails at exactly
     one length and nowhere else.
+
+    **This is the module's counting rule, and it answers two questions**: how
+    many blocks a chunk holds, and how many compressions the root's output
+    stream spans at 64 bytes each (spec section 2.6). A separate floor-less
+    spelling for the second was tried and removed — `blake3.modes.root_bytes`
+    rejects a zero-byte request before asking, so the floor is unreachable
+    there and the two answers never differ. That guard lives with the caller
+    and this module cannot check it, which is the price of being dep-free.
+
+    **`sponge.squeeze_blocks` is the same ceiling WITHOUT the floor**, and that
+    is why the two do not merge — not the dependency, which would only bite in
+    the direction nobody would take (`sponge` already carries `frx` and could
+    depend on this target for free). Folding them would move
+    `squeeze_blocks(0, rate)` from 0 to 1. A caller that wants an output count
+    rather than a unit count therefore has to mean the floor, not inherit it.
     """
     return max(1, -(-length // size))
-
-
-def stream_blocks(output_size: int, block_size: int) -> int:
-    """Compressions' worth of output an `output_size`-byte request spans, at
-    `block_size` bytes each — rounded up, and at least one.
-
-    `sponge.squeeze_blocks` is the same arithmetic one construction over, and the
-    two are deliberately not shared: what they count differs (a sponge's
-    permutations against a root node's repeated compressions), and a sponge's
-    squeeze chains where these do not — every output block here reads the same
-    unrun root node and differs only in its counter.
-    """
-    return -(-output_size // block_size)
 
 
 def chain(node: N, *, count: int, compress_block: Callable[[N, int], N]) -> N:

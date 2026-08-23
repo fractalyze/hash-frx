@@ -80,8 +80,8 @@ from hash_frx.word import pack_le
 
 U32 = fnp.uint32
 
-# The compression on its own, for the one consumer the two markers above cannot
-# reach: a resumable state. `hash_frx.digest.blake3` spans chunks, tree and root
+# The compression on its own, for the one consumer neither marker in `rows.py`
+# can reach: a resumable state. `hash_frx.digest.blake3` spans chunks, tree and root
 # output, so a stream — which holds a chunk CV, a subtree stack, a counter and a
 # partial block, and is mid-tree by definition — can never be a call of it.
 # SHA-256 needs no equivalent because its whole resumable state is one chaining

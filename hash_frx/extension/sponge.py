@@ -73,7 +73,12 @@ R = TypeVar("R")
 
 def squeeze_blocks(output_size: int, rate: int) -> int:
     """Permutations' worth of output a `output_size`-byte request spans, at
-    `rate` bytes each — rounded up, and at least one."""
+    `rate` bytes each — rounded up.
+
+    No floor, unlike `tree.units`: a zero-byte squeeze is zero permutations, and
+    every row here asks for a fixed positive length so the case is unreachable
+    rather than handled. That difference is why the two ceilings do not merge.
+    """
     return -(-output_size // rate)
 
 

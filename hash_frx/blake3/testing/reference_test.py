@@ -41,7 +41,7 @@ class ReferenceAnchorTest(parameterized.TestCase):
     def test_official_extended_vectors(self, length: int, expected: str) -> None:
         # `hash_xof` reaches plumbing `hash_tree` cannot — the output-block
         # counter threaded to a root's last compression and no further — so it
-        # needs its own anchor here. Held only against `blake3.xof` it would be
+        # needs its own anchor here. Held only against `rows.xof` it would be
         # two implementations of section 2.6 agreeing, which is exactly the
         # agreement this module exists to refuse.
         self.assertEqual(hash_xof(official_input(length), _WIDTH).hex(), expected)

@@ -18,23 +18,15 @@ than restated.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 from absl.testing import absltest
 
-from hash_frx.extension.tree import chain, levels, stream_blocks, units
+from hash_frx.extension.tree import chain, levels, units
 
 
-@dataclass
-class _Trace:
-    """A node whose value is a string of the compressions that built it, so the
-    schedule's call order is readable directly off the result."""
-
-    blocks: list[int] = field(default_factory=list)
-
-    def compress_block(self, node: str, i: int) -> str:
-        self.blocks.append(i)
-        return f"c{i}({node})"
+def _compress_block(node: str, i: int) -> str:
+    """A fake compression whose value is a string of the calls that built it, so
+    the schedule's call order and count are both readable off the result."""
+    return f"c{i}({node})"
 
 
 def _spec_tree(chunks: int) -> tuple:
@@ -90,40 +82,21 @@ class UnitsTest(absltest.TestCase):
         self.assertEqual(units(1025, 1024), 2)
 
 
-class StreamBlocksTest(absltest.TestCase):
-    def test_rounds_up_and_never_returns_zero(self) -> None:
-        self.assertEqual(stream_blocks(1, 64), 1)
-        self.assertEqual(stream_blocks(64, 64), 1)
-        self.assertEqual(stream_blocks(65, 64), 2)
-        self.assertEqual(stream_blocks(131, 64), 3)
-
-    def test_differs_from_units_at_zero(self) -> None:
-        # `units` floors at one because an empty message still has a block to
-        # compress; a zero-byte output request has nothing to read and the
-        # caller rejects it before reaching here. Keeping them separate is what
-        # stops one question's floor being borrowed for the other's.
-        self.assertEqual(stream_blocks(0, 64), 0)
-        self.assertEqual(units(0, 64), 1)
-
-
 class ChainTest(absltest.TestCase):
     def test_every_block_feeds_the_next_in_order(self) -> None:
-        t = _Trace()
-        out = chain("S", count=3, compress_block=t.compress_block)
-        self.assertEqual(t.blocks, [0, 1, 2])
-        self.assertEqual(out, "c2(c1(c0(S)))")
+        # The nesting IS the order: block 0 is innermost, so a schedule that
+        # walked the blocks backwards or skipped one cannot produce this.
+        self.assertEqual(
+            chain("S", count=3, compress_block=_compress_block), "c2(c1(c0(S)))"
+        )
 
     def test_a_single_block_chunk_is_one_compression(self) -> None:
-        t = _Trace()
-        self.assertEqual(chain("S", count=1, compress_block=t.compress_block), "c0(S)")
-        self.assertEqual(t.blocks, [0])
+        self.assertEqual(chain("S", count=1, compress_block=_compress_block), "c0(S)")
 
     def test_no_blocks_is_the_node_untouched(self) -> None:
         # A chunk run from past a shared chain has nothing left to fold, which
         # is the `first == last` case BLAKE3 reaches on a one-block chunk.
-        t = _Trace()
-        self.assertEqual(chain("S", count=0, compress_block=t.compress_block), "S")
-        self.assertEqual(t.blocks, [])
+        self.assertEqual(chain("S", count=0, compress_block=_compress_block), "S")
 
 
 class LevelsTest(absltest.TestCase):

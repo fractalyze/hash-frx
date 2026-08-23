@@ -34,9 +34,9 @@ Python reviewer would prefer for a lowering that stays one kernel.
   decomposition is one the emitter cannot find, and a constant threaded in the
   wrong order is one it misreads. Two remedies, and every marked body needs one
   of them per constant: **thread it as an explicit operand**
-  (`sha256.compress`'s round-constant table, `blake3.Mode.iv`), or **compute it
-  on device** — `fnp.arange`/`iota` is an index the kernel counts rather than a
-  value the program carries (`blake3._counters`).
+  (`sha256.compress`'s round-constant table, `blake3.modes.Mode.iv`), or
+  **compute it on device** — `fnp.arange`/`iota` is an index the kernel counts
+  rather than a value the program carries (`blake3.modes._counters`).
 
   This rule used to carry a second, stronger reason that no longer holds:
   `lax.composite` once lifted *every* host-materialised array into an operand
