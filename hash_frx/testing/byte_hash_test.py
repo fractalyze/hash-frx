@@ -14,7 +14,13 @@ import numpy as np
 from absl.testing import absltest
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import ByteHash, device_message, host_digest
+from hash_frx.byte_hash import (
+    ByteHash,
+    device_message,
+    host_digest,
+    message_at_capacity,
+    message_length,
+)
 from hash_frx.fusion import FusionPath
 
 
@@ -93,6 +99,31 @@ class DeviceMessageTest(absltest.TestCase):
                 # all-rows suite covers it too, at `size = "large"`.
                 with self.assertRaisesRegex(ValueError, "2-D uint8"):
                     host_digest(lambda b: b"", 1, bad)
+
+
+class MessageCapacityTest(absltest.TestCase):
+    """The seam surface a runtime-length marker reads a message through.
+
+    Backend-free assertions only, for the reason `DeviceMessageTest` states: the
+    rank check and the capacity check both run before any conversion, so they
+    belong in the seam's own test. What the widening returns is pinned in
+    `sha256_test`, which has a substrate to run on.
+    """
+
+    def test_reports_the_batch_width(self) -> None:
+        self.assertEqual(message_length(np.zeros((4, 37), dtype=np.uint8)), 37)
+
+    def test_reads_the_length_through_the_seam_rank_check(self) -> None:
+        # Reading `.shape[-1]` off a 1-D message would silently take the batch
+        # for a length, so this door answers like every other seam door.
+        with self.assertRaisesRegex(ValueError, "2-D uint8"):
+            message_length(np.zeros(8, dtype=np.uint8))
+
+    def test_rejects_a_capacity_below_the_message(self) -> None:
+        # A capacity is a buffer the message must fit in; a smaller one would
+        # truncate it into a digest of the wrong bytes rather than fail.
+        with self.assertRaisesRegex(ValueError, "must be >= the message length"):
+            message_at_capacity(np.zeros((1, 64), dtype=np.uint8), 32)
 
 
 if __name__ == "__main__":

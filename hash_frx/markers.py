@@ -84,6 +84,12 @@ MARKERS: tuple[Marker, ...] = (
     # new name rather than a version bump — the pinned sha256 recognizer
     # hard-fails on an operand-ABI mismatch instead of declining.
     Marker("hash_frx.digest.sha256_bytes", 1, MarkerKind.DIGEST),
+    # The runtime-length form of the same digest: the message length rides as an
+    # operand rather than as the message's shape, so one kernel serves every
+    # length its buffer can hold. A third name for the same reason the second
+    # one exists — the operand ABI differs, and a recognizer that does not know
+    # it declines the name rather than mis-reading the operands.
+    Marker("hash_frx.digest.sha256_bytes_len", 1, MarkerKind.DIGEST),
     # SHA-512, the 64-bit SHA-2 sibling: blocks-shaped only — no raw-bytes
     # sibling until a recognizer ships for one (`hash_frx.digest.sha512` notes the
     # deliberate absence).

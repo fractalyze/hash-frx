@@ -35,6 +35,8 @@ from hash_frx.byte_hash import (
     HostRow,
     device_message,
     host_digest,
+    message_at_capacity,
+    message_length,
     padded_batch,
 )
 from hash_frx.extension.md import MdStream, chain
@@ -66,6 +68,26 @@ SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
 # padding being a function of the static length.
 SHA256_BYTES_MARKER_VERSION = 1
 
+SHA256_BYTES_LEN_MARKER = "hash_frx.digest.sha256_bytes_len"
+# The runtime-length form: operands [h0 u32[8], k u32[64], msg u8[B, LMAX],
+# len s32[]] -> u8[B, 32]. Both markers above take the message length as part of
+# its SHAPE, so every distinct length is a fresh module and a fresh compile
+# (~90 ms, which for a caller whose lengths vary is essentially the whole cost of
+# hashing). Here `LMAX` is the buffer's capacity and `len` says how much of it is
+# live, so one compiled kernel serves every length that buffer can hold.
+#
+# The emitter loops on `len` rather than on the extent, so bytes at or past it
+# are never read and a wider buffer costs allocation instead of work. That is
+# what separates this from padding to a bucket in HLO, which reaches the same
+# compile count and then pays the full capacity on every call.
+#
+# `len` is ONE scalar for the whole batch, deliberately: the CPU emitter packs 16
+# digest rows into vector lanes, and a per-row length would stop them agreeing on
+# the block count and on every padding byte. The recognizer rejects a non-scalar
+# `len` rather than silently taking row 0's, so a per-row ABI stays a separate
+# decision rather than an accident.
+SHA256_BYTES_LEN_MARKER_VERSION = 1
+
 # Whether the pinned Fractalyze XLA plugin ships the dedicated SHA-256 emitter,
 # and on which backends (`allow_sha256_fusion` is set in both the CPU and the
 # GPU compiler). Two flags with the family-wide rationale in
@@ -83,6 +105,17 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 # from the bytes operand, retiring the padded-words materialization.
 _BYTES_EMITTER_AVAILABLE = True
 
+# Whether the pinned plugin claims `hash_frx.digest.sha256_bytes_len`, and on
+# which backends. Its own backend tuple rather than `_EMITTER_BACKENDS` above:
+# only the CPU emitter carries this form — Fractalyze XLA gates it on
+# `allow_sha256_bytes_len_fusion`, separate from the flag both compilers set —
+# and its one-thread-per-row GPU shape makes the length question genuinely
+# different rather than a port of the CPU answer. A backend that declines the
+# name would get neither a kernel nor the compile saving, so `digest` keeps the
+# static-length markers there instead of emitting into a decline.
+_LEN_EMITTER_AVAILABLE = True
+_LEN_EMITTER_BACKENDS = ("cpu",)
+
 
 def _routes_to_dedicated_emitter() -> bool:
     """Whether the pin *and* the backend both carry this emitter
@@ -94,6 +127,13 @@ def _routes_to_bytes_marker() -> bool:
     """Whether `digest` should emit the raw-bytes marker on this
     backend (`fusion.routing`)."""
     return routing(_BYTES_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
+
+
+def _routes_to_bytes_len_marker() -> bool:
+    """Whether `digest` should emit the runtime-length marker on this backend
+    (`fusion.routing`). Preferred over the static-length markers where it holds:
+    it is the same kernel work at one compile per buffer width."""
+    return routing(_LEN_EMITTER_AVAILABLE, _LEN_EMITTER_BACKENDS)
 
 
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
@@ -189,6 +229,23 @@ _Kd = fnp.asarray(_K)
 _PAD = PadRule(64, Trailer.BIT_LENGTH)
 
 
+def _length_field(msg_bytes: Array) -> Array:
+    """FIPS 180-4 §5.1.1's 64-bit message length, in bits, big-endian: uint8 [8].
+
+    Carried as a uint32 half pair off the int32 byte count, because the bit
+    length outgrows a uint32: a count near 2^31 has a bit length near 2^34, so
+    `count * 8` in one word wraps at 512 MiB and encodes a shorter message —
+    the same digest for two different lengths. The high half is the count's top
+    3 bits, the low half the count shifted into place.
+
+    The other half of `_PAD` for the paths that cannot read a host-built tail:
+    the streaming finalize, which pads at a runtime `pending_len`, and the
+    runtime-length region below.
+    """
+    count = msg_bytes.astype(fnp.uint32)
+    return unpack_be(fnp.stack([count >> fnp.uint32(29), count << fnp.uint32(3)]))
+
+
 def _compress(state: Array, w16: Array, k: Array) -> Array:
     """One block: state [B, 8] (a..h) + message words w16 [B, 16] -> state [B, 8].
     `k` is the [64] round-constant table (an explicit operand so the marked
@@ -255,6 +312,59 @@ def _padded_words(msg: Array, tail: Array | None = None) -> Array:
     if tail is None:
         tail = fnp.asarray(_PAD.tail(msg.shape[-1]))
     return block_to_words(padded_batch(msg, tail))
+
+
+def _active_blocks(length: Array) -> Array:
+    """How many blocks a `length`-byte message pads to: `PadRule.tail`'s
+    `nblocks`, over a traced length rather than a host one."""
+    return (length + fnp.int32(_PAD.reserve)) // fnp.int32(_PAD.block_size) + 1
+
+
+def _runtime_padded_words(msg: Array, length: Array) -> Array:
+    """The first `length` bytes of each row, padded and packed: uint8 [B, LMAX]
+    plus an int32 scalar -> uint32 [B, NB, 16].
+
+    What `_padded_words` builds from a static length, built from a traced one.
+    The tail cannot be a host constant here — it is a function of runtime data —
+    so the 0x80 byte, the zero fill and the length field are selected in-graph
+    off an index vector instead. That arrangement is `MdStream.finalize`'s, which
+    pads at a runtime `pending_len`, widened from its two blocks to every block
+    the buffer could need.
+
+    This is the marked region's decomposition rather than a path `digest` takes:
+    where the marker is recognized the emitter replaces it, and where it is not
+    `digest` stays on the static-length markers. So it is written for
+    correctness, and the speculation it costs — every block the buffer could need
+    is packed, and the ones past the message selected away — is exactly the
+    data-dependent-length cost the emitter exists to avoid paying.
+    """
+    lmax = msg.shape[-1]
+    block, reserve = _PAD.block_size, _PAD.reserve
+    pos = fnp.arange(((lmax + reserve) // block + 1) * block, dtype=fnp.int32)
+
+    # Bytes at or past `length` are padding, so the message read is clamped into
+    # range rather than guarded: every lane it could spoil is selected away.
+    content = msg[:, fnp.clip(pos, 0, lmax - 1)]
+
+    active = _active_blocks(length) * fnp.int32(block)
+    len_start = active - fnp.int32(reserve)
+    len_val = _length_field(length)[fnp.clip(pos - len_start, 0, reserve - 1)]
+
+    return block_to_words(
+        fnp.where(
+            (pos < length)[None, :],
+            content,
+            fnp.where(
+                (pos == length)[None, :],
+                fnp.uint8(0x80),
+                fnp.where(
+                    ((pos >= len_start) & (pos < active))[None, :],
+                    len_val[None, :],
+                    fnp.uint8(0),
+                ),
+            ),
+        )
+    )
 
 
 def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array:
@@ -360,14 +470,117 @@ def sha256_bytes(msg: Array) -> Array:
     )
 
 
+def _capacity(msg: ArrayLike, length: int) -> int:
+    """The buffer width `digest` hashes a `length`-byte message out of.
+
+    A message still on the HOST is widened to the next power of two, floored at
+    one block. The width is what compilation is keyed on, so the policy trades
+    how many distinct buffers a caller compiles against how many padding bytes
+    it ships per call: doubling bounds the second under 2x the message while
+    keeping the first logarithmic — fifteen widths span a byte to a megabyte.
+    Widening it costs a numpy copy, and collapsing a compile per length into one
+    per width is the whole point of the form.
+
+    A message ALREADY on the device keeps its own extent, so nothing is padded
+    and only the marker changes. Widening it would be a dispatched device op
+    rather than a host copy — measured at 4.2x the digest it precedes (B = 256,
+    L = 65) — and it buys that caller nothing: a batch materialized at one length
+    is not re-entering the trace cache with new ones, and under `jit` the
+    enclosing trace compiles once whatever the width. So the capacity is
+    whatever buffer the caller already has.
+
+    Coarser widths are not ruled out by the kernel: measured on the pinned wheel,
+    a 32-byte message costs the same (~6 us at B = 256) in a 32-byte buffer as in
+    a 2048-byte one, because the emitter loops on the length operand — where
+    hashing the whole buffer instead would have cost 20x. What bounds the width
+    is the bytes crossing to the device, which a short message does not amortize.
+    """
+    if isinstance(msg, Array):
+        # `LMAX >= 1` is the recognizer's floor: the emitter's clamped
+        # message-side index needs somewhere in bounds to land, even at `len` 0.
+        return max(length, 1)
+    block = _PAD.block_size
+    return block if length <= block else 1 << (length - 1).bit_length()
+
+
+# Module-level jit zone for the same reason as `sha256_bytes` above.
+@partial(frx.jit, inline=True)
+def sha256_bytes_len(buf: Array, length: Array) -> Array:
+    """Whole-message SHA-256 over the live prefix of a capacity buffer, as ONE
+    marked region: uint8 [B, LMAX] with an int32 scalar byte count -> uint8
+    [B, 32].
+
+    The digest is of `buf[:, :length]`; `LMAX` sizes the allocation and nothing
+    else, since the emitter loops on `length` and never reads past it. That is
+    the whole point of the form — one compiled kernel serves every length the
+    buffer can hold, where `sha256_bytes` carries the length in its message
+    shape and so compiles once per length.
+
+    `length` rides as an int32 SCALAR — `np.int32`, not a Python int and not a
+    device array. `jit` keys on an operand's aval rather than its value, so any
+    of the three compiles once; the two rejected spellings differ elsewhere. A
+    Python int is weakly typed, so an x64 build would widen it to `s64[]`, which
+    the recognizer declines — inlining the decomposition for right bytes and no
+    kernel, the silent mode this package's floor exists to prevent. A device
+    scalar pins the type but costs a transfer per call, measured at ~14 us
+    against the ~3 us digest it accompanies.
+
+    It is one scalar for the whole batch (`SHA256_BYTES_LEN_MARKER` says why), so
+    every row of `buf` is hashed at the same length.
+
+    Whole-message only, as `sha256_bytes` is: a resumed stream pads at its
+    running total rather than at `length`.
+
+    Operands are explicit in the recognizer's positional ABI order
+    [h0, k, msg, len], for the reason `sha256_bytes` states — a captured constant
+    would prepend and land at operand 0.
+    """
+    if buf.shape[-1] < 1:
+        # The recognizer's floor, restated where it can still be a clear error.
+        # It declines a zero-width buffer, which would leave the decomposition to
+        # run — and that one indexes the message through a clamp with no byte to
+        # clamp to. The empty message is `length = 0` in a buffer of at least one
+        # byte, never a buffer of none.
+        raise ValueError(
+            f"buf must be uint8 [B, LMAX >= 1], got width {buf.shape[-1]}: an "
+            "empty message is length 0 in a non-empty buffer"
+        )
+
+    def decomposition(
+        h0: Array, k: Array, msg: Array, ln: Array, **_attrs: object
+    ) -> Array:
+        words = _runtime_padded_words(msg, ln)
+        live = _active_blocks(ln)
+        state = fnp.broadcast_to(h0, (msg.shape[0], 8))
+        # The block count is runtime data, so every block the buffer could need
+        # is compressed and the ones past the message selected away. Static and
+        # small, and never the routed path (`_runtime_padded_words` says why).
+        for i in range(words.shape[1]):
+            state = fnp.where(i < live, _compress(state, words[:, i], k), state)
+        return serialize_digest(state)
+
+    return fused_region(
+        decomposition,
+        INITIAL_STATE,
+        _Kd,
+        buf,
+        length,
+        name=SHA256_BYTES_LEN_MARKER,
+        version=SHA256_BYTES_LEN_MARKER_VERSION,
+    )
+
+
 def digest(msg: ArrayLike) -> fnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
     Byte-identical to the FIPS 180-4 standard per message. The device
     compression is emitted as one name-routed marker; which one depends on the
-    pinned plugin: the raw-bytes form (`sha256_bytes`) where its recognizer
-    exists, else the blocks form with the padded words packed here — the two
-    produce identical bytes, split only by where the padding runs.
+    pinned plugin. The runtime-length form (`sha256_bytes_len`) where its
+    recognizer exists, hashing out of a `_capacity` buffer so that a host caller
+    whose lengths vary compiles once per width rather than once per length; else
+    the raw-bytes form (`sha256_bytes`); else the blocks form with the padded
+    words packed here. All three produce identical bytes, and differ only in
+    where the padding runs and in what the compilation is keyed on.
 
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash inside
     its own `@jit` or `vmap` without reaching past the seam for
@@ -376,6 +589,11 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     buffer holding the message, so the message had to be concrete. Built from the
     length instead, it never reads the message at all.
     """
+    if _routes_to_bytes_len_marker():
+        length = message_length(msg)
+        return sha256_bytes_len(
+            message_at_capacity(msg, _capacity(msg, length)), np.int32(length)
+        )
     msg = device_message(msg)
     if _routes_to_bytes_marker():
         return sha256_bytes(msg)
@@ -438,19 +656,6 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     — the CPU-safe pattern `transcript.DuplexTranscript` uses."""
 
     return _STREAM.absorb(state, data)
-
-
-def _length_field(msg_bytes: Array) -> Array:
-    """FIPS 180-4 §5.1.1's 64-bit message length, in bits, big-endian: uint8 [8].
-
-    Carried as a uint32 half pair off the int32 byte count, because the bit
-    length outgrows a uint32: a count near 2^31 has a bit length near 2^34, so
-    `count * 8` in one word wraps at 512 MiB and encodes a shorter message —
-    the same digest for two different lengths. The high half is the count's top
-    3 bits, the low half the count shifted into place.
-    """
-    count = msg_bytes.astype(fnp.uint32)
-    return unpack_be(fnp.stack([count >> fnp.uint32(29), count << fnp.uint32(3)]))
 
 
 # The incremental schedule, with this family's pieces plugged in. `chain` is
