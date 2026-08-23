@@ -52,8 +52,8 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.blake3.blake3 import BLOCK_LEN
-from hash_frx.blake3.byte_hashes import (
+from hash_frx.blake3.modes import BLOCK_LEN
+from hash_frx.blake3.rows import (
     Blake3,
     Blake3DeriveKey,
     Blake3Keyed,

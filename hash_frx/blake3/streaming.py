@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Incremental BLAKE3 — the reference `Hasher` as a fixed-shape pytree.
 
-`blake3.digest` hashes a whole message whose length is static, which is not what
+`rows.digest` hashes a whole message whose length is static, which is not what
 a caller holding a *prefix* has: a byte Fiat-Shamir transcript absorbs a round's
 framing at a time, and how much it has absorbed by round `k` is a runtime value
 inside the loop. So this keeps BLAKE3's hasher between calls, the way
@@ -49,7 +49,7 @@ So `_compress1` carries `hash_frx.compress.blake3`, and the three hops that
 finish one node ride it: the absorb path's block, the subtree merge, and
 finalize's stack fold. The two traced counts above stay outside it.
 
-The root read does not. `blake3.root_bytes` repeats one node's compression at an
+The root read does not. `modes.root_bytes` repeats one node's compression at an
 output-block counter running 0, 1, 2 …, which is a batch of rows rather than a
 node — the one place BLAKE3's own `[B, ...]` primitive is already the right
 shape, and re-spelling it here would fork the extendable-output logic that lives
@@ -67,17 +67,29 @@ import frx.numpy as fnp
 from frx import Array, lax
 from frx.tree_util import register_dataclass
 
-from hash_frx.blake3 import blake3
+from hash_frx.blake3 import modes
 from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, PARENT, compress
 from hash_frx.fusion import fused_region
 from hash_frx.word import pack_le
 
 U32 = fnp.uint32
 
-BLOCK_LEN = blake3.BLOCK_LEN  # 64
+# The compression on its own, for the one consumer the two markers above cannot
+# reach: a resumable state. `hash_frx.digest.blake3` spans chunks, tree and root
+# output, so a stream — which holds a chunk CV, a subtree stack, a counter and a
+# partial block, and is mid-tree by definition — can never be a call of it.
+# SHA-256 needs no equivalent because its whole resumable state is one chaining
+# value, which `hash_frx.digest.sha256` already takes as an operand; a sponge needs
+# none because its state *is* the permutation's, so streaming rides
+# `hash_frx.perm.keccak_f`. BLAKE3 is the only row here whose existing marker
+# granularity a streaming consumer cannot hit, which is what this closes.
+BLAKE3_COMPRESS_MARKER = "hash_frx.compress.blake3"
+BLAKE3_COMPRESS_MARKER_VERSION = 1
+
+BLOCK_LEN = modes.BLOCK_LEN  # 64
 # A chaining value is the low half of a compression's sixteen output words.
 CV_WORDS = 8
-BLOCKS_PER_CHUNK = blake3.CHUNK_LEN // BLOCK_LEN  # 16
+BLOCKS_PER_CHUNK = modes.CHUNK_LEN // BLOCK_LEN  # 16
 # The reference's bound: a 2^64-chunk input needs 54 levels of subtree stack.
 MAX_STACK = 54
 
@@ -85,7 +97,7 @@ MAX_STACK = 54
 # chunk and every parent opens from are the IV, and the mode contributes no flag.
 # A keyed state would differ in exactly these two values and nothing else here,
 # which is why they are named rather than inlined.
-_MODE = blake3.hash_mode()
+_MODE = modes.hash_mode()
 _KEY_WORDS = _MODE.key_words
 _MODE_FLAGS = U32(_MODE.flags)
 
@@ -134,8 +146,8 @@ def _compress1(
         block_len[None],
         flags[None],
         _MODE.iv,
-        name=blake3.BLAKE3_COMPRESS_MARKER,
-        version=blake3.BLAKE3_COMPRESS_MARKER_VERSION,
+        name=BLAKE3_COMPRESS_MARKER,
+        version=BLAKE3_COMPRESS_MARKER_VERSION,
     )[0]
 
 
@@ -155,10 +167,10 @@ def _bit(counter: Array, i: Array) -> Array:
 
 def _output(
     icv: Array, blk: Array, ctr: Array, blen: Array, flags: Array
-) -> blake3.Output:
+) -> modes.Output:
     """A one-row unrun node. `iv` is the mode's and constant, so it rides here
     rather than through the merge carry."""
-    return blake3.Output(
+    return modes.Output(
         icv[None, :],
         blk[None, :],
         ctr[None, :],
@@ -276,7 +288,7 @@ class Blake3Stream:
         and the same 1,783 at 3 bytes as at 5,000 — the block loop is traced once
         — so a caller absorbing three times per round would re-emit all of it
         three times, under a round loop unrolled on top of that.
-        `blake3.tree_hash` is a zone for the same reason and gives the opposite
+        `rows.tree_hash` is a zone for the same reason and gives the opposite
         `inline=` answer: that one has to splice back in to keep one composite
         per hash, and there is no composite here to keep.
         """
@@ -364,7 +376,7 @@ class Blake3Stream:
             slen = slen - U32(1)
             left = lax.dynamic_index_in_dim(self.cv_stack, slen, axis=0, keepdims=False)
             cv = _compress1(icv, blk, ctr, blen, flags)[:CV_WORDS]
-            parent = blake3.parent_output(left[None, :], cv[None, :], _MODE)
+            parent = modes.parent_output(left[None, :], cv[None, :], _MODE)
             return (
                 parent.input_chaining_value[0],
                 parent.block[0],
@@ -375,7 +387,7 @@ class Blake3Stream:
             )
 
         icv, blk, ctr, blen, flags, _ = lax.while_loop(cond, body, carry)
-        return blake3.root_bytes(_output(icv, blk, ctr, blen, flags), out_len)[0]
+        return modes.root_bytes(_output(icv, blk, ctr, blen, flags), out_len)[0]
 
 
 def blake3_stream_init() -> Blake3Stream:

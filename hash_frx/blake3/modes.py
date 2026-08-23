@@ -1,13 +1,23 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""BLAKE3's chunk and tree — a whole hash, at any length, in any of its modes.
+"""BLAKE3's construction, as a function of which of its three modes is running.
 
-Spec sections 2.1, 2.4 and 2.5. A chunk is up to 1024 bytes split into 64-byte
-blocks, each compressed into the next one's chaining value, with `CHUNK_START`
-on the first block, `CHUNK_END` on the last, the chunk's index as the counter on
-every one, and the trailing block's true byte count riding as `block_len` — so
-the zeros that fill that block out to 64 bytes are never mistaken for message.
-Above the chunks, a binary tree of parent compressions folds their chaining
-values down to one, and the topmost node carries `ROOT`.
+Spec sections 2.1, 2.3, 2.4 and 2.5. A chunk is up to 1024 bytes split into
+64-byte blocks, each compressed into the next one's chaining value, with
+`CHUNK_START` on the first block, `CHUNK_END` on the last, the chunk's index as
+the counter on every one, and the trailing block's true byte count riding as
+`block_len` — so the zeros that fill that block out to 64 bytes are never
+mistaken for message. Above the chunks, a binary tree of parent compressions
+folds their chaining values down to one, and the topmost node carries `ROOT`.
+
+**A mode is a key and a flag, and nothing else about BLAKE3 moves.** Hash mode
+opens every node from the IV; keyed hashing puts a caller's 32 bytes there and
+sets `KEYED_HASH` on every compression; key derivation is that construction run
+twice, the first pass hashing the context string under `DERIVE_KEY_CONTEXT` to
+produce the key the second opens from (spec section 2.3). So the chunk, the tree
+and the root below are ONE implementation threaded with a `Mode` rather than
+three that would drift, and only `Mode` names which of the three is running.
+That is what this module is: the whole unmarked hash, parameterized on the mode,
+with the named and marked surface over it in [`rows.py`](rows.py).
 
 **A chunk is a chain; everything else is a batch.** Blocks inside a chunk each
 feed the next, so there is nothing to parallelize there — but chunks do not
@@ -16,10 +26,13 @@ neighbour's output), and nor do the nodes within a tree level. So the chunks are
 one batched call and each tree level is one more, which is the property BLAKE3
 was chosen for.
 
-**The tree is built by level, and that is the spec's tree exactly.** Adjacent
-nodes pair into parents from the bottom and an odd trailing node rides up
-unpaired, so a message of `n` chunks costs `ceil(log2(n))` batched compressions
-rather than a walk over `2n - 1` nodes. `tree_output` argues the equivalence.
+**The schedule is [`extension/tree.py`](../extension/tree.py) and the spelling is
+here.** That module answers how many blocks a chunk holds, which nodes pair with
+which on the way up, and how many compressions an output request spans; it emits
+no operation, because a shared helper that takes an array fixes that array's
+emission order for every caller. What ops those answers are carried out with —
+the flag schedule, the counter halves, the word packing — is this module's, and
+stays here for exactly that reason.
 
 **A node's final compression stays pending.** One node becomes a chaining value
 under a tree, a digest at the root, and — by repeating that same compression
@@ -29,14 +42,6 @@ differ, so `chunk_output` and `parent_output` return the compression they have
 *not* run and the caller finishes it with `chaining_value` or `root_words`.
 Finishing a second way then costs one compression rather than the whole subtree
 again, and reading further costs one more per 64 bytes.
-
-**A mode is a key and a flag, and nothing else about BLAKE3 moves.** Hash mode
-opens every node from the IV; keyed hashing puts a caller's 32 bytes there and
-sets `KEYED_HASH` on every compression; key derivation is that construction run
-twice, the first pass hashing the context string under `DERIVE_KEY_CONTEXT` to
-produce the key the second opens from (spec section 2.3). So the chunk, the
-tree and the root below are one implementation threaded with a `Mode` rather
-than three that would drift, and only `Mode` names which of the three is running.
 
 Message length is static, so the chunk count, the tree shape, the block count,
 the flag schedule and every block length are compile-time constants: the loops
@@ -48,9 +53,7 @@ holds for the same reason.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from functools import partial
 
-import frx
 import frx.numpy as fnp
 import numpy as np
 from frx import Array
@@ -69,45 +72,9 @@ from hash_frx.blake3.compress import (
 )
 from hash_frx.byte_hash import padded_batch
 from hash_frx.extension import tree
-from hash_frx.fusion import fused_region
 from hash_frx.word import pack_le, unpack_le
 
 U32 = fnp.uint32
-
-BLAKE3_MARKER = "hash_frx.digest.blake3"
-# Marker revision riding as `composite.version`, the way `hash_frx.digest.sha256`
-# carries one: a contract change stages through it rather than through a rename,
-# which the recognizer would not accept and which would silently lose fusion.
-BLAKE3_MARKER_VERSION = 1
-
-# A Merkle parent is a different construction, so it takes a name of its own
-# rather than an attribute on the one above.
-#
-# The pull to reuse `hash_frx.digest.blake3` is real — the operands have the same
-# shapes, and `non_root` is precedent for selecting a variant by attribute. It
-# is wrong, and silently: a recognizer matches by NAME, so a shipped emitter
-# that predates the attribute recognizes the marker anyway, ignores what it
-# does not know, and runs the message-hash construction on a pair of chaining
-# values. Measured on frx 0.10.2.dev20260813075049 — a parent marked that way
-# returned the 64-byte message hash rather than the parent compression, with
-# the right decomposition sitting unused in the module. An unrecognized NAME
-# has no such failure: the composite inlines and the bytes stay right while
-# only fusion is lost (see `fusion.py`), so a new name degrades safely where a
-# new attribute degrades wrongly.
-BLAKE3_PARENT_MARKER = "hash_frx.compress.blake3_parent"
-BLAKE3_PARENT_MARKER_VERSION = 1
-
-# The compression on its own, for the one consumer the two markers above cannot
-# reach: a resumable state. `hash_frx.digest.blake3` spans chunks, tree and root
-# output, so a stream — which holds a chunk CV, a subtree stack, a counter and a
-# partial block, and is mid-tree by definition — can never be a call of it.
-# SHA-256 needs no equivalent because its whole resumable state is one chaining
-# value, which `hash_frx.digest.sha256` already takes as an operand; a sponge needs
-# none because its state *is* the permutation's, so streaming rides
-# `hash_frx.perm.keccak_f`. BLAKE3 is the only row here whose existing marker
-# granularity a streaming consumer cannot hit, which is what this closes.
-BLAKE3_COMPRESS_MARKER = "hash_frx.compress.blake3"
-BLAKE3_COMPRESS_MARKER_VERSION = 1
 
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
@@ -601,6 +568,19 @@ def _chunk_chaining_values(message: Array, nchunks: int, mode: Mode) -> Array:
     )
 
 
+def _message(msg: ArrayLike) -> Array:
+    """A message as the uint8 `[B, L]` batch every mode hashes.
+
+    The rank is checked here rather than left to `tree_output` so a caller
+    holding the wrong one is told so eagerly, rather than from inside the trace
+    of the marked region.
+    """
+    message = fnp.asarray(msg, dtype=fnp.uint8)
+    if message.ndim != 2:
+        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
+    return message
+
+
 def tree_output(msg: ArrayLike, mode: Mode) -> Output:
     """The root node of a message's tree, assembled but not run.
 
@@ -683,7 +663,7 @@ def keyed_mode(key: ArrayLike | bytes) -> Mode:
     caller keying per call compiles once and re-keys without re-tracing, and the
     key stays out of the compiled program's constant pool. `bytes` is accepted
     for the literal case and *does* bake in, which is the trade
-    [`byte_hashes.py`](byte_hashes.py) makes to fit the `ByteHash` seam.
+    [`rows.py`](rows.py) makes to fit the `ByteHash` seam.
     """
     words = _bytes_array(key)
     if words.shape != (KEY_LEN,):
@@ -750,362 +730,3 @@ def derive_key_mode(context: str | bytes) -> Mode:
     context_pass = replace(hash_mode(), flags=DERIVE_KEY_CONTEXT)
     words = root_words(tree_output(data.reshape(1, -1), context_pass))
     return Mode(words[0, :8], DERIVE_KEY_MATERIAL)
-
-
-def _message(msg: ArrayLike) -> Array:
-    """A message as the uint8 `[B, L]` batch every mode hashes.
-
-    The rank is checked here rather than left to `tree_output` so a caller
-    holding the wrong one is told so eagerly, rather than from inside the trace
-    of the marked region.
-    """
-    message = fnp.asarray(msg, dtype=fnp.uint8)
-    if message.ndim != 2:
-        raise ValueError(f"msg must be 2-D uint8 [B, L], got ndim={message.ndim}")
-    return message
-
-
-def unmarked_hash(msg: ArrayLike, mode: Mode, out_len: int) -> Array:
-    """A whole BLAKE3 hash with no marker on it: uint8 `[B, L]` -> `[B, out_len]`.
-
-    The tree and its root output, which is the entire hash — every mode, every
-    length. `tree_hash` is this under the `hash_frx.digest.blake3` composite, and an
-    unrecognized composite inlines to exactly this, so the two are one
-    implementation rather than two spellings that could drift.
-
-    Exported because the suite needs the unmarked side by name: a marked call
-    compiles its whole unrolled body, which is affordable at a block and not at a
-    chunk (`blake3_test` measures it), so the value tables read the hash here
-    while the marker is asserted on the lowered module. Byte-exactness against
-    the published vectors therefore still pins one implementation, not a test
-    double — `docs/reference/conventions.md` forbids the latter, and rightly.
-    """
-    return root_bytes(tree_output(msg, mode), out_len)
-
-
-def _pair_bytes(pairs: ArrayLike) -> Array:
-    """A parent's two children as the uint8 `[B, 2*32]` batch it compresses:
-    left ‖ right chaining values, 32 bytes each.
-
-    Checked here for the reason `_message` checks a message — a caller holding
-    the wrong width otherwise reads a reshape error against an intermediate it
-    never wrote, and a `[B, 63]` operand would reshape-fail while a `[B, 128]`
-    one would silently hash the wrong pair.
-    """
-    block = fnp.asarray(pairs, dtype=fnp.uint8)
-    if block.ndim != 2:
-        raise ValueError(
-            f"pairs must be 2-D uint8 [B, {2 * DIGEST_LEN}], got ndim={block.ndim}"
-        )
-    if block.shape[1] != 2 * DIGEST_LEN:
-        raise ValueError(
-            f"pairs must be two {DIGEST_LEN}-byte chaining values end to end, "
-            f"got {block.shape[1]} bytes"
-        )
-    return block
-
-
-def unmarked_non_root_hash(msg: ArrayLike, mode: Mode) -> Array:
-    """A whole BLAKE3 tree finished WITHOUT `ROOT`, no marker: uint8 `[B, L]`
-    -> `[B, 32]`.
-
-    `unmarked_hash`'s sibling for the non-root contract: the same tree, its
-    final node finished by `chaining_value` instead of `root_bytes`. What
-    `tree_hash(non_root=True)` inlines to when no emitter is wired, exported
-    for the same suite-needs-the-unmarked-side reason as `unmarked_hash`.
-    """
-    return unpack_le(chaining_value(tree_output(msg, mode)))
-
-
-def unmarked_parent_hash(pairs: ArrayLike, mode: Mode) -> Array:
-    """One non-root PARENT compression, no marker: uint8 `[B, 64]` -> `[B, 32]`.
-
-    `unmarked_non_root_hash`'s sibling one level up: where that finishes the
-    final node of a *message*'s tree, this compresses a pair of chaining values
-    the way every internal level of a Merkle tree over BLAKE3's own semantics
-    does. Exported by name for the same reason its siblings are — the suite
-    reads the unmarked side while the marker is asserted on the lowered module.
-
-    Not expressible as a hash of the 64 bytes: a message of that length sets
-    `CHUNK_START|CHUNK_END` and a real counter, where a parent sets `PARENT`
-    with a zero counter and opens from the key words (spec section 2.5). The
-    two produce different bytes from the same input, which is why the message
-    entry cannot be pointed at a parent level.
-    """
-    block = _pair_bytes(pairs)
-    words = pack_le(block.reshape(block.shape[0], 2, DIGEST_LEN))
-    return unpack_le(chaining_value(parent_output(words[:, 0], words[:, 1], mode)))
-
-
-# Module-level jit zone: `lax.composite` re-traces its decomposition on every
-# emission, and a Merkle commit emits a digest per leaf and per internal level —
-# so the uncached re-trace of a 16-compression body would dominate the
-# first-trace floor (cf. `sha256.sha256_merkle_damgard`). `inline=True` splices
-# the cached jaxpr into the enclosing trace, so the emitted module — one
-# composite per hash — is unchanged. `out_len`, `flags` and `non_root` are
-# static: each fixes the shape or the finalization of the emitted program, and
-# each rides the marker as an attribute.
-@partial(frx.jit, inline=True, static_argnames=("out_len", "flags", "non_root"))
-def tree_hash(
-    msg: Array, key_words: Array, *, out_len: int, flags: int, non_root: bool = False
-) -> Array:
-    """A whole BLAKE3 hash — chunks, tree and root output — as the name-routed
-    `hash_frx.digest.blake3` composite: uint8 `[B, L]` -> uint8 `[B, out_len]`.
-
-    All three modes route through here, because all three are this one
-    construction under a different key and flag (spec section 2.3), so a
-    recognizing emitter implements the hash once rather than once per mode.
-    BLAKE3 is a tree of chained compressions rather than a straight-line body, so
-    it takes a name-routed marker (exempt from the generic single-kernel rule,
-    the way `hash_frx.perm.poseidon2` and `hash_frx.digest.sha256` are); with no emitter
-    wired the composite inlines its decomposition and the bytes are unchanged.
-
-    **The operand ABI**, positional, and the whole of what an emitter reads:
-
-    0. `msg`       — uint8 `[B, L]`, `B` equal-length messages. `L` is static, so
-                     the chunk count, the tree shape, the block count and every
-                     block length are shape constants rather than data a kernel
-                     reads. The trailing block of a chunk is zero-padded to 64
-                     bytes and its true byte count reaches the compression as
-                     `block_len` (spec section 2.4).
-    1. `key_words` — uint32 `[8]`, little-endian: what every chunk and every
-                     parent opens from in place of a child's chaining value. The
-                     IV in hash mode, the caller's 32 bytes under `KEYED_HASH`,
-                     the context pass's digest under `DERIVE_KEY_MATERIAL`. One
-                     key serves the whole batch, broadcast across the rows.
-    2. `iv`        — uint32 `[8]`, the spec IV (section 2.2, Table 1), whose
-                     first four words open every compression's third state row in
-                     every mode. An operand rather than a constant the body
-                     builds, because a `lax.composite` lifts such a constant into
-                     an operand *ahead* of the explicit ones, one per call site —
-                     which would make the ABI a function of the message length.
-
-    **The attributes.** `out_len`, the output byte count (32 for a digest), and
-    `flags`, the mode flag: one of `0`, `KEYED_HASH`, `DERIVE_KEY_CONTEXT`,
-    `DERIVE_KEY_MATERIAL`, never a mask. The flags a node's own position carries
-    — `CHUNK_START`, `CHUNK_END`, `PARENT`, `ROOT` — belong to the hash rather
-    than the caller, so the emitter derives them and they never appear here.
-    Under `non_root=True` a third attribute `non_root = 1` rides.
-
-    **The result.** uint8 `[B, out_len]`: the root node's extendable output read
-    from the start (spec section 2.6), which at `out_len = 32` is the standard
-    digest. Under `non_root=True` it is instead the final node's 32-byte
-    chaining value — the same compression without `ROOT`, which is what a
-    Merkle tree built on BLAKE3's own tree semantics (leaf =
-    `finalize_non_root`) commits to. A chaining value is one 256-bit value, not
-    a stream, so `out_len` must be 32: extending output is the `ROOT`
-    compression's mechanism, which non-root finalization by definition never
-    runs.
-
-    Nothing else varies. The counter is the chunk index on a chunk's blocks and
-    zero on a parent, with a zero high half (a static shape cannot reach 2^32 of
-    either); on the root it is the output-block index. The tree pairs adjacent
-    nodes from the bottom and carries an odd trailing node up unpaired, which is
-    the spec's recursion for every chunk count — `tree_output` argues that.
-    """
-
-    if non_root:
-        if out_len != DIGEST_LEN:
-            raise ValueError(
-                f"a chaining value is exactly {DIGEST_LEN} bytes, got out_len={out_len}"
-            )
-
-        def cv_decomposition(
-            message: Array, key: Array, iv: Array, **_attrs: object
-        ) -> Array:
-            return unmarked_non_root_hash(message, Mode(key, flags, iv))
-
-        return fused_region(
-            cv_decomposition,
-            msg,
-            key_words,
-            IV_WORDS,
-            name=BLAKE3_MARKER,
-            version=BLAKE3_MARKER_VERSION,
-            out_len=out_len,
-            flags=flags,
-            non_root=1,
-        )
-
-    def decomposition(message: Array, key: Array, iv: Array, **_attrs: object) -> Array:
-        return unmarked_hash(message, Mode(key, flags, iv), out_len)
-
-    return fused_region(
-        decomposition,
-        msg,
-        key_words,
-        IV_WORDS,
-        name=BLAKE3_MARKER,
-        version=BLAKE3_MARKER_VERSION,
-        out_len=out_len,
-        flags=flags,
-    )
-
-
-@partial(frx.jit, inline=True, static_argnames=("flags",))
-def parent_hash(pairs: Array, key_words: Array, *, flags: int) -> Array:
-    """One non-root `PARENT` compression as the `hash_frx.compress.blake3_parent`
-    composite: uint8 `[B, 64]` -> uint8 `[B, 32]`.
-
-    A Merkle tree built on BLAKE3's tree semantics hashes its leaves through
-    `tree_hash(non_root=True)` and then compresses pairs up the levels through
-    here, so an emitter that recognizes both fuses a whole level either side of
-    the leaf boundary. Its own marker rather than an attribute on that one, for
-    the reason `BLAKE3_PARENT_MARKER` states. The jit zone is here for
-    `tree_hash`'s reason: a commit emits one of these per internal node, and an
-    uncached re-trace per emission would dominate the first-trace floor.
-
-    **The operand ABI**, positional, and the whole of what an emitter reads:
-
-    0. `pairs`     — uint8 `[B, 64]`, `B` parent nodes, each the left child's
-                     32-byte chaining value followed by the right child's
-    1. `key_words` — uint32 `[8]`, what a parent opens from in place of a
-                     child's chaining value. Same operand, same meaning, and
-                     same broadcast across the batch as on a message hash.
-    2. `iv`        — uint32 `[8]`, the spec IV, an operand for the reason
-                     `tree_hash` states.
-
-    **The attributes.** `non_root = 1` selects the finalization, which is
-    `chaining_value` rather than `root_bytes` — carried rather than implied
-    because the root of a Merkle tree is the same construction finished WITH
-    `ROOT`, which no consumer needs yet but which this marker would express by
-    dropping the attribute. `out_len` is 32 and `flags` is the mode, read
-    exactly as on a message hash so an emitter shares one attribute reader. The
-    positional flags a node's own role carries — `PARENT` here — stay the
-    emitter's to derive, so `flags` remains a mode and never a mask.
-
-    **The result.** uint8 `[B, 32]`: the parent's chaining value, what it
-    contributes to the level above.
-    """
-
-    def decomposition(block: Array, key: Array, iv: Array, **_attrs: object) -> Array:
-        return unmarked_parent_hash(block, Mode(key, flags, iv))
-
-    return fused_region(
-        decomposition,
-        pairs,
-        key_words,
-        IV_WORDS,
-        name=BLAKE3_PARENT_MARKER,
-        version=BLAKE3_PARENT_MARKER_VERSION,
-        out_len=DIGEST_LEN,
-        flags=flags,
-        non_root=1,
-    )
-
-
-def _marked_hash(
-    mode: Mode, msg: ArrayLike, out_len: int, non_root: bool = False
-) -> Array:
-    """`tree_hash` from a `Mode`: the one place a mode is taken apart for the
-    marker, so which of its fields is an operand and which is an attribute is
-    stated once rather than at each of the entry points."""
-    return tree_hash(
-        _message(msg),
-        mode.key_words,
-        out_len=out_len,
-        flags=mode.flags,
-        non_root=non_root,
-    )
-
-
-def digest(msg: ArrayLike) -> Array:
-    """BLAKE3 of a batch of equal-length messages: uint8 `[B, L]` -> `[B, 32]`.
-
-    Byte-identical to the standard per message, at any length. `msg` may be a
-    tracer, so a consumer can hash inside its own `@jit` or `vmap`.
-
-    The 32 bytes are the head of the root's extendable output rather than a
-    different computation, which is the standard's own construction and why this
-    is `root_bytes` at one block rather than a path of its own.
-    """
-    return xof(msg, DIGEST_LEN)
-
-
-def xof(msg: ArrayLike, out_len: int) -> Array:
-    """BLAKE3 read out to `out_len` bytes: uint8 `[B, L]` -> `[B, out_len]`.
-
-    Byte-identical to the standard per message, at any input length and any
-    output length. `digest` is this at 32, which is the standard's own
-    construction rather than a shortcut — the digest is the head of the stream.
-    """
-    return _marked_hash(hash_mode(), msg, out_len)
-
-
-def non_root_digest(msg: ArrayLike) -> Array:
-    """The chaining value of a batch of messages: uint8 `[B, L]` -> `[B, 32]`.
-
-    The final node of `msg`'s tree finished WITHOUT `ROOT` — BLAKE3's
-    `finalize_non_root`, the value a node contributes when a tree continues
-    ABOVE it. A Merkle tree built on BLAKE3's own tree semantics (flock-
-    challenge's, `blake3::hazmat::merge_subtrees_non_root`'s) commits to leaf
-    chaining values, and this entry is that leaf hash as one marked region, so
-    an emitter can fuse a whole leaf level.
-
-    Hash mode only: the known consumers key nothing, and the seam grows a mode
-    when a consumer has to make the choice and cannot.
-    """
-    return _marked_hash(hash_mode(), msg, DIGEST_LEN, non_root=True)
-
-
-def parent_digest(pairs: ArrayLike) -> Array:
-    """A Merkle parent's chaining value: uint8 `[B, 64]` -> `[B, 32]`.
-
-    `non_root_digest`'s partner one level up. That entry hashes the leaves of a
-    Merkle tree built on BLAKE3's own semantics; this compresses each pair of
-    child chaining values into the node above it, which is BLAKE3's
-    `merge_subtrees_non_root` — so a whole parent level is one marked region
-    rather than a traced compression per node.
-
-    Hash mode only, for `non_root_digest`'s reason: the known consumers key
-    nothing, and the seam grows a mode when a consumer has to make the choice
-    and cannot.
-    """
-    mode = hash_mode()
-    return parent_hash(_pair_bytes(pairs), mode.key_words, flags=mode.flags)
-
-
-def keyed_digest(key: ArrayLike | bytes, msg: ArrayLike) -> Array:
-    """Keyed BLAKE3: uint8 `[B, L]` under a 32-byte key -> `[B, 32]`.
-
-    Byte-identical to the standard's `keyed_hash` per message. `digest` is this
-    with the IV as the key and the mode flag dropped, which is the only
-    difference between the two — a keyed hash of a message shares no compression
-    with the unkeyed one.
-    """
-    return keyed_xof(key, msg, DIGEST_LEN)
-
-
-def keyed_xof(key: ArrayLike | bytes, msg: ArrayLike, out_len: int) -> Array:
-    """Keyed BLAKE3 read out to `out_len` bytes: uint8 `[B, L]` -> `[B, out_len]`.
-
-    The stream is extendable in keyed mode for the reason it is in hash mode —
-    the mode reaches the node, and reading it further is the root's own
-    compression repeated (spec section 2.6).
-    """
-    return _marked_hash(keyed_mode(key), msg, out_len)
-
-
-def derive_key(
-    context: str | bytes, key_material: ArrayLike, out_len: int = DIGEST_LEN
-) -> Array:
-    """BLAKE3's KDF: `out_len` bytes derived from `key_material` under `context`.
-
-    context      : the domain separator, hashed once into the key the material
-                   pass opens from. The standard asks for a hardcoded, globally
-                   unique UTF-8 string — application name, date, purpose — so
-                   that two uses of one key material cannot collide.
-    key_material : uint8 `[B, L]`, the secret being derived from; it may be a
-                   tracer, and it is the *message*, never the key
-
-    Byte-identical to the standard's `derive_key` per row. Which of the two
-    arguments is hashed as what is the whole of this mode's fragility: the
-    context is the domain and the material is the message, and swapping them
-    derives well-formed bytes of the wrong thing.
-
-    The default length is here rather than in a `derive_key_digest` sibling
-    because there is nothing for such a name to distinguish: `digest`/`xof` and
-    `keyed_digest`/`keyed_xof` are pairs only so that each mode has one spelling
-    of "32 bytes", and this mode's is the default.
-    """
-    return _marked_hash(derive_key_mode(context), key_material, out_len)

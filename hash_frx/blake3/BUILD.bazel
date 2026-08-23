@@ -5,9 +5,9 @@ py_library(
     name = "blake3",
     srcs = [
         "__init__.py",
-        "blake3.py",
-        "byte_hashes.py",
         "compress.py",
+        "modes.py",
+        "rows.py",
         "streaming.py",
     ],
     visibility = ["//visibility:public"],

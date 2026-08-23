@@ -36,6 +36,7 @@ tests share.
 | One-shot sponge hash — padding-free or Merkle–Damgård, selected per call                    | [`sponge.py`](../hash_frx/sponge.py)                 |
 | The sponge schedules themselves — the byte one over static counts, the field one over a runtime count, and why they are two | [`extension/sponge.py`](../hash_frx/extension/sponge.py) |
 | How a message becomes whole blocks — `PadRule` for Merkle–Damgård, `SpongePad` for the sponges | [`extension/pad.py`](../hash_frx/extension/pad.py) |
+| The tree schedule — the unit ceiling, the intra-chunk chain, and why bottom-up pairing is the spec's own tree | [`extension/tree.py`](../hash_frx/extension/tree.py) |
 | Interleaved absorb/squeeze with add-mode absorb, for a classic Fiat-Shamir prover            | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
 | n-to-1 truncated-permutation compression, for a hash tree                                   | [`compression.py`](../hash_frx/compression.py)       |
 
@@ -57,7 +58,7 @@ tests share.
 | SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256.py`](../hash_frx/sha256.py)                 |
 | SHA-512 — the 64-bit SHA-2 sibling over uint32 half pairs: batched digest, incremental midstate, the device / host `ByteHash` pair, and the truncated variants SHA-384 and SHA-512/256 as IV rows on the same marker | [`sha512.py`](../hash_frx/sha512.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
-| BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/byte_hashes.py`](../hash_frx/blake3/byte_hashes.py) |
+| BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/modes.py`](../hash_frx/blake3/modes.py), [`blake3/rows.py`](../hash_frx/blake3/rows.py) |
 | BLAKE2b — the HAIFA `ByteHash` pair: the device row over 64-bit half pairs behind its digest marker, and the host row over `hashlib` (why the host row came first) | [`blake2b/`](../hash_frx/blake2b) |
 | BLAKE2s — the 32-bit RFC 7693 sibling at native uint32: device and host rows on its own digest marker | [`blake2s.py`](../hash_frx/blake2s.py) |
 | SM3 — the GB/T 32905 ShangMi hash, SHA-256's structural cousin: device and host rows on its own digest marker | [`sm3.py`](../hash_frx/sm3.py) |

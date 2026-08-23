@@ -18,7 +18,8 @@ from hash_frx import blake2s, ripemd160, sha256, sha512, sm3, sponge
 from hash_frx.ascon import ascon
 from hash_frx.ascon import permutation as ascon_permutation
 from hash_frx.blake2b import blake2b
-from hash_frx.blake3 import blake3
+from hash_frx.blake3 import rows as blake3_rows
+from hash_frx.blake3 import streaming as blake3_streaming
 from hash_frx.grostl import grostl
 from hash_frx.keccak import permutation as keccak_permutation
 from hash_frx.keccak import sponge as keccak_sponge
@@ -42,9 +43,13 @@ _MODULE_CONSTANTS = {
     poseidon2.POSEIDON2_MARKER: poseidon2.POSEIDON2_MARKER_VERSION,
     keccak_permutation.KECCAK_F_MARKER: keccak_permutation.KECCAK_F_MARKER_VERSION,
     vision.VISION_MARKER: vision.VISION_MARKER_VERSION,
-    blake3.BLAKE3_MARKER: blake3.BLAKE3_MARKER_VERSION,
-    blake3.BLAKE3_PARENT_MARKER: blake3.BLAKE3_PARENT_MARKER_VERSION,
-    blake3.BLAKE3_COMPRESS_MARKER: blake3.BLAKE3_COMPRESS_MARKER_VERSION,
+    blake3_rows.BLAKE3_MARKER: blake3_rows.BLAKE3_MARKER_VERSION,
+    blake3_rows.BLAKE3_PARENT_MARKER: blake3_rows.BLAKE3_PARENT_MARKER_VERSION,
+    # The streaming compression's marker sits with its only emitter, which is
+    # the rule this file's module docstring states.
+    blake3_streaming.BLAKE3_COMPRESS_MARKER: (
+        blake3_streaming.BLAKE3_COMPRESS_MARKER_VERSION
+    ),
     sha256.SHA256_MARKER: sha256.SHA256_MARKER_VERSION,
     sha256.SHA256_BYTES_MARKER: sha256.SHA256_BYTES_MARKER_VERSION,
     sha512.SHA512_MARKER: sha512.SHA512_MARKER_VERSION,
