@@ -63,6 +63,11 @@ DERIVE_KEY_MATERIAL = 1 << 6
 MSG_PERMUTATION = (2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8)
 ROUNDS = 7
 
+# A chaining value is the low half of a compression's sixteen output words
+# (`compress` states the rule); every caller that continues a chain rather than
+# reading extendable output takes exactly this many.
+CV_WORDS = 8
+
 # Where each round reads the message, composed on the host so every round slices
 # the ORIGINAL block rather than a chain of six permuted copies. Round r's word i
 # is `_SCHEDULE[r][i]` of the input.
@@ -198,3 +203,32 @@ def compress(
         ],
         axis=1,
     )
+
+
+def compress_cv(
+    chaining_value: Array,
+    block: Array,
+    counter: Array,
+    block_len: Array,
+    flags: Array,
+    iv: Array = IV_WORDS,
+) -> Array:
+    """`compress`, read as the next chaining value: uint32 `[B, 8]`.
+
+    The same call and the same operands — only the read differs. A node that has
+    something above it (the next block of a chunk, a tree level, a parent) needs
+    the low half and nothing else, and a root needs all sixteen words because
+    extendable output is what the extra half IS (spec section 2.6).
+
+    Written once here rather than as a `[:, :CV_WORDS]` at each call site,
+    because "the first eight output words are the new chaining value" is a
+    property of the compression function rather than of any one caller, and a
+    site that sliced the wrong half would produce well-formed bytes of the wrong
+    value.
+
+    **The streaming path reads this rule outside a marked region instead**, and
+    has to: `hash_frx.compress.blake3` is the batched sixteen-word compression on
+    the wire, so narrowing it here would change the marker's result width. It
+    slices the region's result with the same `CV_WORDS` rather than a bare 8.
+    """
+    return compress(chaining_value, block, counter, block_len, flags, iv)[:, :CV_WORDS]

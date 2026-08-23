@@ -68,7 +68,13 @@ from frx import Array, lax
 from frx.tree_util import register_dataclass
 
 from hash_frx.blake3 import modes
-from hash_frx.blake3.compress import CHUNK_END, CHUNK_START, PARENT, compress
+from hash_frx.blake3.compress import (
+    CHUNK_END,
+    CHUNK_START,
+    CV_WORDS,
+    PARENT,
+    compress,
+)
 from hash_frx.fusion import fused_region
 from hash_frx.word import pack_le
 
@@ -87,8 +93,6 @@ BLAKE3_COMPRESS_MARKER = "hash_frx.compress.blake3"
 BLAKE3_COMPRESS_MARKER_VERSION = 1
 
 BLOCK_LEN = modes.BLOCK_LEN  # 64
-# A chaining value is the low half of a compression's sixteen output words.
-CV_WORDS = 8
 BLOCKS_PER_CHUNK = modes.CHUNK_LEN // BLOCK_LEN  # 16
 # The reference's bound: a 2^64-chunk input needs 54 levels of subtree stack.
 MAX_STACK = 54
@@ -151,6 +155,27 @@ def _compress1(
     )[0]
 
 
+def _chaining_value(
+    cv: Array, block_words: Array, counter: Array, block_len: Array, flags: Array
+) -> Array:
+    """`_compress1` read as the next chaining value: uint32 `[8]`.
+
+    Every one of the three hops a resumable state takes finishes a node that has
+    something above it — the chunk's next block, the subtree merge, the stack
+    fold — so every one wants the low half, and this is where that is said. It
+    was spelled `[:CV_WORDS]` at two of them and `[:8]` at the third, which is
+    the kind of drift that reads as a deliberate difference to the next person.
+
+    **The read stays outside the region, and has to.** `compress.compress_cv` is
+    the same rule one layer down, but narrowing it inside `_compress1` would
+    change `hash_frx.compress.blake3`'s result width — the marker is the batched
+    sixteen-word compression on the wire, and a marker's operand and result
+    shapes are an ABI (`hash_frx.fusion`). So the two spellings of the rule share
+    `CV_WORDS` rather than a call.
+    """
+    return _compress1(cv, block_words, counter, block_len, flags)[:CV_WORDS]
+
+
 def _counter_inc(counter: Array) -> Array:
     """The 64-bit chunk counter held as (low, high) uint32, plus one."""
     lo = counter[0] + U32(1)
@@ -206,13 +231,13 @@ def _push_chunk_cv(state: Blake3Stream, cv: Array) -> Blake3Stream:
         # its counter is zero however deep the tree is, its block is the two
         # children end to end, and PARENT rides over the mode (spec 2.5). The
         # same operands, so the bytes are `parent_output`'s by construction.
-        merged = _compress1(
+        merged = _chaining_value(
             _KEY_WORDS,
             fnp.concatenate([left, cv_]),
             fnp.zeros((2,), U32),
             U32(BLOCK_LEN),
             _MODE_FLAGS | U32(PARENT),
-        )[:CV_WORDS]
+        )
         return merged, slen, shift + U32(1)
 
     # The reference tests bit 0 of the completed-chunk count first, then shifts;
@@ -241,9 +266,9 @@ def _absorb_block(state: Blake3Stream, block: Array) -> Blake3Stream:
         | fnp.where(state.compressed == U32(0), U32(CHUNK_START), U32(0))
         | fnp.where(last, U32(CHUNK_END), U32(0))
     )
-    cv = _compress1(
+    cv = _chaining_value(
         state.chunk_cv, pack_le(block), state.counter, U32(BLOCK_LEN), flags
-    )[:8]
+    )
     advanced = replace(state, chunk_cv=cv, compressed=state.compressed + U32(1))
     return lax.cond(last, lambda s: _push_chunk_cv(s, cv), lambda s: s, advanced)
 
@@ -375,7 +400,7 @@ class Blake3Stream:
             icv, blk, ctr, blen, flags, slen = state
             slen = slen - U32(1)
             left = lax.dynamic_index_in_dim(self.cv_stack, slen, axis=0, keepdims=False)
-            cv = _compress1(icv, blk, ctr, blen, flags)[:CV_WORDS]
+            cv = _chaining_value(icv, blk, ctr, blen, flags)
             parent = modes.parent_output(left[None, :], cv[None, :], _MODE)
             return (
                 parent.input_chaining_value[0],

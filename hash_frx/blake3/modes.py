@@ -69,6 +69,7 @@ from hash_frx.blake3.compress import (
     PARENT,
     ROOT,
     compress,
+    compress_cv,
 )
 from hash_frx.byte_hash import padded_batch
 from hash_frx.extension import tree
@@ -214,14 +215,14 @@ def _chain(cv: Array, words: Array, counter: Array, first: int, mode: Mode) -> A
 
     def compress_block(cv: Array, i: int) -> Array:
         flags = mode.flags | (CHUNK_START if first + i == 0 else 0)
-        return compress(
+        return compress_cv(
             cv,
             words[:, i],
             counter,
             full_block,
             fnp.full((batch,), flags, dtype=U32),
             mode.iv,
-        )[:, :8]
+        )
 
     # `full_block` is built before the loop rather than inside `compress_block`
     # deliberately: one block length serves every block of the chain, and the
@@ -342,16 +343,18 @@ def chaining_value(output: Output) -> Array:
 
     The same compression `root_words` runs, without `ROOT` — which is the only
     difference between a node's chaining value and the root's output, and the
-    reason a node is assembled once and finished by whoever knows its role.
+    reason a node is assembled once and finished by whoever knows its role. The
+    two now differ by that flag and the read alone, which `compress_cv` is what
+    makes readable rather than asserted here.
     """
-    return compress(
+    return compress_cv(
         output.input_chaining_value,
         output.block,
         output.counter,
         output.block_len,
         output.flags,
         output.iv,
-    )[:, :8]
+    )
 
 
 def parent_output(left: Array, right: Array, mode: Mode) -> Output:

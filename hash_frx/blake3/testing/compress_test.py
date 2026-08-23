@@ -22,9 +22,11 @@ from absl.testing import absltest, parameterized
 from hash_frx.blake3.compress import (
     CHUNK_END,
     CHUNK_START,
+    CV_WORDS,
     IV,
     ROOT,
     compress,
+    compress_cv,
 )
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.vectors import SINGLE_BLOCK, official_input
@@ -239,6 +241,51 @@ class ValidationTest(absltest.TestCase):
             args[i] = fnp.asarray(np.asarray(args[i]).astype(np.int32))
             with self.subTest(operand=name), self.assertRaises(TypeError):
                 compress(*args)
+
+
+class ChainingValueReadTest(absltest.TestCase):
+    """`compress_cv` is the one place "the low half is the next chaining value"
+    is spelled, so what it must not do is read a different half."""
+
+    def test_is_the_low_half_of_the_full_compression(self) -> None:
+        rng = np.random.default_rng(21)
+        batch = 4
+        args = (
+            _u32(rng.integers(0, 2**32, size=(batch, 8), dtype=_U32)),
+            _u32(rng.integers(0, 2**32, size=(batch, 16), dtype=_U32)),
+            _u32(rng.integers(0, 2**31, size=(batch, 2), dtype=_U32)),
+            _u32(rng.integers(0, 65, size=batch, dtype=_U32)),
+            _u32(rng.integers(0, 128, size=batch, dtype=_U32)),
+        )
+        full = np.asarray(compress(*args))
+        cv = np.asarray(compress_cv(*args))
+        self.assertEqual(cv.shape, (batch, CV_WORDS))
+        np.testing.assert_array_equal(cv, full[:, :CV_WORDS])
+        # The half it must NOT be: the feed-forward makes the two differ, so a
+        # slice off the wrong end is a well-formed value of the wrong thing.
+        self.assertFalse(np.array_equal(cv, full[:, CV_WORDS:]))
+
+    def test_matches_the_reference_chaining_value(self) -> None:
+        rng = np.random.default_rng(22)
+        cv_in = rng.integers(0, 2**32, size=8, dtype=_U32)
+        block = rng.integers(0, 2**32, size=16, dtype=_U32)
+        got = np.asarray(
+            compress_cv(
+                _u32(cv_in[None, :]),
+                _u32(block[None, :]),
+                _u32(np.array([[3, 0]], dtype=_U32)),
+                _u32(np.array([64], dtype=_U32)),
+                _u32(np.array([CHUNK_START], dtype=_U32)),
+            )
+        )[0]
+        expected = ref.compress(
+            [int(w) for w in cv_in],
+            [int(w) for w in block],
+            3,
+            64,
+            CHUNK_START,
+        )[:CV_WORDS]
+        self.assertEqual([int(w) for w in got], expected)
 
 
 if __name__ == "__main__":
