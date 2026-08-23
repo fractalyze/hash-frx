@@ -68,6 +68,7 @@ from hash_frx.blake3.compress import (
     compress,
 )
 from hash_frx.byte_hash import padded_batch
+from hash_frx.extension import tree
 from hash_frx.fusion import fused_region
 from hash_frx.word import pack_le, unpack_le
 
@@ -121,16 +122,6 @@ KEY_LEN = 32
 # never combined — a compression runs in one mode — so this is a set of legal
 # values rather than a mask.
 _MODE_FLAGS = frozenset({0, KEYED_HASH, DERIVE_KEY_CONTEXT, DERIVE_KEY_MATERIAL})
-
-
-def _units(length: int, size: int) -> int:
-    """`length` bytes as a count of `size`-byte units — empty still occupies one.
-
-    Blocks within a chunk and chunks within a message are the same ceiling with
-    the same floor, and the floor is the whole subtlety: an empty message is one
-    empty chunk holding one empty block, not zero of either.
-    """
-    return max(1, -(-length // size))
 
 
 @dataclass(frozen=True)
@@ -253,9 +244,10 @@ def _chain(cv: Array, words: Array, counter: Array, first: int, mode: Mode) -> A
     """
     batch = cv.shape[0]
     full_block = fnp.full((batch,), BLOCK_LEN, dtype=U32)
-    for i in range(words.shape[1]):  # static and at most 15
+
+    def compress_block(cv: Array, i: int) -> Array:
         flags = mode.flags | (CHUNK_START if first + i == 0 else 0)
-        cv = compress(
+        return compress(
             cv,
             words[:, i],
             counter,
@@ -263,7 +255,12 @@ def _chain(cv: Array, words: Array, counter: Array, first: int, mode: Mode) -> A
             fnp.full((batch,), flags, dtype=U32),
             mode.iv,
         )[:, :8]
-    return cv
+
+    # `full_block` is built before the loop rather than inside `compress_block`
+    # deliberately: one block length serves every block of the chain, and the
+    # schedule emits nothing of its own, so where the caller puts an op is where
+    # it lands in the lowered module.
+    return tree.chain(cv, count=words.shape[1], compress_block=compress_block)
 
 
 def _chunk_from(
@@ -363,7 +360,7 @@ def chunk_output(words: Array, chunk_len: int, counter: Array, mode: Mode) -> Ou
     if not 0 <= chunk_len <= CHUNK_LEN:
         raise ValueError(f"chunk_len must be 0..{CHUNK_LEN}, got {chunk_len}")
     batch, nblocks, _ = words.shape
-    expected = _units(chunk_len, BLOCK_LEN)
+    expected = tree.units(chunk_len, BLOCK_LEN)
     if nblocks != expected:
         raise ValueError(
             f"{chunk_len} bytes is {expected} block(s), got {nblocks} — the "
@@ -463,7 +460,7 @@ def root_bytes(output: Output, out_len: int) -> Array:
     if out_len < 1:
         raise ValueError(f"out_len must be at least 1, got {out_len}")
     batch = output.block.shape[0]
-    blocks = _units(out_len, BLOCK_LEN)
+    blocks = tree.stream_blocks(out_len, BLOCK_LEN)
     stream = root_words(_output_blocks(output, blocks))
     return unpack_le(stream).reshape(batch, blocks * BLOCK_LEN)[:, :out_len]
 
@@ -478,7 +475,7 @@ def _block_words(msg: Array) -> Array:
     `sha256._padding_tail` holds the same property for the same reason.
     """
     batch, length = msg.shape
-    nblocks = _units(length, BLOCK_LEN)
+    nblocks = tree.units(length, BLOCK_LEN)
     pad = nblocks * BLOCK_LEN - length
     if pad:
         msg = padded_batch(msg, fnp.zeros(pad, dtype=fnp.uint8))
@@ -625,7 +622,7 @@ def tree_output(msg: ArrayLike, mode: Mode) -> Output:
     message = _message(msg)
     batch, length = message.shape
 
-    nchunks = _units(length, CHUNK_LEN)
+    nchunks = tree.units(length, CHUNK_LEN)
     if nchunks == 1:
         # A one-chunk message is the root of its own tree, with no parent above
         # it — so it is a chunk output, not a parent output.
@@ -634,8 +631,7 @@ def tree_output(msg: ArrayLike, mode: Mode) -> Output:
         )
 
     nodes = _chunk_chaining_values(message, nchunks, mode)
-    while nodes.shape[1] > 2:
-        pairs, odd = divmod(nodes.shape[1], 2)
+    for pairs, odd in tree.levels(nchunks):
         paired = nodes[:, : 2 * pairs].reshape(batch * pairs, 2, 8)
         parents = chaining_value(
             parent_output(paired[:, 0], paired[:, 1], mode)

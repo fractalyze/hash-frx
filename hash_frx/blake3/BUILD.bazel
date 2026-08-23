@@ -15,6 +15,7 @@ py_library(
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx:word",
+        "//hash_frx/extension:tree",
         requirement("blake3"),
         requirement("frx"),
         requirement("numpy"),

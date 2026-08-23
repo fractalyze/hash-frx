@@ -44,3 +44,17 @@ py_library(
         requirement("frx"),
     ],
 )
+
+# The schedule that folds a message's chunks down to one root node. Host
+# arithmetic and control flow only — every array operation reaches it through
+# the caller's callbacks — so it carries NO dependency at all, not even numpy.
+# `pad` states why that is worth keeping rather than a coincidence: a dep here
+# is a dep for every family that needs the rule.
+py_library(
+    name = "tree",
+    srcs = [
+        "__init__.py",
+        "tree.py",
+    ],
+    visibility = ["//visibility:public"],
+)

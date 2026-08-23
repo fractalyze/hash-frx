@@ -34,3 +34,17 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+# The tree schedule over plain Python values. Deps `:tree` alone and nothing
+# else — no frx, no numpy, no backend: the module emits no array op, so its
+# rules are checkable without one. The central case holds the bottom-up pairing
+# equal to an independent model of the spec's largest-power-of-two recursion.
+py_test(
+    name = "tree_test",
+    size = "small",
+    srcs = ["tree_test.py"],
+    deps = [
+        "//hash_frx/extension:tree",
+        requirement("absl_py"),
+    ],
+)
