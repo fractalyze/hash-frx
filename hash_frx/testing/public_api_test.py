@@ -43,8 +43,10 @@ class PublicApiTest(parameterized.TestCase):
         # `from hash_frx import X` prefers the attribute, but importing
         # `hash_frx.X` anywhere binds the MODULE onto the package — so a name
         # that is both resolves differently depending on what else has been
-        # imported. `pbkdf2` is the live example: the function cannot be
-        # re-exported while `hash_frx/pbkdf2.py` holds the name.
+        # imported. `pbkdf2` WAS the live example: the function could not be
+        # re-exported while `hash_frx/pbkdf2.py` held the name. Moving the
+        # adapters under `hash_frx/adapter/` freed it, and this case is what
+        # stops a future module re-taking a name the table already exports.
         #
         # It lives here rather than in `package_test` because it has to read the
         # layout, and this target already carries every source. Shipping the
@@ -58,12 +60,21 @@ class PublicApiTest(parameterized.TestCase):
 
     def test_submodule_import_still_resolves(self) -> None:
         # `__getattr__` declines unknown names, which is what leaves
-        # `from hash_frx import <submodule>` to the import system. `pbkdf2` is
-        # the name that has to keep working this way — it is a module and a
-        # function, and the module wins.
+        # `from hash_frx import <submodule>` to the import system.
+        from hash_frx import testing
+
+        self.assertTrue(hasattr(testing, "__path__"))
+
+    def test_the_freed_pbkdf2_name_is_the_function(self) -> None:
+        # The name the adapter move exists to free. It resolved to the MODULE
+        # while `hash_frx/pbkdf2.py` held it — `pbkdf2.pbkdf2` was the callable
+        # — and resolves to the FUNCTION now that the module lives at
+        # `hash_frx.adapter.pbkdf2`. A consumer writing `from hash_frx import
+        # pbkdf2` gets the thing the name says.
         from hash_frx import pbkdf2
 
-        self.assertTrue(callable(pbkdf2.pbkdf2))
+        self.assertTrue(callable(pbkdf2))
+        self.assertFalse(hasattr(pbkdf2, "__path__"))
 
 
 if __name__ == "__main__":

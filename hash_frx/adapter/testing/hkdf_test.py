@@ -17,8 +17,8 @@ import frx
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.hkdf import hkdf_expand, hkdf_extract
-from hash_frx.hmac import Hmac
+from hash_frx.adapter.hkdf import hkdf_expand, hkdf_extract
+from hash_frx.adapter.hmac import Hmac
 from hash_frx.sha256 import HostSha256, Sha256
 
 # RFC 5869 Appendix A, the HMAC-SHA-256 cases: (ikm, salt, info, L, PRK, OKM).

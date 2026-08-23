@@ -1,0 +1,74 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+py_test(
+    name = "hmac_test",
+    size = "small",
+    srcs = ["hmac_test.py"],
+    deps = [
+        "//hash_frx:sha256",
+        "//hash_frx/adapter:hmac",
+        "//hash_frx/blake3",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "hkdf_test",
+    size = "small",
+    srcs = ["hkdf_test.py"],
+    deps = [
+        "//hash_frx:sha256",
+        "//hash_frx/adapter:hkdf",
+        "//hash_frx/adapter:hmac",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "pbkdf2_test",
+    # The BIP-39 case runs a real c = 2048 chain and the differentials spin
+    # traced loops per (profile, c, dk_len) cell — loop-heavy rather than
+    # compile-heavy.
+    size = "medium",
+    srcs = ["pbkdf2_test.py"],
+    deps = [
+        "//hash_frx:blake2s",
+        "//hash_frx:sha256",
+        "//hash_frx:sha512",
+        "//hash_frx/adapter:hmac",
+        "//hash_frx/adapter:pbkdf2",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# No device work: the lookup is host arithmetic over a row's type. Deps the row
+# modules it names because the table is keyed by their class names — an entry
+# that stopped matching a real row is exactly what this catches.
+py_test(
+    name = "block_size_test",
+    size = "small",
+    srcs = ["block_size_test.py"],
+    deps = [
+        "//hash_frx:blake2s",
+        "//hash_frx:ripemd160",
+        "//hash_frx:sha256",
+        "//hash_frx:sha512",
+        "//hash_frx:sm3",
+        "//hash_frx/adapter:block_size",
+        "//hash_frx/ascon",
+        "//hash_frx/blake2b",
+        "//hash_frx/blake3",
+        "//hash_frx/grostl",
+        "//hash_frx/keccak",
+        "//hash_frx/testing:rows",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)

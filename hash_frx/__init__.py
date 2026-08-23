@@ -27,10 +27,13 @@ to one and not the other is caught.
 A name here may not collide with a submodule name: `from hash_frx import X`
 prefers the attribute, but importing `hash_frx.X` anywhere binds the *module*
 onto the package, so a collision resolves differently depending on what else has
-been imported. `package_test` pins the absence of collisions. The one name this
-currently costs is the `pbkdf2` function, which cannot be re-exported while
-`hash_frx/pbkdf2.py` holds the name; it becomes available when the adapters move
-under `hash_frx/adapter/`.
+been imported. `package_test` pins the absence of collisions, and
+`public_api_test` pins that no export shares a name with a submodule.
+
+`pbkdf2` was the one name that rule cost: the function could not be re-exported
+while `hash_frx/pbkdf2.py` held the name. Moving the adapters under
+`hash_frx/adapter/` freed it, so `from hash_frx import pbkdf2` is now the
+function.
 """
 
 from __future__ import annotations
@@ -138,9 +141,11 @@ _EXPORTS: dict[str, str] = {
     "shake256_init": "hash_frx.keccak.streaming",
     "shake_init": "hash_frx.keccak.streaming",
     # -- adapters ----------------------------------------------------------
-    "Hmac": "hash_frx.hmac",
-    "hkdf_expand": "hash_frx.hkdf",
-    "hkdf_extract": "hash_frx.hkdf",
+    "Hmac": "hash_frx.adapter.hmac",
+    "block_size": "hash_frx.adapter.block_size",
+    "hkdf_expand": "hash_frx.adapter.hkdf",
+    "hkdf_extract": "hash_frx.adapter.hkdf",
+    "pbkdf2": "hash_frx.adapter.pbkdf2",
 }
 
 __all__ = ["__version__", *sorted(_EXPORTS)]
@@ -173,6 +178,11 @@ def __dir__() -> list[str]:
 # spelled statically here. It costs nothing at run time and `package_test` holds
 # it equal to `_EXPORTS`.
 if TYPE_CHECKING:
+    from hash_frx.adapter.block_size import block_size as block_size
+    from hash_frx.adapter.hkdf import hkdf_expand as hkdf_expand
+    from hash_frx.adapter.hkdf import hkdf_extract as hkdf_extract
+    from hash_frx.adapter.hmac import Hmac as Hmac
+    from hash_frx.adapter.pbkdf2 import pbkdf2 as pbkdf2
     from hash_frx.ascon.ascon import AsconHash256 as AsconHash256
     from hash_frx.ascon.ascon import AsconXof128 as AsconXof128
     from hash_frx.ascon.permutation import AsconP as AsconP
@@ -198,9 +208,6 @@ if TYPE_CHECKING:
     from hash_frx.fusion import fused_region_over as fused_region_over
     from hash_frx.fusion import inert_region_spec as inert_region_spec
     from hash_frx.grostl.grostl import Grostl256 as Grostl256
-    from hash_frx.hkdf import hkdf_expand as hkdf_expand
-    from hash_frx.hkdf import hkdf_extract as hkdf_extract
-    from hash_frx.hmac import Hmac as Hmac
     from hash_frx.keccak.byte_hashes import HostSha3_256 as HostSha3_256
     from hash_frx.keccak.byte_hashes import HostSha3_512 as HostSha3_512
     from hash_frx.keccak.byte_hashes import HostShake128 as HostShake128

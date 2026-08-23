@@ -64,7 +64,8 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx import sha256, sha512
-from hash_frx.hmac import Hmac
+from hash_frx.adapter.block_size import block_size
+from hash_frx.adapter.hmac import Hmac
 
 # The FIPS 198-1 §4 pad bytes, restated from `hmac.py`'s private constants:
 # two spec literals a reviewer checks against the standard either way (the
@@ -84,7 +85,6 @@ class _MidstateProfile(NamedTuple):
     block_to_words: Callable[[Array], Array]  # uint8 [B, n*block] -> words
     serialize_digest: Callable[[Array], Array]  # state [B, W] -> uint8 digest
     padding_tail: Callable[[int], np.ndarray]  # the module's own MD tail
-    block_size: int  # the hash's block in bytes
 
 
 # Keyed by the DEVICE row type: the fast path needs traced per-row states, so
@@ -103,7 +103,6 @@ _MIDSTATE_PROFILES: dict[type, _MidstateProfile] = {
         sha256.block_to_words,
         sha256.serialize_digest,
         sha256._PAD.tail,
-        block_size=64,
     ),
     sha512.Sha512: _MidstateProfile(
         sha512.INITIAL_STATE,
@@ -111,7 +110,6 @@ _MIDSTATE_PROFILES: dict[type, _MidstateProfile] = {
         sha512.block_to_words,
         sha512.serialize_digest,
         sha512._PAD.tail,
-        block_size=128,
     ),
 }
 
@@ -165,7 +163,7 @@ def pbkdf2(
     k_opad = k0 ^ fnp.uint8(_OPAD)
 
     profile = _MIDSTATE_PROFILES.get(type(mac.byte_hash))
-    if profile is not None and profile.block_size != mac.block_size:
+    if profile is not None and block_size(mac.byte_hash) != mac.block_size:
         # A mis-parameterized Hmac (wrong block for its hash) must not
         # silently take the fast path at the right block size: the generic
         # path is the one that reproduces the (non-standard) bytes asked for.
