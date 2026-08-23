@@ -42,8 +42,13 @@ def emitted_composites(fn: Callable[..., Any], *args: Any) -> list[str]:
     `assert_marker_recognized` already matches its routing key whole for this
     reason; this is the same rule for the emission side, where the question is
     which name the wire carries rather than which emitter claimed it.
+
+    Emission order, duplicates KEPT: the list length is then the composite count,
+    so one assertion pins both which marker is on the wire and how many there
+    are. Deduplicating would answer only the first and leave every caller
+    lowering the module a second time to count `stablehlo.composite` itself.
     """
-    return sorted(set(_COMPOSITE_NAME.findall(frx.jit(fn).lower(*args).as_text())))
+    return _COMPOSITE_NAME.findall(frx.jit(fn).lower(*args).as_text())
 
 
 def _custom_fusion_lines(fn: Callable[..., Any], *args: Any) -> list[str]:

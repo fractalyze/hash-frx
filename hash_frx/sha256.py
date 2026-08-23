@@ -35,11 +35,10 @@ from hash_frx.byte_hash import (
     HostRow,
     device_message,
     host_digest,
-    message_at_capacity,
     message_length,
     padded_batch,
 )
-from hash_frx.extension.md import MdStream, chain
+from hash_frx.extension.md import MdStream, chain, padded_region
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
@@ -130,9 +129,8 @@ def _routes_to_bytes_marker() -> bool:
 
 
 def _routes_to_bytes_len_marker() -> bool:
-    """Whether `digest` should emit the runtime-length marker on this backend
-    (`fusion.routing`). Preferred over the static-length markers where it holds:
-    it is the same kernel work at one compile per buffer width."""
+    """Whether `digest` should emit the runtime-length marker on this
+    backend (`fusion.routing`)."""
     return routing(_LEN_EMITTER_AVAILABLE, _LEN_EMITTER_BACKENDS)
 
 
@@ -314,22 +312,14 @@ def _padded_words(msg: Array, tail: Array | None = None) -> Array:
     return block_to_words(padded_batch(msg, tail))
 
 
-def _active_blocks(length: Array) -> Array:
-    """How many blocks a `length`-byte message pads to: `PadRule.tail`'s
-    `nblocks`, over a traced length rather than a host one."""
-    return (length + fnp.int32(_PAD.reserve)) // fnp.int32(_PAD.block_size) + 1
-
-
 def _runtime_padded_words(msg: Array, length: Array) -> Array:
     """The first `length` bytes of each row, padded and packed: uint8 [B, LMAX]
     plus an int32 scalar -> uint32 [B, NB, 16].
 
-    What `_padded_words` builds from a static length, built from a traced one.
-    The tail cannot be a host constant here — it is a function of runtime data —
-    so the 0x80 byte, the zero fill and the length field are selected in-graph
-    off an index vector instead. That arrangement is `MdStream.finalize`'s, which
-    pads at a runtime `pending_len`, widened from its two blocks to every block
-    the buffer could need.
+    What `_padded_words` builds from a static length, built from a traced one:
+    the tail cannot be a host constant when the length is runtime data, so the
+    region comes from `md.padded_region` — the same select `MdStream.finalize`
+    pads with, widened from its two blocks to every block the buffer could need.
 
     This is the marked region's decomposition rather than a path `digest` takes:
     where the marker is recognized the emitter replaces it, and where it is not
@@ -339,31 +329,13 @@ def _runtime_padded_words(msg: Array, length: Array) -> Array:
     data-dependent-length cost the emitter exists to avoid paying.
     """
     lmax = msg.shape[-1]
-    block, reserve = _PAD.block_size, _PAD.reserve
-    pos = fnp.arange(((lmax + reserve) // block + 1) * block, dtype=fnp.int32)
-
+    pos = fnp.arange(_PAD.nblocks(lmax) * _PAD.block_size, dtype=fnp.int32)
     # Bytes at or past `length` are padding, so the message read is clamped into
     # range rather than guarded: every lane it could spoil is selected away.
     content = msg[:, fnp.clip(pos, 0, lmax - 1)]
-
-    active = _active_blocks(length) * fnp.int32(block)
-    len_start = active - fnp.int32(reserve)
-    len_val = _length_field(length)[fnp.clip(pos - len_start, 0, reserve - 1)]
-
+    active = _PAD.nblocks(length) * fnp.int32(_PAD.block_size)
     return block_to_words(
-        fnp.where(
-            (pos < length)[None, :],
-            content,
-            fnp.where(
-                (pos == length)[None, :],
-                fnp.uint8(0x80),
-                fnp.where(
-                    ((pos >= len_start) & (pos < active))[None, :],
-                    len_val[None, :],
-                    fnp.uint8(0),
-                ),
-            ),
-        )
+        padded_region(_PAD, content, length, active, _length_field(length))
     )
 
 
@@ -470,8 +442,8 @@ def sha256_bytes(msg: Array) -> Array:
     )
 
 
-def _capacity(msg: ArrayLike, length: int) -> int:
-    """The buffer width `digest` hashes a `length`-byte message out of.
+def _capacity(msg: ArrayLike) -> int:
+    """The buffer width `digest` hashes `msg` out of.
 
     A message still on the HOST is widened to the next power of two, floored at
     one block. The width is what compilation is keyed on, so the policy trades
@@ -495,12 +467,58 @@ def _capacity(msg: ArrayLike, length: int) -> int:
     hashing the whole buffer instead would have cost 20x. What bounds the width
     is the bytes crossing to the device, which a short message does not amortize.
     """
+    length = message_length(msg)
     if isinstance(msg, Array):
         # `LMAX >= 1` is the recognizer's floor: the emitter's clamped
         # message-side index needs somewhere in bounds to land, even at `len` 0.
         return max(length, 1)
     block = _PAD.block_size
     return block if length <= block else 1 << (length - 1).bit_length()
+
+
+def _at_capacity(msg: ArrayLike, capacity: int) -> Array:
+    """`msg` widened to the uint8 `[B, capacity]` buffer the marker hashes out
+    of: `[B, L]` -> `[B, capacity]`, for `capacity >= L`.
+
+    The width is a CAPACITY rather than a length: the marker takes the live byte
+    count as an operand, so its emitter stops there and the bytes past `L` are
+    never read. They are left zero on that ground — nothing derives from them.
+
+    **Where the widening runs decides whether the compile saving is real.**
+    Widening on device is itself an eager op keyed on `L`, so it would trade one
+    compile per length for a cheaper compile per length rather than removing one:
+    measured at ~22 ms against the ~90 ms whole-digest compile it exists to
+    collapse. Host data is therefore widened with numpy, before it reaches a
+    device at all — a copy and one transfer, no compile. An input already on
+    device cannot take that path without a round trip, and a tracer cannot take
+    it at all, so both are widened in-graph: right in either case, and free for
+    the tracer, whose enclosing trace compiles once regardless.
+
+    Lives here rather than on the seam because `_capacity` does: the policy and
+    the widening are only ever called together, and no second family has a
+    runtime-length marker to share them with yet.
+    """
+    length = message_length(msg)
+    if capacity < length:
+        raise ValueError(
+            f"capacity ({capacity}) must be >= the message length ({length})"
+        )
+    if isinstance(msg, Array):
+        # An already-uint8 array is handed back untouched rather than run through
+        # a converting call: those return the identical object and still pay a
+        # full eager dispatch — `device_message` 5.1 us, `.astype` 2.6 us, against
+        # the ~3 us digest they precede. This is the only branch a device-resident
+        # caller takes, so that dispatch would be pure overhead on every call.
+        u8 = msg if msg.dtype == fnp.uint8 else msg.astype(fnp.uint8)
+        if capacity == length:
+            return u8
+        return padded_batch(u8, fnp.zeros(capacity - length, dtype=fnp.uint8))
+    host = np.asarray(msg, dtype=np.uint8)
+    if capacity == length:
+        return fnp.asarray(host)
+    buf = np.zeros((host.shape[0], capacity), dtype=np.uint8)
+    buf[:, :length] = host
+    return fnp.asarray(buf)
 
 
 # Module-level jit zone for the same reason as `sha256_bytes` above.
@@ -550,7 +568,7 @@ def sha256_bytes_len(buf: Array, length: Array) -> Array:
         h0: Array, k: Array, msg: Array, ln: Array, **_attrs: object
     ) -> Array:
         words = _runtime_padded_words(msg, ln)
-        live = _active_blocks(ln)
+        live = _PAD.nblocks(ln)
         state = fnp.broadcast_to(h0, (msg.shape[0], 8))
         # The block count is runtime data, so every block the buffer could need
         # is compressed and the ones past the message selected away. Static and
@@ -591,9 +609,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     """
     if _routes_to_bytes_len_marker():
         length = message_length(msg)
-        return sha256_bytes_len(
-            message_at_capacity(msg, _capacity(msg, length)), np.int32(length)
-        )
+        return sha256_bytes_len(_at_capacity(msg, _capacity(msg)), np.int32(length))
     msg = device_message(msg)
     if _routes_to_bytes_marker():
         return sha256_bytes(msg)

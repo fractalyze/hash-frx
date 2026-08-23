@@ -106,6 +106,51 @@ class _Midstate(Protocol):
         """Total bytes absorbed so far."""
 
 
+def padded_region(
+    pad: PadRule,
+    content: Array,
+    content_len: Array,
+    active_bytes: Array,
+    len_bytes: Array,
+) -> Array:
+    """A padded block region built at a RUNTIME length: uint8 [B, N] -> [B, N].
+
+    `content` holds the message bytes in the first `content_len` slots of an
+    N-slot region (N a whole number of blocks); what lies past them is unread,
+    so a caller may clamp or gap-shift its gather however suits it. The result
+    is `content[:content_len] ‖ 0x80 ‖ 0x00* ‖ len_bytes`, with the length field
+    ending at `active_bytes` and everything past it zero.
+
+    This is `PadRule.tail` for the paths that cannot use it: the tail is a host
+    constant built from a STATIC length, and here the length is traced. So the
+    same three regions are selected in-graph off an index vector instead.
+
+    Shared rather than spelled per caller because that spelling is the subtlest
+    traced-index machinery in the package and getting it wrong is a wrong digest
+    rather than a slow one — the hazard `MdStream` below was extracted to end.
+    Its `finalize` builds a two-block region at a runtime `pending_len`; a
+    whole-message runtime-length digest builds one as wide as its buffer. Only
+    the gather and the width differ, which is why those stay with the callers.
+
+    The padding is built as ONE row and broadcast against `content`, the way
+    `byte_hash.padded_batch` broadcasts the static tail: it is a function of the
+    length, which every row of a batch shares.
+    """
+    reserve = pad.reserve
+    pos = fnp.arange(content.shape[-1], dtype=fnp.int32)
+    len_start = active_bytes - fnp.int32(reserve)
+    padding = fnp.where(
+        pos == content_len,
+        fnp.uint8(0x80),
+        fnp.where(
+            (pos >= len_start) & (pos < active_bytes),
+            len_bytes[fnp.clip(pos - len_start, 0, reserve - 1)],
+            fnp.uint8(0),
+        ),
+    )
+    return fnp.where((pos < content_len)[None, :], content, padding[None, :])
+
+
 @dataclass(frozen=True)
 class MdStream:
     """The incremental half of Merkle-Damgard, shared by the SHA-2 families.
@@ -243,18 +288,7 @@ class MdStream:
         )
         content = combined_src[:, src_idx]
 
-        is_content = (pos < content_len)[None, :]
-        is_pad80 = (pos == content_len)[None, :]
-        len_start = active_bytes - fnp.int32(lb)
-        is_len = ((pos >= len_start) & (pos < active_bytes))[None, :]
-        len_val = len_bytes[fnp.clip(pos - len_start, 0, lb - 1)][None, :]
-        region = fnp.where(
-            is_content,
-            content,
-            fnp.where(
-                is_pad80, fnp.uint8(0x80), fnp.where(is_len, len_val, fnp.uint8(0))
-            ),
-        )
+        region = padded_region(self.pad, content, content_len, active_bytes, len_bytes)
 
         words = self.block_to_words(region)
         return fnp.where(

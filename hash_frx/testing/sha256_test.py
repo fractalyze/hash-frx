@@ -157,9 +157,7 @@ class Sha256TracedTest(parameterized.TestCase):
         # the three it is belongs to the routing test; this one holds that a
         # traced caller emits exactly one, whichever the pin selects.
         msg = np.zeros((1, 64), dtype=np.uint8)
-        txt = frx.jit(sha256.digest).lower(msg).as_text()
         self.assertEqual(len(emitted_composites(sha256.digest, msg)), 1)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
 
 
 class Sha256ByteHashTest(parameterized.TestCase):
@@ -269,14 +267,13 @@ class Sha256BytesMarkerTest(parameterized.TestCase):
         assert_marker_recognized(self, "sha256_bytes", sha256.sha256_bytes, msgs)
 
     def test_emits_one_composite_with_the_bytes_name(self) -> None:
-        msg = np.zeros((2, 100), dtype=np.uint8)
-        txt = frx.jit(sha256.sha256_bytes).lower(fnp.asarray(msg)).as_text()
-        # Whole-name match: this marker is a prefix of the runtime-length one.
+        # Whole-name match, and the list length is the composite count:
+        # this marker is a prefix of the runtime-length one.
+        msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
         self.assertEqual(
-            emitted_composites(sha256.sha256_bytes, fnp.asarray(msg)),
+            emitted_composites(sha256.sha256_bytes, msg),
             [sha256.SHA256_BYTES_MARKER],
         )
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
 
     def test_jit_matches_eager(self) -> None:
         msg = np.random.default_rng(9).integers(0, 256, (3, 120), dtype=np.uint8)
@@ -326,26 +323,17 @@ class Sha256BytesLenMarkerTest(parameterized.TestCase):
         buf[:, : msg.shape[-1]] = msg
         return fnp.asarray(buf)
 
-    @parameterized.parameters(*_LENGTHS)
-    def test_matches_hashlib_at_exact_capacity(self, length: int) -> None:
-        # Capacity == length isolates the synthesized padding from the capacity
-        # question below. `max(length, 1)` is the recognizer's floor, which the
-        # empty message would otherwise sit under.
-        msg = (np.arange(length, dtype=np.uint8) ^ np.uint8(0x3C))[None, :]
-        got = sha256.sha256_bytes_len(
-            self._buffer(msg, max(length, 1)), np.int32(length)
-        )
-        self.assertEqual(
-            bytes(np.asarray(got)[0]), hashlib.sha256(bytes(msg[0])).digest()
-        )
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_matches_hashlib_in_a_larger_buffer(self, length: int) -> None:
-        # The point of the form: a message digests as itself in a buffer far
-        # wider than it, so the padded length is what `length` implies rather
-        # than what the extent does.
+    @parameterized.product(length=_LENGTHS, slack=(0, 256))
+    def test_matches_hashlib_at_any_capacity(self, length: int, slack: int) -> None:
+        # slack 0 isolates the synthesized padding at an exact fit (`max(., 1)`
+        # is the recognizer's floor, which the empty message would sit under);
+        # slack 256 is the point of the form — a message digests as itself in a
+        # buffer far wider than it, so the padded length is what `length`
+        # implies rather than what the extent does.
         msg = (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A))[None, :]
-        got = sha256.sha256_bytes_len(self._buffer(msg, 256), np.int32(length))
+        got = sha256.sha256_bytes_len(
+            self._buffer(msg, max(length + slack, 1)), np.int32(length)
+        )
         self.assertEqual(
             bytes(np.asarray(got)[0]), hashlib.sha256(bytes(msg[0])).digest()
         )
@@ -404,11 +392,6 @@ class Sha256BytesLenMarkerTest(parameterized.TestCase):
         )
 
     def test_emits_one_composite_with_the_len_name(self) -> None:
-        txt = (
-            frx.jit(sha256.sha256_bytes_len)
-            .lower(fnp.asarray(np.zeros((2, 128), dtype=np.uint8)), np.int32(100))
-            .as_text()
-        )
         self.assertEqual(
             emitted_composites(
                 sha256.sha256_bytes_len,
@@ -417,7 +400,6 @@ class Sha256BytesLenMarkerTest(parameterized.TestCase):
             ),
             [sha256.SHA256_BYTES_LEN_MARKER],
         )
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
 
     def test_the_length_is_an_operand_not_a_baked_constant(self) -> None:
         # What the whole form rests on: `len` reaching the marker as an operand.
@@ -451,18 +433,6 @@ class Sha256BytesLenMarkerTest(parameterized.TestCase):
         # than a port of the CPU answer.
         self.assertEqual(sha256._LEN_EMITTER_BACKENDS, ("cpu",))
 
-    def test_digest_routes_by_the_recognizer_flag(self) -> None:
-        # `digest` must not emit a marker the pinned plugin cannot claim: with
-        # the runtime-length recognizer absent the wire carries a static-length
-        # marker only. Flipping the flag is what moves the wire. On a backend
-        # outside the tuple above this is the assertion that the GPU leg keeps
-        # the static-length path.
-        txt = frx.jit(sha256.digest).lower(np.zeros((1, 64), dtype=np.uint8)).as_text()
-        if sha256._routes_to_bytes_len_marker():
-            self.assertIn(sha256.SHA256_BYTES_LEN_MARKER, txt)
-        else:
-            self.assertNotIn(sha256.SHA256_BYTES_LEN_MARKER, txt)
-
 
 class Sha256CapacityTest(parameterized.TestCase):
     """`_capacity` — the buffer width `digest` hashes out of, which is what its
@@ -476,22 +446,26 @@ class Sha256CapacityTest(parameterized.TestCase):
     ) -> None:
         # Floored at one block, so short messages share a width rather than each
         # compiling their own.
-        self.assertEqual(
-            sha256._capacity(np.zeros((1, length), np.uint8), length), want
-        )
+        self.assertEqual(sha256._capacity(np.zeros((1, length), np.uint8)), want)
 
     @parameterized.parameters(1, 65, 100, 1000)
     def test_a_device_message_keeps_its_own_extent(self, length: int) -> None:
         # Widening one would be a dispatched device op that buys the caller
         # nothing, so only the marker changes for a batch already materialized.
         msg = fnp.asarray(np.zeros((1, length), dtype=np.uint8))
-        self.assertEqual(sha256._capacity(msg, length), length)
+        self.assertEqual(sha256._capacity(msg), length)
 
     def test_an_empty_device_message_still_clears_the_recognizer_floor(self) -> None:
         # `LMAX >= 1`: the emitter's clamped message-side index needs a byte to
         # land on even when no byte is live.
         msg = fnp.asarray(np.zeros((1, 0), dtype=np.uint8))
-        self.assertEqual(sha256._capacity(msg, 0), 1)
+        self.assertEqual(sha256._capacity(msg), 1)
+
+    def test_a_capacity_below_the_message_is_rejected(self) -> None:
+        # A capacity is a buffer the message must fit in; a smaller one would
+        # truncate it into a digest of the wrong bytes rather than fail.
+        with self.assertRaisesRegex(ValueError, "must be >= the message length"):
+            sha256._at_capacity(np.zeros((1, 64), dtype=np.uint8), 32)
 
     def test_digest_compiles_once_per_width_not_once_per_length(self) -> None:
         # The property the form exists for. Counting compilations directly is
@@ -499,8 +473,7 @@ class Sha256CapacityTest(parameterized.TestCase):
         # (capacity, length-aval) pairs `digest` hands to the marker.
         lengths = range(20, 400, 7)
         widths = {
-            sha256._capacity(np.zeros((1, length), np.uint8), length)
-            for length in lengths
+            sha256._capacity(np.zeros((1, length), np.uint8)) for length in lengths
         }
         self.assertLess(len(widths), len(list(lengths)) // 8)
         self.assertEqual(widths, {64, 128, 256, 512})

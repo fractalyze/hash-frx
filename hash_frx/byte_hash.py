@@ -212,41 +212,6 @@ def message_length(msg: ArrayLike) -> int:
     return int(np.shape(msg)[-1])
 
 
-def message_at_capacity(msg: ArrayLike, capacity: int) -> Array:
-    """A message widened to the uint8 `[B, capacity]` buffer a runtime-length
-    marker hashes out of: `[B, L]` -> `[B, capacity]`, for `capacity >= L`.
-
-    The width is a CAPACITY rather than a length: such a marker takes the live
-    byte count as an operand, so its emitter stops there and the bytes past `L`
-    are never read. They are left zero on that ground — nothing derives from
-    them — and what the width buys is shared compilation, one buffer shape
-    serving every length it can hold.
-
-    **Where the widening runs decides whether that saving is real.** Widening on
-    device is itself an eager op keyed on `L`, so it would trade one compile per
-    length for a cheaper compile per length rather than removing one: measured at
-    ~22 ms against the ~90 ms whole-digest compile it exists to collapse. Host
-    data is therefore widened with numpy, before it reaches a device at all — a
-    copy and one transfer, no compile. An input already on device cannot take
-    that path without a round trip, and a tracer cannot take it at all, so both
-    are widened in-graph: right in either case, and free for the tracer, whose
-    enclosing trace compiles once regardless.
-    """
-    rows, length = np.shape(msg)[0], message_length(msg)
-    if capacity < length:
-        raise ValueError(
-            f"capacity ({capacity}) must be >= the message length ({length})"
-        )
-    if isinstance(msg, Array):
-        if capacity == length:
-            return msg.astype(fnp.uint8)
-        tail = fnp.zeros((rows, capacity - length), dtype=fnp.uint8)
-        return fnp.concatenate([msg.astype(fnp.uint8), tail], axis=-1)
-    buf = np.zeros((rows, capacity), dtype=np.uint8)
-    buf[:, :length] = np.asarray(msg, dtype=np.uint8)
-    return fnp.asarray(buf)
-
-
 def padded_batch(msg: Array, tail: Array) -> Array:
     """`msg` with its padding appended: uint8 `[B, L]` + `[T]` -> `[B, L + T]`.
 
