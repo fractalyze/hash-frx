@@ -2,9 +2,12 @@ load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
+# 48s on the GPU leg against a 60s cap while it was `small` — HMAC runs two
+# digests per call over a device row, so the cost is the backend's, not the
+# construction's.
 py_test(
     name = "hmac_test",
-    size = "small",
+    size = "medium",
     srcs = ["hmac_test.py"],
     deps = [
         "//hash_frx:sha256",
@@ -16,9 +19,12 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# 57s on the GPU leg against a 60s cap while it was `small`, which is a 3-second
+# margin and is why it timed out under CI contention rather than occasionally.
+# Expand is a dependency chain of HMAC calls, so it pays that cost per block.
 py_test(
     name = "hkdf_test",
-    size = "small",
+    size = "medium",
     srcs = ["hkdf_test.py"],
     deps = [
         "//hash_frx:sha256",
