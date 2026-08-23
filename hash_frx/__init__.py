@@ -142,6 +142,7 @@ _EXPORTS: dict[str, str] = {
     "shake_init": "hash_frx.keccak.streaming",
     # -- adapters ----------------------------------------------------------
     "Hmac": "hash_frx.adapter.hmac",
+    "Mgf1": "hash_frx.adapter.mgf1",
     "block_size": "hash_frx.adapter.block_size",
     "hkdf_expand": "hash_frx.adapter.hkdf",
     "hkdf_extract": "hash_frx.adapter.hkdf",
@@ -182,6 +183,7 @@ if TYPE_CHECKING:
     from hash_frx.adapter.hkdf import hkdf_expand as hkdf_expand
     from hash_frx.adapter.hkdf import hkdf_extract as hkdf_extract
     from hash_frx.adapter.hmac import Hmac as Hmac
+    from hash_frx.adapter.mgf1 import Mgf1 as Mgf1
     from hash_frx.adapter.pbkdf2 import pbkdf2 as pbkdf2
     from hash_frx.ascon.ascon import AsconHash256 as AsconHash256
     from hash_frx.ascon.ascon import AsconXof128 as AsconXof128

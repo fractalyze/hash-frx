@@ -72,3 +72,21 @@ py_test(
         requirement("absl_py"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+# Held to `hashlib` block by block rather than to a second MGF1 — RFC 8017
+# publishes no vectors, and the module docstring records why that is the
+# stronger oracle anyway.
+py_test(
+    name = "mgf1_test",
+    size = "medium",
+    srcs = ["mgf1_test.py"],
+    deps = [
+        "//hash_frx:sha256",
+        "//hash_frx:sha512",
+        "//hash_frx/adapter:mgf1",
+        "//hash_frx/keccak",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
