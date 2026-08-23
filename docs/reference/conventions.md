@@ -184,6 +184,20 @@ it bites is a test:
   its attributes, and its operand order — and by counting composites rather than
   finding one. Matching output values proves nothing about a marker: an
   unrecognized one inlines and still computes the right answer.
+
+  The name is matched **whole**, and that is not a detail. Marker names nest,
+  because an ABI revision ships as a new name suffixed onto the old one:
+  `hash_frx.digest.sha256` is a prefix of `…sha256_bytes`, which is a prefix of
+  `…sha256_bytes_len`, and the same holds for
+  `poseidon`/`poseidon_sparse`/`poseidon2` and `blake3`/`blake3_parent`. So
+  `assertIn(SOME_MARKER, lowered_text)` is satisfied by any LONGER sibling and
+  fails **open** — the more the wire moves toward newer markers, the more
+  reliably a stale assertion passes. `emitted_composites`
+  ([`testing/marker_recognized.py`](../../hash_frx/testing/marker_recognized.py))
+  extracts the names exactly; assert the whole set rather than membership, so an
+  unexpected extra marker is caught too. A change that MOVES which of these names
+  is emitted invalidates every assertion naming a shorter sibling, and the suite
+  will not say so.
 - **Trace count.** `assert_single_trace` drives a sequence of calls and asserts
   the module-level jit zone gains no cache entries after the first.
 
