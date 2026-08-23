@@ -47,6 +47,7 @@ tests share.
 | HMAC — the FIPS 198-1 keyed MAC, one class parameterized by hash and block size             | [`adapter/hmac.py`](../hash_frx/adapter/hmac.py)                     |
 | Which hashes have an HMAC block size, and why BLAKE3 and Ascon deliberately do not | [`adapter/block_size.py`](../hash_frx/adapter/block_size.py) |
 | HKDF — RFC 5869 extract-then-expand, the KDF the composition standards name                  | [`adapter/hkdf.py`](../hash_frx/adapter/hkdf.py)                     |
+| MGF1 — RFC 8017's mask generation, a hash stretched to any length by a counter suffix (RSA-OAEP / PSS) | [`adapter/mgf1.py`](../hash_frx/adapter/mgf1.py) |
 | PBKDF2 — the RFC 8018 iterated KDF as a traced c-loop, with the ipad/opad midstate fast path (BIP-39's seed derivation) | [`adapter/pbkdf2.py`](../hash_frx/adapter/pbkdf2.py)                 |
 
 ## Implementations

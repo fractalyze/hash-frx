@@ -70,3 +70,19 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+# MGF1 (RFC 8017 B.2.1) — a `ByteHash` stretched into a mask by a counter
+# suffix. The counter is a host constant, so `seed` stays an operand.
+py_library(
+    name = "mgf1",
+    srcs = [
+        "__init__.py",
+        "mgf1.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:byte_hash",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)

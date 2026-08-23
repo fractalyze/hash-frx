@@ -34,6 +34,7 @@ py_library(
         "//hash_frx/adapter:block_size",
         "//hash_frx/adapter:hkdf",
         "//hash_frx/adapter:hmac",
+        "//hash_frx/adapter:mgf1",
         "//hash_frx/adapter:pbkdf2",
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
