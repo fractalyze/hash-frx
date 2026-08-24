@@ -53,15 +53,15 @@ dependencies = [
     # this name (xla#581), and the GPU emitter plus its compiler gate
     # (xla#582, merged as PR #585).
     #
-    # `digest` alone would not need the third yet — it keeps GPU on the static
-    # ABI (`_LEN_EMITTER_BACKENDS`), so the wheel before this one serves it.
-    # `sha256_bytes_len` is the reason: it emits the length ABI whatever the
-    # backend, with no routing gate of its own, so on a wheel without the GPU
-    # emitter a GPU caller of it — this package's own test suite included —
-    # gets the name recognized and the operands DECLINED. Right bytes, and the
-    # decomposition it falls back to speculates every block the buffer could
-    # hold, so it is slower than the static path rather than merely un-fused.
-    # A floor is the only thing that catches that, because nothing fails.
+    # All three are load-bearing for `digest` itself, which routes the length
+    # ABI on every backend in `_BYTES_EMITTER_BACKENDS` — GPU included. On a
+    # wheel without the GPU emitter, a GPU caller gets the name recognized and
+    # the operands DECLINED: right bytes, and the decomposition it falls back to
+    # speculates every block the buffer could hold, so it is slower than the
+    # blocks form rather than merely un-fused. `sha256_bytes` has no routing
+    # gate of its own, so a direct caller — this package's own test suite
+    # included — hits the same decline wherever it runs. A floor is the only
+    # thing that catches either, because nothing fails.
     #
     # Verified against this wheel rather than inferred from its version: its
     # bump PR names the jax commit that triggered it (`jax@17e27097c8d1`),

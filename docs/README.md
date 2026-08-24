@@ -159,8 +159,7 @@ operand layout is equally part of that ABI, which is what keeps a region's
 constants from being written as closed-over values — and, where two operand
 forms are disjoint in element type *and* rank, is what lets them share one name
 instead of needing a second: the pinned recognizer claims two under
-`hash_frx.digest.sha256_bytes`, which is how that name moved from one to the
-other without a rename.
+`hash_frx.digest.sha256_bytes`.
 
 **Losing fusion is silent**, and nothing about it is caught by comparing bytes: a
 marker that stops being recognized inlines and still computes the right answer,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -151,14 +152,6 @@ class Sha256TracedTest(parameterized.TestCase):
             np.asarray(frx.jit(hasher.digest)(msg)), np.asarray(hasher.digest(msg))
         )
 
-    def test_traced_digest_still_emits_one_marker(self) -> None:
-        # The marker is what makes a digest one device unit; a traced caller must
-        # not lose it by taking a different path into the compression. WHICH of
-        # the three it is belongs to the routing test; this one holds that a
-        # traced caller emits exactly one, whichever the pin selects.
-        msg = np.zeros((1, 64), dtype=np.uint8)
-        self.assertEqual(len(emitted_composites(sha256.digest, msg)), 1)
-
 
 class Sha256ByteHashTest(parameterized.TestCase):
     """The two `ByteHash` implementations, against the seam and against each other.
@@ -246,6 +239,22 @@ class Sha256DigestRoutingTest(absltest.TestCase):
         else:
             self.assertEqual(names, [sha256.SHA256_MARKER])
 
+    def test_the_blocks_fallback_stays_reachable(self) -> None:
+        # `digest`'s other arm, forced. Both switches carry the same backends,
+        # so every leg takes the whole-message one and this arm would otherwise
+        # run nowhere — the padded-words path and its `device_message` call
+        # would rot untested. Byte-exactness is asserted with it, since the two
+        # arms agreeing is the whole claim that makes the routing free.
+        msgs = np.random.default_rng(11).integers(0, 256, (2, 100), dtype=np.uint8)
+        with mock.patch.object(sha256, "_BYTES_EMITTER_BACKENDS", ("nonesuch",)):
+            self.assertFalse(sha256._routes_to_bytes_marker())
+            self.assertEqual(
+                emitted_composites(sha256.digest, msgs), [sha256.SHA256_MARKER]
+            )
+            got = np.asarray(sha256.digest(msgs))
+        for row, msg in zip(got, msgs):
+            self.assertEqual(bytes(row), hashlib.sha256(bytes(msg)).digest())
+
     def test_carries_the_operands_its_routing_promises(self) -> None:
         # The composite name does not say which operand ABI reached the wire —
         # the recognizer claims two under it — so a name assertion cannot tell a
@@ -332,14 +341,6 @@ class Sha256BytesTest(parameterized.TestCase):
         self.assertEqual(bytes(np.asarray(got_a)[0]), hashlib.sha256(short).digest())
         self.assertEqual(bytes(np.asarray(got_b)[0]), hashlib.sha256(long).digest())
 
-    def test_jit_matches_eager(self) -> None:
-        msg = np.random.default_rng(9).integers(0, 256, (3, 120), dtype=np.uint8)
-        buf, length = self._buffer(msg, 128), np.int32(msg.shape[-1])
-        np.testing.assert_array_equal(
-            np.asarray(frx.jit(sha256.sha256_bytes)(buf, length)),
-            np.asarray(sha256.sha256_bytes(buf, length)),
-        )
-
     def test_recognized_where_routed(self) -> None:
         # The fusion contract: where `digest` routes to the marker, the pinned
         # plugin must claim it as one custom fusion. An unrecognized name inlines
@@ -400,8 +401,10 @@ class Sha256BytesTest(parameterized.TestCase):
     def test_its_own_backend_tuple_is_pinned(self) -> None:
         # A separate tuple from the family's `_EMITTER_BACKENDS`, because
         # Fractalyze XLA gates this marker on its own flag: the two agreeing is
-        # a fact about the pinned wheel rather than a property, so the tuple is
-        # pinned here instead of derived, and a widening stays a conscious edit.
+        # a fact about the pinned wheel rather than a property, so a widening
+        # has to stay a conscious edit. `fusion_path_test._MATRIX` is where a
+        # family's row is spelled, and it carries one tuple per module, so this
+        # per-marker one is pinned here until the matrix grows a column for it.
         self.assertEqual(sha256._BYTES_EMITTER_BACKENDS, ("cpu", "gpu"))
 
 

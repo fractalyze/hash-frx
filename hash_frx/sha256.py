@@ -79,12 +79,11 @@ SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
 # a non-scalar `len` rather than silently taking row 0's, so a per-row ABI stays
 # a separate decision rather than an accident.
 #
-# The recognizer dispatches on the OPERANDS rather than on the name, so it also
-# claims a second whole-message ABI carrying the length as the message's extent
-# (`tail u8[P]` at operand 3 — disjoint from `len s32[]` in element type AND
-# rank). Nothing here emits that spelling, so this module owns one ABI while the
-# version below still covers both: a contract change under this name is one
-# decision for the pair. The `frx>=` floor in pyproject.toml names the first
+# The recognizer dispatches on the OPERANDS rather than on the name, so this
+# name also claims a whole-message ABI that this module does not emit
+# (`markers.py` carries that fact). What follows from it here: the version below
+# covers both, so a contract change under this name is one decision for the
+# pair. The `frx>=` floor in pyproject.toml names the first
 # wheel whose recognizer claims the form emitted here; an older one declines it
 # on its operands and inlines — right bytes, no kernel.
 SHA256_BYTES_MARKER_VERSION = 1
@@ -106,7 +105,7 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 # decline the other. A backend that declines gets neither a kernel nor the
 # compile saving — worse, the decomposition speculates every block the buffer
 # could need — so `digest` falls back to the blocks form there instead of
-# emitting into a decline. Metal is that backend.
+# emitting into a decline.
 _BYTES_EMITTER_AVAILABLE = True
 _BYTES_EMITTER_BACKENDS = ("cpu", "gpu")
 
@@ -311,7 +310,7 @@ def _runtime_padded_words(msg: Array, length: Array) -> Array:
 
     This is the marked region's decomposition rather than a path `digest` takes:
     where the marker is recognized the emitter replaces it, and where it is not
-    `digest` stays on the static-length markers. So it is written for
+    `digest` stays on the blocks marker. So it is written for
     correctness, and the speculation it costs — every block the buffer could need
     is packed, and the ones past the message selected away — is exactly the
     data-dependent-length cost the emitter exists to avoid paying.
@@ -330,9 +329,9 @@ def _runtime_padded_words(msg: Array, length: Array) -> Array:
 def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array:
     """Fold `blocks_words` (uint32 [B, nblocks, 16] big-endian) into the SHA-256
     midstate `state` (uint32 [B, 8]), block by block. `INITIAL_STATE` broadcast is
-    the standard start; a streaming hash resumes from a prior midstate. `k`
-    defaults to the module `_Kd`; the marked region passes its `k` operand
-    explicitly so it captures nothing."""
+    the standard start; a streaming hash resumes from a prior midstate. `k` is
+    a parameter rather than a capture, so a caller inside a marked region can
+    thread that region's own `k` operand; it defaults to the module `_Kd`."""
     kt = _Kd if k is None else k
     nblocks = blocks_words.shape[1]
     for i in range(nblocks):  # nblocks is static and small
