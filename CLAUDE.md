@@ -12,6 +12,9 @@ rules every change must respect.
 - **Design notes — the primitive / extension / adapter layering, why a schedule
   is written once per construction, and what may live in this repo at all:**
   [`docs/blocks/hash.md`](docs/blocks/hash.md)
+- **Consuming this package from another repo — the import form, the Bazel dep
+  that goes with it, and what to do about a missing name:**
+  [`docs/reference/consuming.md`](docs/reference/consuming.md)
 - **Dev environment — backend selection, the two test legs (`bazel test` runs
   only one), the lowering gate a wire-preserving refactor needs, the CUDA-12
   requirement, running against an unreleased XLA, the compile cache:**
