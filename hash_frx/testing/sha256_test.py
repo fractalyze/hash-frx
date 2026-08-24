@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -151,14 +152,6 @@ class Sha256TracedTest(parameterized.TestCase):
             np.asarray(frx.jit(hasher.digest)(msg)), np.asarray(hasher.digest(msg))
         )
 
-    def test_traced_digest_still_emits_one_marker(self) -> None:
-        # The marker is what makes a digest one device unit; a traced caller must
-        # not lose it by taking a different path into the compression. WHICH of
-        # the three it is belongs to the routing test; this one holds that a
-        # traced caller emits exactly one, whichever the pin selects.
-        msg = np.zeros((1, 64), dtype=np.uint8)
-        self.assertEqual(len(emitted_composites(sha256.digest, msg)), 1)
-
 
 class Sha256ByteHashTest(parameterized.TestCase):
     """The two `ByteHash` implementations, against the seam and against each other.
@@ -226,107 +219,61 @@ class Sha256ByteHashTest(parameterized.TestCase):
         assert_marker_recognized(self, "sha256", fn, blocks)
 
 
-class Sha256BytesMarkerTest(parameterized.TestCase):
-    """The raw-bytes whole-message marker (`sha256_bytes`).
+class Sha256DigestRoutingTest(absltest.TestCase):
+    """Which marker `digest` puts on the wire, and with which operands."""
 
-    The pinned recognizer claims the name on cpu/gpu (the pyproject floor
-    names the first wheel that does), so executions here run the dedicated
-    bytes emitter and `digest` routes to this marker. A backend outside
-    `_EMITTER_BACKENDS` emits the same composite and inlines its
-    decomposition — right bytes either way, and
-    `test_matches_the_blocks_marker` holds the two wire forms byte-equal.
-    """
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_matches_hashlib(self, length: int) -> None:
-        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x3C)
-        got = bytes(np.asarray(sha256.sha256_bytes(fnp.asarray(msg[None, :])))[0])
-        self.assertEqual(got, hashlib.sha256(bytes(msg)).digest())
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_matches_the_blocks_marker(self, length: int) -> None:
-        # Two wire forms of one digest: the bytes marker must byte-equal the
-        # blocks marker (and so, transitively, every consumer's goldens).
-        msgs = np.random.default_rng(length).integers(
-            0, 256, size=(4, length), dtype=np.uint8
-        )
-        via_blocks = sha256.sha256_merkle_damgard(
-            sha256.INITIAL_STATE, sha256._padded_words(fnp.asarray(msgs))
-        )
-        np.testing.assert_array_equal(
-            np.asarray(sha256.sha256_bytes(fnp.asarray(msgs))),
-            np.asarray(via_blocks),
-        )
-
-    def test_recognized_where_routed(self) -> None:
-        # The fusion contract for the bytes form: where `digest` routes to
-        # the marker, the pinned plugin must claim it as one custom fusion.
-        if not sha256._routes_to_bytes_marker():
-            self.skipTest("no bytes recognizer on this backend")
-        msgs = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
-        assert_marker_recognized(self, "sha256_bytes", sha256.sha256_bytes, msgs)
-
-    def test_emits_one_composite_with_the_bytes_name(self) -> None:
-        # Whole-name match, and the list length is the composite count:
-        # `hash_frx.digest.sha256` is a prefix of this name, so the pair still
-        # nests even though the runtime-length spelling is retired.
-        msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
-        self.assertEqual(
-            emitted_composites(sha256.sha256_bytes, msg),
-            [sha256.SHA256_BYTES_MARKER],
-        )
-
-    def test_jit_matches_eager(self) -> None:
-        msg = np.random.default_rng(9).integers(0, 256, (3, 120), dtype=np.uint8)
-        np.testing.assert_array_equal(
-            np.asarray(frx.jit(sha256.sha256_bytes)(fnp.asarray(msg))),
-            np.asarray(sha256.sha256_bytes(fnp.asarray(msg))),
-        )
-
-    def test_digest_routes_by_the_recognizer_flag(self) -> None:
+    def test_routes_by_the_recognizer_flag(self) -> None:
         # `digest` must not emit a marker the pinned plugin cannot claim: with
-        # BOTH whole-message flags false the wire carries the blocks marker
-        # only. One flag no longer decides it — the two ABIs share a name, so
-        # either routing keeps the bytes name on the wire. Flipping them is what
-        # moves it, and this is the test that makes that flip deliberate.
+        # the whole-message switch off, the wire carries the blocks marker only.
+        # Flipping that switch is what moves it, and this is the test that makes
+        # the flip deliberate.
         #
         # Matched whole (`emitted_composites`): the blocks marker's name is a
-        # PREFIX of the bytes one, so a substring assertion for the blocks
-        # marker is satisfied by the wire carrying the bytes marker instead —
-        # which is exactly what happens wherever the bytes form routes, i.e.
-        # the branch this test is here to tell apart.
+        # PREFIX of the whole-message one, so a substring assertion for the
+        # blocks marker is satisfied by the wire carrying the other instead —
+        # which is exactly the branch this test exists to tell apart.
         msg = np.zeros((1, 64), dtype=np.uint8)
         names = emitted_composites(sha256.digest, msg)
-        # Both whole-message forms now travel under one name, so the wire is the
-        # same whichever of them routes. The `or` mirrors `digest`'s arm order
-        # and is NOT redundant: with `_BYTES_EMITTER_AVAILABLE` false the second
-        # disjunct goes false while the first still routes.
-        if sha256._routes_to_length_abi() or sha256._routes_to_bytes_marker():
+        if sha256._routes_to_bytes_marker():
             self.assertEqual(names, [sha256.SHA256_BYTES_MARKER])
         else:
             self.assertEqual(names, [sha256.SHA256_MARKER])
 
-    def test_digest_carries_the_operands_its_routing_promises(self) -> None:
-        # The name no longer says WHICH ABI `digest` chose — both travel under
-        # `SHA256_BYTES_MARKER`, which is the point of the fold and also its
-        # blind spot: before it, the assertion above discriminated by name. The
-        # FUSION's routing key still discriminates, because the rewriter picks
-        # it off the operands, so it is what pins that the length ABI actually
-        # reached the wire. Without this, `digest` silently falling back to the
-        # static tail on cpu leaves the whole suite green.
-        if not (sha256._routes_to_length_abi() or sha256._routes_to_bytes_marker()):
+    def test_the_blocks_fallback_stays_reachable(self) -> None:
+        # `digest`'s other arm, forced. Both switches carry the same backends,
+        # so every leg takes the whole-message one and this arm would otherwise
+        # run nowhere — the padded-words path and its `device_message` call
+        # would rot untested. Byte-exactness is asserted with it, since the two
+        # arms agreeing is the whole claim that makes the routing free.
+        msgs = np.random.default_rng(11).integers(0, 256, (2, 100), dtype=np.uint8)
+        with mock.patch.object(sha256, "_BYTES_EMITTER_BACKENDS", ("nonesuch",)):
+            self.assertFalse(sha256._routes_to_bytes_marker())
+            self.assertEqual(
+                emitted_composites(sha256.digest, msgs), [sha256.SHA256_MARKER]
+            )
+            got = np.asarray(sha256.digest(msgs))
+        for row, msg in zip(got, msgs):
+            self.assertEqual(bytes(row), hashlib.sha256(bytes(msg)).digest())
+
+    def test_carries_the_operands_its_routing_promises(self) -> None:
+        # The composite name does not say which operand ABI reached the wire —
+        # the recognizer claims two under it — so a name assertion cannot tell a
+        # routed digest from one that emitted into a decline. The FUSION's
+        # routing key can, because the rewriter picks it off the operands, so it
+        # is what pins that the length operand actually arrived.
+        if not sha256._routes_to_bytes_marker():
             self.skipTest("no whole-message recognizer on this backend")
         assert_marker_recognized(
             self,
-            "sha256_bytes_len" if sha256._routes_to_length_abi() else "sha256_bytes",
+            "sha256_bytes_len",
             sha256.digest,
             fnp.asarray(np.zeros((1, 64), dtype=np.uint8)),
         )
 
 
-class Sha256BytesLenAbiTest(parameterized.TestCase):
-    """The runtime-length ABI of `sha256_bytes`, where the message length is an
-    operand rather than part of the message shape.
+class Sha256BytesTest(parameterized.TestCase):
+    """The whole-message marker, whose message length is an operand rather than
+    part of the message shape.
 
     The buffer's extent is a CAPACITY here: the emitter loops on the length
     operand and never reads past it, so every case below fills the bytes from
@@ -351,7 +298,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # buffer far wider than it, so the padded length is what `length`
         # implies rather than what the extent does.
         msg = (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A))[None, :]
-        got = sha256.sha256_bytes_len(
+        got = sha256.sha256_bytes(
             self._buffer(msg, max(length + slack, 1)), np.int32(length)
         )
         self.assertEqual(
@@ -360,15 +307,13 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
 
     @parameterized.parameters(*_LENGTHS)
     def test_matches_the_blocks_marker(self, length: int) -> None:
-        # Three wire forms of one digest: this must byte-equal the static-length
-        # markers, and so, transitively, every consumer's goldens.
+        # Two wire forms of one digest: this must byte-equal the blocks marker,
+        # and so, transitively, every consumer's goldens.
         msgs = np.random.default_rng(length).integers(
             0, 256, size=(4, length), dtype=np.uint8
         )
         np.testing.assert_array_equal(
-            np.asarray(
-                sha256.sha256_bytes_len(self._buffer(msgs, 512), np.int32(length))
-            ),
+            np.asarray(sha256.sha256_bytes(self._buffer(msgs, 512), np.int32(length))),
             np.asarray(
                 sha256.sha256_merkle_damgard(
                     sha256.INITIAL_STATE, sha256._padded_words(fnp.asarray(msgs))
@@ -385,7 +330,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         short, long = b"abc", b"hello world, a longer one"
 
         def two(a: Array, la: Array, b: Array, lb: Array) -> tuple[Array, Array]:
-            return sha256.sha256_bytes_len(a, la), sha256.sha256_bytes_len(b, lb)
+            return sha256.sha256_bytes(a, la), sha256.sha256_bytes(b, lb)
 
         got_a, got_b = frx.jit(two)(
             self._buffer(np.frombuffer(short, dtype=np.uint8)[None, :], 128),
@@ -401,28 +346,29 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # plugin must claim it as one custom fusion. An unrecognized name inlines
         # its decomposition — right bytes, no kernel — which no value-level test
         # above can tell apart.
-        if not sha256._routes_to_length_abi():
-            self.skipTest("no runtime-length recognizer on this backend")
+        if not sha256._routes_to_bytes_marker():
+            self.skipTest("no whole-message recognizer on this backend")
         # `sha256_bytes_len` is the FUSION's routing key, not the marker name:
         # the two are different namespaces. This form travels under the
-        # `hash_frx.digest.sha256_bytes` composite name (one name, two operand
-        # ABIs), and Fractalyze XLA's rewriter routes it — by its operands, not
-        # by its name — to a custom fusion still called `sha256_bytes_len`. So
-        # this key does NOT follow the marker rename.
+        # `hash_frx.digest.sha256_bytes` composite name, and Fractalyze XLA's
+        # rewriter routes it — by its operands, not by its name — to a custom
+        # fusion called `sha256_bytes_len`. So this key does not follow the
+        # Python or the marker spelling.
         assert_marker_recognized(
             self,
             "sha256_bytes_len",
-            sha256.sha256_bytes_len,
+            sha256.sha256_bytes,
             fnp.asarray(np.zeros((2, 128), dtype=np.uint8)),
             np.int32(100),
         )
 
-    def test_the_length_abi_emits_the_same_bytes_name(self) -> None:
-        # The fold, at the wire: this ABI carries the SAME composite name as the
-        # static one, so a consumer cannot tell them apart by name.
+    def test_it_emits_exactly_one_composite(self) -> None:
+        # Whole-name match, and the list length is the composite count:
+        # `hash_frx.digest.sha256` is a prefix of this name, so the two nest and
+        # a substring assertion would not tell them apart.
         self.assertEqual(
             emitted_composites(
-                sha256.sha256_bytes_len,
+                sha256.sha256_bytes,
                 fnp.asarray(np.zeros((2, 128), dtype=np.uint8)),
                 np.int32(100),
             ),
@@ -434,7 +380,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # Baked in, every length would be a fresh module again — and the module
         # would still compute the right bytes, so only the signature shows it.
         txt = (
-            frx.jit(sha256.sha256_bytes_len)
+            frx.jit(sha256.sha256_bytes)
             .lower(fnp.asarray(np.zeros((1, 128), dtype=np.uint8)), np.int32(100))
             .as_text()
         )
@@ -448,20 +394,18 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # decomposition that indexes the message through a clamp with no byte to
         # clamp to. An empty message is `length = 0` in a non-empty buffer.
         with self.assertRaisesRegex(ValueError, "LMAX >= 1"):
-            sha256.sha256_bytes_len(
+            sha256.sha256_bytes(
                 fnp.asarray(np.zeros((1, 0), dtype=np.uint8)), np.int32(0)
             )
 
-    def test_the_form_stays_cpu_only_pending_the_gpu_re_measurement(self) -> None:
-        # Its own backend tuple, narrower than the family's `_EMITTER_BACKENDS`.
-        # No longer because GPU lacks the emitter — the pinned wheel carries it
-        # (fractalyze/xla#582) — but because widening this tuple makes the
-        # static-tail arm of `digest` unreachable, and retiring that arm is a
-        # step with its own acceptance: a GPU re-measurement at the batched
-        # Merkle-leaf shapes (fractalyze/hash-frx#267). Until then the narrow
-        # tuple is a deliberate hold, and this assertion is what keeps widening
-        # it from happening by accident.
-        self.assertEqual(sha256._LEN_EMITTER_BACKENDS, ("cpu",))
+    def test_its_own_backend_tuple_is_pinned(self) -> None:
+        # A separate tuple from the family's `_EMITTER_BACKENDS`, because
+        # Fractalyze XLA gates this marker on its own flag: the two agreeing is
+        # a fact about the pinned wheel rather than a property, so a widening
+        # has to stay a conscious edit. `fusion_path_test._MATRIX` is where a
+        # family's row is spelled, and it carries one tuple per module, so this
+        # per-marker one is pinned here until the matrix grows a column for it.
+        self.assertEqual(sha256._BYTES_EMITTER_BACKENDS, ("cpu", "gpu"))
 
 
 class Sha256CapacityTest(parameterized.TestCase):
