@@ -62,6 +62,15 @@ class ByteHash(Protocol):
     # legitimate constant (`HOST` everywhere).
     fusion_path: FusionPath
 
+    # Supply it as a stored attribute — `DeviceRow.__init__`'s assignment or
+    # `HostRow`'s class constant — and not as a read-only `@property`. Declared
+    # here as a mutable attribute, which a property does not satisfy, so a row
+    # that delegates through one stops being a `ByteHash` at all. The seam
+    # conformance pin every implementation module carries
+    # (docs/reference/conventions.md) is what catches it; `adapter/mgf1.py`
+    # shipped a delegating property for as long as it was the one module
+    # without one.
+
     def digest(self, msg: ArrayLike) -> Array | np.ndarray:
         """Hash a batch of equal-length messages: uint8 `[B, L]` -> uint8
         `[B, digest_size]`, big-endian (the hash's standard output order). The

@@ -30,29 +30,28 @@ row that answers for itself — and keeps the parameterization the caller's, whi
 matters because the two ends of a pair take the same constructor arguments but
 each family takes its own (`Shake256(64)`, `Blake3Keyed(key, 16)`, `Sha256()`).
 
-**Why the table is written out rather than derived from the `Host` prefix.**
-Every pair does spell the host row `Host` + the device row's name, and
-`testing/rows.py` is the registry that would let a lookup walk them — but that
-registry is `testonly`, so nothing shipping can read it. A name-derived lookup
-in its place would answer a renamed row with "this family has no host sibling",
-which is a wrong answer at a consumer's call site rather than an error here. So
-the table is explicit, and `adapter/testing/dual_test.py` holds it to `ALL_ROWS`
-in both directions — a row added to one side only fails there.
-[`block_size.py`](block_size.py) makes the same trade for the same reason.
+**Why the table names types rather than keying on the `Host` prefix.** Every
+pair does spell the host row `Host` + the device row's name, so a name-keyed
+table would work and would cost less to import. The argument is about where each
+form fails: naming the types breaks at IMPORT the moment a row is renamed, while
+a lookup keyed on a name answers the renamed row with "this family has no host
+sibling" — a wrong answer at a consumer's call site rather than an error at the
+table. `adapter/testing/dual_test.py` holds the table to `ALL_ROWS` in both
+directions either way, so the difference is how early it is caught, not whether.
+[`block_size.py`](block_size.py) accepts the name-keyed form, and the later
+failure with it, because staying dep-free is worth more to a table that answers
+with an `int`; this one has to produce the class.
 
 **Why this is in `adapter/` and not on the seam.** #231 left the choice open,
 and the pull toward [`byte_hash.py`](../byte_hash.py) is real: it defines the
 seam and both row bases, so the pairing is a statement about things it already
 owns. It is here because the table has to name row **types** in order to hand
 one back, and every row module imports `byte_hash` — the table cannot live in
-the module they all import without a cycle. `block_size.py` sidesteps that same
-pull by keying on class *names*, which is not open to a `Dual`: it has to
-produce the class, not describe it.
+the module they all import without a cycle.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from frx import Array
@@ -92,9 +91,7 @@ from hash_frx.sm3 import HostSm3, Sm3
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-# Device row type -> its host sibling. Every row that HAS one, and nothing else:
-# `dual_test` walks `testing/rows.py` in both directions, so a family that gains
-# a host row without an entry here fails there rather than at a consumer.
+# Device row type -> its host sibling. Every row that HAS one, and nothing else.
 _HOST_SIBLINGS: dict[type, type] = {
     Sha256: HostSha256,
     Sha512: HostSha512,
@@ -110,19 +107,17 @@ _HOST_SIBLINGS: dict[type, type] = {
     Blake3: HostBlake3,
     Blake3Keyed: HostBlake3Keyed,
     Blake3DeriveKey: HostBlake3DeriveKey,
-    # Absent because the family ships no host row, each for its own reason:
-    # `hashlib` has no Grøstl and no Ascon; its `sha3_*` carry the FIPS domain
-    # suffix, so there is no pre-FIPS `Keccak256` to wrap; and OpenSSL 3 moved
-    # RIPEMD-160 to the legacy provider, so a host row would raise on most
-    # current builds (`ripemd160.py` records that call). Each has a pure-Python
-    # oracle under `testing/`, which is a differential partner and not a row.
+    # The families absent from this table ship no host row at all; `__init__`
+    # below declines for them and carries the per-family reason. Each has a
+    # pure-Python oracle under `testing/`, which is a differential partner for
+    # the device row and not a row a consumer can reach.
 }
 
-# The constructor of one family — `Shake256`, `Blake3Keyed`, `Sha256`. Bound to
-# the call rather than to `type[ByteHash]` so a consumer's
-# `Dual(Shake256)(vals)(64)` type-checks: the arity and the parameters are the
-# family's own, and collapsing them to the seam would lose both.
-Family = TypeVar("Family", bound=Callable[..., "ByteHash"])
+# One family's row type — `Shake256`, `Blake3Keyed`, `Sha256`. A TypeVar and not
+# a plain `type[ByteHash]` so a consumer's `Dual(Shake256)(vals)(64)` type-checks
+# against the family's OWN constructor: collapsing to the seam loses the arity
+# and the parameters with it, and `type[ByteHash](64)` is an error.
+Family = TypeVar("Family", bound="type[ByteHash]")
 
 
 def _traced(*values: object) -> bool:
@@ -146,22 +141,21 @@ class Dual(Generic[Family]):
 
     device : the family's device row type — `Shake128`, `Sha256`, `Blake3Keyed`.
 
-    Placement note: this lives under `adapter/` rather than in `byte_hash.py`
-    because the table names row types and every row module imports the seam, so
-    the seam cannot name them back (module docstring).
+    Placement note: under `adapter/` and not on the seam because this table
+    names row types, and every row module imports `byte_hash` (module docstring).
     """
 
     def __init__(self, device: Family) -> None:
-        host = _HOST_SIBLINGS.get(cast("type", device))
+        host = _HOST_SIBLINGS.get(device)
         if host is None:
-            name = getattr(device, "__name__", repr(device))
             # `LookupError` rather than `KeyError`, whose `__str__` renders
             # through `repr()` and would print this quote-wrapped with its
             # punctuation escaped — `block_size` declines it for the same reason.
             raise LookupError(
-                f"{name} has no host sibling to pair with. A family ships one "
-                "only where a native library implements it: `hashlib` has no "
-                "Grøstl, no Ascon and no pre-FIPS Keccak (its `sha3_*` carry "
+                f"{device.__name__} has no host sibling to pair with. A family "
+                "ships one only where a native library implements it: "
+                "`hashlib` has no Grøstl, no Ascon and no pre-FIPS Keccak "
+                "(its `sha3_*` carry "
                 "the FIPS domain suffix), and OpenSSL 3 moved RIPEMD-160 to "
                 "the legacy provider. There is nothing to dispatch to, so the "
                 "device row is the only implementation and a consumer names it "

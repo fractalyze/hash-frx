@@ -119,10 +119,8 @@ class Mgf1(Row):
         # region is two digests and a pair of XORs; a mask is one digest call,
         # so this one is honest.
         #
-        # An attribute and not a `@property`: `ByteHash` declares `fusion_path`
-        # as a mutable attribute, and a read-only property does not satisfy one
-        # — the class stops being a `ByteHash` at all. The pin at the foot of
-        # this module is what holds that.
+        # A stored attribute and not a `@property`, which the seam requires of
+        # every implementation and states once (`byte_hash.ByteHash`).
         self.fusion_path: FusionPath = byte_hash.fusion_path
 
     def _parameters(self) -> tuple[object, ...]:
@@ -169,9 +167,7 @@ def mgf1(byte_hash: ByteHash, seed: ArrayLike, length: int) -> Array | np.ndarra
 
 
 if TYPE_CHECKING:
-    # Seam-conformance pin (docs/reference/conventions.md). Load-bearing here
-    # rather than ceremonial: an adapter row has no in-tree consumer to fail
-    # instead, so this is the only thing holding the class to the protocol —
-    # and `fusion_path` shipped as a property the protocol does not accept for
-    # exactly as long as the pin was missing.
+    # Seam-conformance pin (docs/reference/conventions.md). Load-bearing rather
+    # than ceremonial: an adapter row has no in-tree consumer to fail instead,
+    # so this is the only thing holding the class to the protocol.
     _bh_mgf1: type[ByteHash] = Mgf1

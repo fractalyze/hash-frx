@@ -132,6 +132,7 @@ py_test(
         "//hash_frx/blake2b",
         "//hash_frx/blake3",
         "//hash_frx/keccak",
+        "//hash_frx/testing:rows",
         requirement("absl_py"),
     ] + GPU_PLUGIN_DEPS,
 )
