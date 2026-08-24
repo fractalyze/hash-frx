@@ -49,13 +49,15 @@ class Poseidon2Params:
     e.g. a Montgomery R^-1, into the layer land in this slot).
 
     Convention baked into this implementation (not yet a parameter): the partial
-    round acts on lane 0, so `internal_constants` must be zero in lanes 1..w-1.
+    round acts on lane 0, which is why `internal_constants` carries one constant
+    per round rather than a width-wide row — lanes 1..w-1 would be structurally
+    zero, and nothing ever reads them.
 
     Contract (validated in __post_init__):
       external_matrix : (width, width) over dtype; applied as `external_matrix @
           state`, so any matrix works. Defaults to the canonical M4-circulant.
       external_constants_initial/terminal : (external_rounds, width)
-      internal_constants : (internal_rounds, width); RC in lane 0, zeros elsewhere
+      internal_constants : (internal_rounds,); the lane-0 round constants
       internal_diag : (width,)
       internal_j_scale : scalar over dtype; None normalizes to one
       alpha : positive S-box exponent; caller guarantees gcd(alpha, p-1)==1
@@ -78,8 +80,7 @@ class Poseidon2Params:
         # `F` and `np.dtype(F)` name one dtype but hash differently (they only
         # compare equal), so an unnormalized field makes two jit cache keys out
         # of one parameterization and silently re-traces. The scalar type is the
-        # canonical spelling — `np.dtype(x).type` round-trips — and it is the
-        # one that stays callable for the zero comparisons below.
+        # canonical spelling — `np.dtype(x).type` round-trips.
         object.__setattr__(self, "dtype", np.dtype(self.dtype).type)
         if self.alpha < 1:
             raise ValueError(f"alpha must be a positive int, got {self.alpha}")
@@ -100,7 +101,7 @@ class Poseidon2Params:
                 (self.external_rounds, w),
                 self.external_constants_terminal,
             ),
-            "internal_constants": ((self.internal_rounds, w), self.internal_constants),
+            "internal_constants": ((self.internal_rounds,), self.internal_constants),
             "internal_diag": ((w,), self.internal_diag),
             "internal_j_scale": ((), self.internal_j_scale),
         }
@@ -112,12 +113,6 @@ class Poseidon2Params:
                 raise ValueError(
                     f"{name}: expected dtype {self.dtype}, got {arr.dtype}"
                 )
-        if w > 1 and not np.all(
-            np.asarray(self.internal_constants[:, 1:]) == self.dtype(0)
-        ):
-            raise ValueError(
-                "internal_constants lanes 1..w-1 must be zero (lane-0 partial round)"
-            )
 
     # Value equality/hash: a permutation rides pytree aux (`DuplexTranscript`
     # meta_fields), which must compare by value — identity equality turns every

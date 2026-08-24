@@ -70,11 +70,13 @@ _EXPORTS: dict[str, str] = {
     # -- primitives: permutations ------------------------------------------
     "AsconP": "hash_frx.ascon.permutation",
     "KeccakF1600": "hash_frx.keccak.permutation",
+    "KoalaBear16": "hash_frx.poseidon2.standard",
     "Poseidon": "hash_frx.poseidon.poseidon",
     "Poseidon2": "hash_frx.poseidon2.poseidon2",
     "SparsePoseidon": "hash_frx.poseidon.sparse",
     "Vision": "hash_frx.vision.vision",
     # -- primitive parameters ----------------------------------------------
+    "KOALABEAR16_PARAMS": "hash_frx.poseidon2.standard",
     "Poseidon2Params": "hash_frx.poseidon2.params",
     "PoseidonParams": "hash_frx.poseidon.params",
     "SparsePoseidonParams": "hash_frx.poseidon.params",
@@ -261,6 +263,10 @@ if TYPE_CHECKING:
         default_external_matrix as default_external_matrix,
     )
     from hash_frx.poseidon2.poseidon2 import Poseidon2 as Poseidon2
+    from hash_frx.poseidon2.standard import (
+        KOALABEAR16_PARAMS as KOALABEAR16_PARAMS,
+    )
+    from hash_frx.poseidon2.standard import KoalaBear16 as KoalaBear16
     from hash_frx.ripemd160 import Ripemd160 as Ripemd160
     from hash_frx.sha256 import HostSha256 as HostSha256
     from hash_frx.sha256 import Sha256 as Sha256
