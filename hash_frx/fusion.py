@@ -12,7 +12,11 @@ Marker names are a wire ABI: Fractalyze XLA's recognizers match by name, and an
 unrecognized name does not error — the composite inlines and fusion is silently
 lost. A contract change therefore stages through `composite.version` rather than
 a rename, and a rename needs the recognizer to accept both spellings first, so
-no build ever requires a toolchain newer than itself.
+no build ever requires a toolchain newer than itself. A third staging exists
+where two operand forms are disjoint in element type AND rank: they ride ONE
+name and the recognizer tells them apart by operands, which is what
+`sha256.SHA256_BYTES_MARKER` does — that requires a recognizer written for it,
+so it is a per-ABI question rather than a per-name one.
 
 The hash markers carry the `hash_frx.` prefix, naming the repo that owns the
 primitive. This one keeps `zorch.` because it is generic rather than owned:

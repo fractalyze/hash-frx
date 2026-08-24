@@ -31,9 +31,8 @@ def emitted_composites(fn: Callable[..., Any], *args: Any) -> list[str]:
     """The composite names `fn` lowers to, exactly.
 
     A marker name must be matched whole. This package's names nest by
-    construction — `hash_frx.digest.sha256` is a prefix of
-    `…sha256_bytes`, which is a prefix of `…sha256_bytes_len`, and the same
-    holds for `poseidon`/`poseidon_sparse`/`poseidon2` and
+    construction — `hash_frx.digest.sha256` is a prefix of `…sha256_bytes`,
+    and the same holds for `poseidon`/`poseidon_sparse`/`poseidon2` and
     `blake3`/`blake3_parent` — so `assertIn(SOME_MARKER, lowered_text)` is
     satisfied by any LONGER sibling and quietly stops testing what it says.
     That is not hypothetical: a routing change that moves the wire from one

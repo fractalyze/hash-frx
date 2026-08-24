@@ -46,14 +46,30 @@ classifiers = [
 dependencies = [
     "numpy",
     "blake3",
-    # Floor = the first wheel where the runtime-length digest marker
-    # (`hash_frx.digest.sha256_bytes_len`, fractalyze/xla#575) that `digest`
-    # routes to (`_LEN_EMITTER_AVAILABLE`) is SAFE. Recognizer and kernel
-    # reuse-key arm ship in one commit here, so the wheel that first accepts
-    # the name is also the first that is safe — which is a property to check
-    # against the wheel (two lengths through one compiled program, both
-    # digests right), never one to assume, because it is exactly what the
-    # marker below got wrong.
+    # Floor = the first wheel where the runtime-length digest ABI is SAFE
+    # under the `hash_frx.digest.sha256_bytes` name it now travels as. Three
+    # things have to be in the wheel, and they landed separately: the CPU
+    # emitter (fractalyze/xla#575), acceptance of the runtime-length ABI under
+    # this name (xla#581), and the GPU emitter plus its compiler gate
+    # (xla#582, merged as PR #585).
+    #
+    # `digest` alone would not need the third yet — it keeps GPU on the static
+    # ABI (`_LEN_EMITTER_BACKENDS`), so the wheel before this one serves it.
+    # `sha256_bytes_len` is the reason: it emits the length ABI whatever the
+    # backend, with no routing gate of its own, so on a wheel without the GPU
+    # emitter a GPU caller of it — this package's own test suite included —
+    # gets the name recognized and the operands DECLINED. Right bytes, and the
+    # decomposition it falls back to speculates every block the buffer could
+    # hold, so it is slower than the static path rather than merely un-fused.
+    # A floor is the only thing that catches that, because nothing fails.
+    #
+    # Verified against this wheel rather than inferred from its version: its
+    # bump PR names the jax commit that triggered it (`jax@17e27097c8d1`),
+    # whose `third_party/xla/revision.bzl` pins `26726b5004…` — the xla commit
+    # that PR #585 merged, closing #582. The version suffix cannot settle this
+    # on its own; the bump PR that produced this wheel was opened carrying an
+    # older one and updated in place. Safety is checked behaviorally too: two
+    # lengths through one compiled program, both digests right.
     #
     # Below this floor the marker inlines back to its decomposition. Right
     # bytes, as ever — but the runtime-length decomposition speculates every
@@ -81,7 +97,7 @@ dependencies = [
     # before any of this — sorts above the dev build named as the floor and
     # would otherwise satisfy it. Naming a later stable instead fails the other
     # way, since the nightly line resumes below it (`0.10.3.dev...` < `0.10.3`).
-    "frx>=0.10.2.dev20260823002126,!=0.10.2",
+    "frx>=0.10.2.dev20260823231429,!=0.10.2",
 ]
 
 [project.urls]

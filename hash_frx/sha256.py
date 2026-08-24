@@ -58,34 +58,35 @@ SHA256_MARKER = "hash_frx.digest.sha256"
 SHA256_MARKER_VERSION = 1
 
 SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
-# The raw-bytes whole-message form: operands [h0 u32[8], k u32[64],
-# msg u8[B, L], tail u8[P]] -> u8[B, 32], with FIPS 180-4 padding and word
-# packing inside the marker. The blocks marker above takes pre-padded words,
-# so every consumer runs a pad-and-pack pass over the whole batch first —
-# at a Merkle-leaf-scale batch (2^20 x 1 KiB) that pass writes and re-reads
-# ~1.1 GB a recognizing emitter can instead synthesize in registers, the
-# padding being a function of the static length.
+# The raw-bytes whole-message form, in either of TWO operand ABIs:
+#
+#   static tail    [h0 u32[8], k u32[64], msg u8[B, L],    tail u8[P]] -> u8[B, 32]
+#   runtime length [h0 u32[8], k u32[64], msg u8[B, LMAX], len  s32[]] -> u8[B, 32]
+#
+# Both carry FIPS 180-4 padding and word packing inside the marker. The blocks
+# marker above takes pre-padded words, so every consumer runs a pad-and-pack
+# pass over the whole batch first — at a Merkle-leaf-scale batch
+# (2^20 x 1 KiB) that pass writes and re-reads ~1.1 GB a recognizing emitter
+# can instead synthesize in registers.
+#
+# In the runtime-length ABI `LMAX` is the buffer's CAPACITY and `len` says how
+# much of it is live, which is what collapses the compile count
+# (`sha256_bytes_len` says what that buys and why a wider buffer is free).
+#
+# `len` is ONE scalar for the whole batch, deliberately: the CPU emitter packs
+# 16 digest rows into vector lanes, and a per-row length would stop them
+# agreeing on the block count and on every padding byte. The recognizer rejects
+# a non-scalar `len` rather than silently taking row 0's, so a per-row ABI stays
+# a separate decision rather than an accident.
+#
+# ONE name for both is safe HERE and would not be in general: the two differ in
+# operand 3's element type AND rank (u8[P] against s32[]), so they are disjoint
+# rather than merely unlikely to collide, and the recognizer reads that
+# difference in a single place. A recognizer that knows only the static ABI
+# declines the runtime one on its operands and inlines — right bytes, no kernel
+# — which is what the `frx>=` floor in pyproject.toml exists to keep off the
+# wire.
 SHA256_BYTES_MARKER_VERSION = 1
-
-SHA256_BYTES_LEN_MARKER = "hash_frx.digest.sha256_bytes_len"
-# The runtime-length form: operands [h0 u32[8], k u32[64], msg u8[B, LMAX],
-# len s32[]] -> u8[B, 32]. Both markers above take the message length as part of
-# its SHAPE, so every distinct length is a fresh module and a fresh compile
-# (~90 ms, which for a caller whose lengths vary is essentially the whole cost of
-# hashing). Here `LMAX` is the buffer's capacity and `len` says how much of it is
-# live, so one compiled kernel serves every length that buffer can hold.
-#
-# The emitter loops on `len` rather than on the extent, so bytes at or past it
-# are never read and a wider buffer costs allocation instead of work. That is
-# what separates this from padding to a bucket in HLO, which reaches the same
-# compile count and then pays the full capacity on every call.
-#
-# `len` is ONE scalar for the whole batch, deliberately: the CPU emitter packs 16
-# digest rows into vector lanes, and a per-row length would stop them agreeing on
-# the block count and on every padding byte. The recognizer rejects a non-scalar
-# `len` rather than silently taking row 0's, so a per-row ABI stays a separate
-# decision rather than an accident.
-SHA256_BYTES_LEN_MARKER_VERSION = 1
 
 # Whether the pinned Fractalyze XLA plugin ships the dedicated SHA-256 emitter,
 # and on which backends (`allow_sha256_fusion` is set in both the CPU and the
@@ -104,15 +105,21 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 # from the bytes operand, retiring the padded-words materialization.
 _BYTES_EMITTER_AVAILABLE = True
 
-# Whether the pinned plugin claims `hash_frx.digest.sha256_bytes_len`, and on
-# which backends. Its own backend tuple rather than `_EMITTER_BACKENDS` above:
-# only the CPU emitter carries this form — Fractalyze XLA gates it on
-# `allow_sha256_bytes_len_fusion`, separate from the flag both compilers set —
-# and its one-thread-per-row GPU shape makes the length question genuinely
-# different rather than a port of the CPU answer. A backend that declines the
-# name would get neither a kernel nor the compile saving, so `digest` keeps the
-# static-length markers there instead of emitting into a decline.
+# Whether the pinned plugin claims the RUNTIME-LENGTH ABI of that same name,
+# and on which backends. Its own flag and its own backend tuple rather than
+# `_BYTES_EMITTER_AVAILABLE` / `_EMITTER_BACKENDS` above, because acceptance is
+# per-ABI and not per-name: Fractalyze XLA gates this form on
+# `allow_sha256_bytes_len_fusion`, separate from the flag both compilers set,
+# so a backend can claim `hash_frx.digest.sha256_bytes` and still decline the
+# length operands on it. A backend that declines gets neither a kernel nor the
+# compile saving — worse, the decomposition speculates every block the buffer
+# could need — so `digest` keeps the static-length ABI there instead of
+# emitting into a decline.
 _LEN_EMITTER_AVAILABLE = True
+# cpu-only is a HOLD, not a capability gap: the pinned wheel carries the GPU
+# emitter too (fractalyze/xla#582). Adding "gpu" here makes `digest`'s
+# static-tail arm unreachable — the two tuples would be equal — so it belongs
+# with retiring that arm, which owes a GPU re-measurement (hash-frx#267).
 _LEN_EMITTER_BACKENDS = ("cpu",)
 
 
@@ -128,9 +135,10 @@ def _routes_to_bytes_marker() -> bool:
     return routing(_BYTES_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
-def _routes_to_bytes_len_marker() -> bool:
-    """Whether `digest` should emit the runtime-length marker on this
-    backend (`fusion.routing`)."""
+def _routes_to_length_abi() -> bool:
+    """Whether `digest` should emit the bytes marker's RUNTIME-LENGTH ABI on
+    this backend (`fusion.routing`; `_LEN_EMITTER_AVAILABLE` says why this is a
+    separate question from the name)."""
     return routing(_LEN_EMITTER_AVAILABLE, _LEN_EMITTER_BACKENDS)
 
 
@@ -496,7 +504,7 @@ def _at_capacity(msg: ArrayLike, capacity: int) -> Array:
 
     Lives here rather than on the seam because `_capacity` does: the policy and
     the widening are only ever called together, and no second family has a
-    runtime-length marker to share them with yet.
+    runtime-length ABI to share them with yet.
     """
     length = message_length(msg)
     if capacity < length:
@@ -543,7 +551,7 @@ def sha256_bytes_len(buf: Array, length: Array) -> Array:
     scalar pins the type but costs a transfer per call, measured at ~14 us
     against the ~3 us digest it accompanies.
 
-    It is one scalar for the whole batch (`SHA256_BYTES_LEN_MARKER` says why), so
+    It is one scalar for the whole batch (`SHA256_BYTES_MARKER` says why), so
     every row of `buf` is hashed at the same length.
 
     Whole-message only, as `sha256_bytes` is: a resumed stream pads at its
@@ -583,8 +591,8 @@ def sha256_bytes_len(buf: Array, length: Array) -> Array:
         _Kd,
         buf,
         length,
-        name=SHA256_BYTES_LEN_MARKER,
-        version=SHA256_BYTES_LEN_MARKER_VERSION,
+        name=SHA256_BYTES_MARKER,
+        version=SHA256_BYTES_MARKER_VERSION,
     )
 
 
@@ -593,7 +601,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
 
     Byte-identical to the FIPS 180-4 standard per message. The device
     compression is emitted as one name-routed marker; which one depends on the
-    pinned plugin. The runtime-length form (`sha256_bytes_len`) where its
+    pinned plugin. The runtime-length ABI of `sha256_bytes` where its
     recognizer exists, hashing out of a `_capacity` buffer so that a host caller
     whose lengths vary compiles once per width rather than once per length; else
     the raw-bytes form (`sha256_bytes`); else the blocks form with the padded
@@ -607,7 +615,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     buffer holding the message, so the message had to be concrete. Built from the
     length instead, it never reads the message at all.
     """
-    if _routes_to_bytes_len_marker():
+    if _routes_to_length_abi():
         length = message_length(msg)
         return sha256_bytes_len(_at_capacity(msg, _capacity(msg)), np.int32(length))
     msg = device_message(msg)

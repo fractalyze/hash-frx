@@ -80,16 +80,13 @@ MARKERS: tuple[Marker, ...] = (
     # Whole hashes — the construction's entire chain behind one call.
     Marker("hash_frx.digest.sha256", 1, MarkerKind.DIGEST),
     # The raw-bytes whole-message form: same digest, different wire ABI (the
-    # message operand is unpadded bytes; padding lives inside the region). A
-    # new name rather than a version bump — the pinned sha256 recognizer
-    # hard-fails on an operand-ABI mismatch instead of declining.
+    # message operand is unpadded bytes; padding lives inside the region). A new
+    # name rather than a version bump on `…sha256`, whose recognizer hard-fails
+    # on an operand-ABI mismatch instead of declining. THIS name's recognizer
+    # dispatches on operands instead, which is what lets two ABIs — the length
+    # as the message's shape, or as a separate operand — ride under it
+    # (`sha256.SHA256_BYTES_MARKER` for why that is safe here).
     Marker("hash_frx.digest.sha256_bytes", 1, MarkerKind.DIGEST),
-    # The runtime-length form of the same digest: the message length rides as an
-    # operand rather than as the message's shape, so one kernel serves every
-    # length its buffer can hold. A third name for the same reason the second
-    # one exists — the operand ABI differs, and a recognizer that does not know
-    # it declines the name rather than mis-reading the operands.
-    Marker("hash_frx.digest.sha256_bytes_len", 1, MarkerKind.DIGEST),
     # SHA-512, the 64-bit SHA-2 sibling: blocks-shaped only — no raw-bytes
     # sibling until a recognizer ships for one (`hash_frx.digest.sha512` notes the
     # deliberate absence).

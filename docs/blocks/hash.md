@@ -257,7 +257,7 @@ measured fresh when they matter.
 Naming the causes is what keeps the condition honest, because it also says what
 retires it: a marker ABI taking the length as an operand, with the block loop
 inside the emitter, compiles once per buffer width rather than once per length.
-SHA-256 has one on the CPU backend — its runtime-length digest marker
+SHA-256 has one on the CPU backend — its runtime-length digest ABI
 ([`sha256.py`](../../hash_frx/sha256.py)) — so a message widened to a shared
 buffer width is hashed at its own length by a kernel every other length reuses.
 Where that holds, condition 1's larger half is gone and the host row rests on
