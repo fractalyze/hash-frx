@@ -89,7 +89,6 @@ MARKERS: tuple[Marker, ...] = (
     # length its buffer can hold. A third name for the same reason the second
     # one exists — the operand ABI differs, and a recognizer that does not know
     # it declines the name rather than mis-reading the operands.
-    Marker("hash_frx.digest.sha256_bytes_len", 1, MarkerKind.DIGEST),
     # SHA-512, the 64-bit SHA-2 sibling: blocks-shaped only — no raw-bytes
     # sibling until a recognizer ships for one (`hash_frx.digest.sha512` notes the
     # deliberate absence).

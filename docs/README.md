@@ -136,9 +136,10 @@ also decides whether a `Sponge` over it wraps its whole hash as
 a plugin without the arm rejects outright, which is a failed compile rather
 than a lost kernel.
 
-`hash_frx.digest.sha256_bytes_len` is gated the same way and for a third
-reason. It takes the message length as an operand rather than as part of the
-message shape, so one compiled kernel serves every length its buffer can hold —
+The runtime-length ABI of `hash_frx.digest.sha256_bytes` is gated the same way
+and for a third reason. It takes the message length as an operand rather than as
+part of the message shape, so one compiled kernel serves every length its buffer
+can hold —
 but its decomposition has to derive a data-dependent block count from that
 operand, which in plain HLO means speculating every block the buffer could need.
 Inlining it is therefore *slower* than the static-length marker it replaces,
