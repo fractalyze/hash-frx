@@ -442,7 +442,7 @@ def _block_words(msg: Array) -> Array:
     byte count reaches the compression as `block_len` instead. So the padding is
     a host constant built from the static length rather than something written
     into the message, which keeps `msg` an operand and lets it be a tracer —
-    `sha256._padding_tail` holds the same property for the same reason.
+    `extension.pad.PadRule.tail` holds the same property for the same reason.
     """
     batch, length = msg.shape
     nblocks = tree.units(length, BLOCK_LEN)

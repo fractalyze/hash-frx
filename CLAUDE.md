@@ -9,7 +9,8 @@ rules every change must respect.
 - **Coding conventions — what a primitive is written to, and why the code does
   not read the way a Python reviewer would prefer:**
   [`docs/reference/conventions.md`](docs/reference/conventions.md)
-- **Design notes — why two seams, and what may live in this repo at all:**
+- **Design notes — the primitive / extension / adapter layering, why a schedule
+  is written once per construction, and what may live in this repo at all:**
   [`docs/blocks/hash.md`](docs/blocks/hash.md)
 - **Dev environment — backend selection, the two test legs (`bazel test` runs
   only one), the lowering gate a wire-preserving refactor needs, the CUDA-12
