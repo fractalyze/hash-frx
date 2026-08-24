@@ -79,6 +79,8 @@ _EXPORTS: dict[str, str] = {
     "KOALABEAR16_PARAMS": "hash_frx.poseidon2.standard",
     "Poseidon2Params": "hash_frx.poseidon2.params",
     "PoseidonParams": "hash_frx.poseidon.params",
+    "SHAKE128_RATE": "hash_frx.keccak.byte_hashes",
+    "SHAKE256_RATE": "hash_frx.keccak.byte_hashes",
     "SparsePoseidonParams": "hash_frx.poseidon.params",
     "VisionParams": "hash_frx.vision.params",
     "default_external_matrix": "hash_frx.poseidon2.params",
@@ -234,6 +236,8 @@ if TYPE_CHECKING:
     from hash_frx.fusion import fused_region_over as fused_region_over
     from hash_frx.fusion import inert_region_spec as inert_region_spec
     from hash_frx.grostl.grostl import Grostl256 as Grostl256
+    from hash_frx.keccak.byte_hashes import SHAKE128_RATE as SHAKE128_RATE
+    from hash_frx.keccak.byte_hashes import SHAKE256_RATE as SHAKE256_RATE
     from hash_frx.keccak.byte_hashes import HostSha3_256 as HostSha3_256
     from hash_frx.keccak.byte_hashes import HostSha3_512 as HostSha3_512
     from hash_frx.keccak.byte_hashes import HostShake128 as HostShake128
