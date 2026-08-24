@@ -8,40 +8,70 @@ seam, construction, and implementation states its own contract and the reasoning
 behind its shape. This hub is the index into them, plus the one contract that
 spans all of them: [fusion](#the-fusion-contract).
 
-The tree mirrors the layering. `hash_frx/*.py` holds the two seams and the
-constructions built over them; `hash_frx/<family>/` is one implementation family
-(its parameter surface, its normal-form linear layers, its permutation); every
-package carries a `testing/` subdir with its tests and the reusable helpers those
-tests share.
+The tree mirrors the layering, which is **primitive / extension / adapter**:
+
+- a **primitive** is one of the two seams — a fixed-width permutation
+  ([`permutation.py`](../hash_frx/permutation.py)) or a finished byte hash
+  ([`byte_hash.py`](../hash_frx/byte_hash.py));
+- an **extension** is a schedule that turns a primitive into a hash —
+  Merkle-Damgard, a sponge, a tree — and it is written once, not once per family;
+- an **adapter** is a construction over a *finished* hash, which reads `digest`
+  and nothing below it ([`adapter/`](../hash_frx/adapter)).
+
+`hash_frx/<family>/` (or a flat `hash_frx/<family>.py` for the ones that need no
+package) is one implementation family: its parameter surface, its round function,
+its constants. Every package carries a `testing/` subdir with its tests and the
+reusable helpers those tests share.
+
+The directory layout states two of the three layers and not the third. The
+byte-side extensions live in [`extension/`](../hash_frx/extension) and the
+adapters in [`adapter/`](../hash_frx/adapter), but the permutation-side
+constructions — [`sponge.py`](../hash_frx/sponge.py),
+[`duplex_sponge.py`](../hash_frx/duplex_sponge.py) and
+[`compression.py`](../hash_frx/compression.py) — are still top-level modules. They
+are extensions by role; the tables below group them by role rather than by
+directory, and that mismatch is bookkeeping rather than a design boundary.
 
 ## Working here
 
 | Question                                                                                   | Where                                             |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
 | The rules a hash primitive is written to — fusion authoring, the seam and pin requirements, byte-exactness, and the assertions that must bite | [`reference/conventions.md`](reference/conventions.md) |
-| Why the layer is shaped this way — two seams, what may live here at all, the SHA-256 pair, which hashes get a host row, fusion as a design property | [`blocks/hash.md`](blocks/hash.md)                 |
+| Why the layer is shaped this way — the three layers, why each schedule is written once, what may live here at all, the SHA-256 pair, which hashes get a host row, fusion as a design property | [`blocks/hash.md`](blocks/hash.md)                 |
 | Getting a dev loop — backend selection, the two test legs, the lowering gate, the CUDA version trap, an unreleased XLA, the compile cache | [`reference/development.md`](reference/development.md) |
 
-## Seams — the surfaces a consumer codes against
+## Primitives — the seams a consumer codes against
 
 | Question                                                                                   | Where                                             |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
 | Hashing with a fixed-width permutation, algebraic or bit-oriented, without naming one       | [`permutation.py`](../hash_frx/permutation.py)     |
 | Hashing raw bytes byte-identically to a published standard, without naming one              | [`byte_hash.py`](../hash_frx/byte_hash.py)         |
 
-## Constructions over a `Permutation`
+## Extensions — the schedules that turn a primitive into a hash
+
+A schedule is written once here, not once per family. Each row names the
+primitive it sits over; `extension/pad.py` sits under the others rather than over
+a primitive, since padding is host arithmetic on the message.
 
 | Question                                                                                   | Where                                               |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
-| One-shot sponge hash — padding-free or Merkle–Damgård, selected per call                    | [`sponge.py`](../hash_frx/sponge.py)                 |
+| Merkle–Damgård over a compression function — the block chain the seven MD families share, the padded-region helper, and the streaming midstate over it | [`extension/md.py`](../hash_frx/extension/md.py) |
+| How a message becomes whole blocks — `PadRule` for the Merkle–Damgård families, `SpongePad` for the sponges | [`extension/pad.py`](../hash_frx/extension/pad.py) |
 | The sponge schedules themselves — the byte one over static counts, the field one over a runtime count, and why they are two | [`extension/sponge.py`](../hash_frx/extension/sponge.py) |
-| How a message becomes whole blocks — `PadRule` for Merkle–Damgård, `SpongePad` for the sponges | [`extension/pad.py`](../hash_frx/extension/pad.py) |
-| The tree schedule — the unit ceiling, the intra-chunk chain, and why bottom-up pairing is the spec's own tree | [`extension/tree.py`](../hash_frx/extension/tree.py) |
-| Interleaved absorb/squeeze with add-mode absorb, for a classic Fiat-Shamir prover            | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
-| Which released duplex a sponge reproduces — `ARK_0_3` (including its spill-permute bug) and `ARK_0_5` | [`adapter/duplex.py`](../hash_frx/adapter/duplex.py) |
-| n-to-1 truncated-permutation compression, for a hash tree                                   | [`compression.py`](../hash_frx/compression.py)       |
+| The tree schedule over a compression function — the unit ceiling, the intra-chunk chain, and why bottom-up pairing is the spec's own tree | [`extension/tree.py`](../hash_frx/extension/tree.py) |
+| One-shot sponge hash over a `Permutation` — padding-free or Merkle–Damgård, selected per call | [`sponge.py`](../hash_frx/sponge.py)                 |
+| Interleaved absorb/squeeze with add-mode absorb over a `Permutation`, for a classic Fiat-Shamir prover | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
+| n-to-1 truncated-permutation compression over a `Permutation`, for a hash tree | [`compression.py`](../hash_frx/compression.py)       |
 
-## Constructions over a `ByteHash`
+There is no seam under the compression functions the Merkle–Damgård and tree
+rows run over — `compress_block` is a plain callback. Why that is a decision rather than a gap is
+in [`extension/tree.py`](../hash_frx/extension/tree.py)'s docstring and in
+[`blocks/hash.md`](blocks/hash.md#extensions--one-schedule-per-construction).
+
+## Adapters — constructions over a finished hash
+
+An adapter reads `digest` and nothing below it, so it works over any `ByteHash`
+without naming one.
 
 | Question                                                                                   | Where                                               |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
@@ -52,6 +82,7 @@ tests share.
 | HKDF — RFC 5869 extract-then-expand, the KDF the composition standards name                  | [`adapter/hkdf.py`](../hash_frx/adapter/hkdf.py)                     |
 | MGF1 — RFC 8017's mask generation, a hash stretched to any length by a counter suffix (RSA-OAEP / PSS) | [`adapter/mgf1.py`](../hash_frx/adapter/mgf1.py) |
 | PBKDF2 — the RFC 8018 iterated KDF as a traced c-loop, with the ipad/opad midstate fast path (BIP-39's seed derivation) | [`adapter/pbkdf2.py`](../hash_frx/adapter/pbkdf2.py)                 |
+| Which released duplex a sponge reproduces — `ARK_0_3` (including its spill-permute bug) and `ARK_0_5` | [`adapter/duplex.py`](../hash_frx/adapter/duplex.py) |
 
 ## Implementations
 
@@ -175,8 +206,20 @@ Findings, measurements, and open fusion decisions live on the epic
 
 ## Growing this hub
 
-A new primitive family adds a row under Implementations and lands in its own
-`hash_frx/<family>/` package, not a buried flat file. A new construction over an
-existing seam adds a row under Constructions. A design note that outgrows its
-module docstring lands in `blocks/`, and a convention that a reviewer has to
-point at more than once lands in `reference/`.
+Route by layer, and the row follows.
+
+- **A new hash family** implements a seam and adds a row under Implementations.
+  It needs a round function, its constants and its parameter surface — and *not*
+  a schedule, a padding rule or a routing step, which is what the extensions
+  above already hold. A family with more than one module of its own gets a
+  `hash_frx/<family>/` package; the ones that fit in a single module stay flat
+  (`sha256.py`, `sha512.py`, `sm3.py`, `blake2s.py`, `ripemd160.py`).
+- **A new schedule** — a construction that turns a primitive into a hash — adds a
+  row under Extensions. Shape it against every family that would enter it before
+  writing it, never against the first one; the reasoning is in
+  [`blocks/hash.md`](blocks/hash.md#extensions--one-schedule-per-construction).
+- **A new construction over a finished hash** adds a row under Adapters and lands
+  in `hash_frx/adapter/`.
+
+A design note that outgrows its module docstring lands in `blocks/`, and a
+convention that a reviewer has to point at more than once lands in `reference/`.

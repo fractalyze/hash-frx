@@ -4,16 +4,43 @@ The *why* behind `hash_frx/`. The *what* lives in the code and its tests, which
 run on every commit. Open decisions live on the epic issue
 [fractalyze/hash-frx#1](https://github.com/fractalyze/hash-frx/issues/1).
 
-## Why two seams
+## Three layers
+
+The tree is **primitive / extension / adapter**, and the layer a thing belongs to
+is decided by what it reads rather than by what it computes.
+
+- A **primitive** is a seam: a fixed-width permutation, or a finished byte hash.
+  It reads its own parameters and nothing else.
+- An **extension** is a schedule that turns a primitive into a hash —
+  Merkle–Damgård, a sponge, a tree. It reads a primitive through its seam, and it
+  is written **once per construction**, never once per family.
+- An **adapter** is a construction over a *finished* hash. It reads `digest` and
+  nothing below it, so it works over any `ByteHash` without naming one.
+
+The layering is the epic's whole claim: a new family should cost a round function
+and its constants, not a vertical. Before Phase 1 that claim was false in a way
+the tree could show — the Merkle–Damgård padding rule was transcribed **nine
+times**, once per family plus the two sponges, and six of the seven MD docstrings
+cited SHA-256's copy as "the arrangement" they reproduce.
+
+Two of the three layers are also directories (`extension/`, `adapter/`). The
+permutation-side extensions — [`sponge.py`](../../hash_frx/sponge.py),
+[`duplex_sponge.py`](../../hash_frx/duplex_sponge.py),
+[`compression.py`](../../hash_frx/compression.py) — are still top-level modules.
+That is bookkeeping left over from the extraction, not a fourth category.
+
+## Primitives — the two seams
 
 A hash is reached through one of two Protocols, and which one depends on what it
 consumes rather than on how it is built.
 
 **`Permutation`** ([`permutation.py`](../../hash_frx/permutation.py)) is a
 fixed-width permutation over a single dtype — `width`, `dtype`, `permute`.
-The sponge, the duplex sponge, and the compression function all read
-`width`/`dtype` to size and allocate state and then call `permute`; none of them
-names a concrete hash. Poseidon2 is one implementation, classic Poseidon a
+The extensions it can enter are [`sponge.py`](../../hash_frx/sponge.py),
+[`duplex_sponge.py`](../../hash_frx/duplex_sponge.py) and
+[`compression.py`](../../hash_frx/compression.py) — all three read `width`/`dtype`
+to size and allocate state and then call `permute`; none of them names a concrete
+hash. Poseidon2 is one implementation, classic Poseidon a
 second, and any other fixed-width permutation drops in unchanged.
 
 That dtype is deliberately not required to be a field, which is what lets the
@@ -30,29 +57,11 @@ several independent axes, and one config object holding two of them is not reuse
 
 **`ByteHash`** ([`byte_hash.py`](../../hash_frx/byte_hash.py)) is the byte
 sibling: `digest(uint8[B, L]) -> uint8[B, digest_size]`, byte-identical to the
-hash's standard. A consumer reads `digest_size` and calls `digest`.
-
-The byte-side sponge schedule is shared, and it was deliberately not
-generalized until it could be shaped against two implementations — a surface
-generalized from a single one encodes that implementation's accidents as the
-family's. Ascon ([`ascon/`](../../hash_frx/ascon)) was the second, so
-[`extension/sponge.py`](../../hash_frx/extension/sponge.py) carries the schedule
-both run (absorb a block and permute; then read the rate and permute between
-reads, with none after the last) and
-[`extension/pad.py`](../../hash_frx/extension/pad.py) carries `SpongePad`. What
-stays family-specific is what actually differs: the state and its packing, the
-pad parameters, and the initial state.
-
-The **field** sponge ([`sponge.py`](../../hash_frx/sponge.py)) shares that
-vocabulary and not that schedule, and the reason is the loop form rather than
-the merge. Its block count is read at runtime through a `lax.while_loop` so a
-concrete and a symbolic `n` lower alike, where both byte sponges are
-Python-unrolled over static counts; it also has no batch axis, no padding, and a
-single truncating read instead of an iterated squeeze. A body parameterized on
-which loop it is would be two bodies behind one name, so the two schedules are
-siblings in `extension/sponge.py`. The same split holds one layer down: field
-trip counts are runtime operands where byte ones are static, so the XLA
-envelopes keep both forms too.
+hash's standard. A consumer reads `digest_size` and calls `digest`. It is a
+*finished* hash, so nothing extends it — the layer above it is the
+[adapters](#adapters--constructions-over-a-finished-hash). The extensions that
+*produce* one run under it, over a compression or round function rather than over
+this seam.
 
 The split is load-bearing because the two have no common surface below `digest`.
 A byte hash's internal construction differs per family — Merkle–Damgård chains a
@@ -62,21 +71,159 @@ shared **streaming** surface is deliberately absent from the seam: the
 incremental state has a different shape in each construction, so a common
 `absorb`/`squeeze` pair would be a fiction that fits one family.
 
-The same intersection rule decides where HMAC's block size lives. HMAC
-([`adapter/hmac.py`](../../hash_frx/adapter/hmac.py)) and HKDF over it
-([`adapter/hkdf.py`](../../hash_frx/adapter/hkdf.py)) are constructions *over* `ByteHash` the
-way `Sponge`/`Compression` are over `Permutation`, and FIPS 198-1's `B` is a
-parameter only a block-keyed construction can interpret — BLAKE3's keyed mode
-is native and has no `B` for HMAC to read. So `Hmac(hash, block_size)` carries
-it, and the seam stays `digest` alone; the parallel is `DuplexSponge` owning
-its `+`-merge rather than narrowing it into `Permutation`.
-
 Width is not a free parameter anywhere: it is whatever the permutation provides.
 The free parameters are `rate`/`out` (`SpongeParams`) and `arity`/`chunk`
 (`CompressionParams`), and validation splits along the same line — the parameter
 object checks what it can see on its own (`rate >= 1`, `out >= 1`) and the
 operator, which knows the width, checks the rest (`rate < width`,
 `out <= width`).
+
+## Extensions — one schedule per construction
+
+An extension is written **once per construction and shaped against every family
+that will enter it**, and the ordering matters: a surface generalized from a
+single implementation encodes that implementation's accidents as the family's.
+That discipline is what the sponge extension paid for by waiting for a second
+byte sponge, and it is what the Merkle–Damgård one paid for by designing against
+all seven before writing a line.
+
+### Merkle–Damgård
+
+[`extension/pad.py`](../../hash_frx/extension/pad.py)'s `PadRule` is the padding
+rule the seven MD families share, and designing it against all seven first
+surfaced four axes a rule derived from SHA-256 alone would have encoded wrong:
+
+- RIPEMD-160 writes its length field **little**-endian, alone among the four
+  that write one;
+- SHA-512 reserves **16** bytes for a 128-bit field it fills to 64, which moves
+  where a message spills only in the 112..119 band and is invisible everywhere
+  else;
+- **Grøstl's trailer is the block count, not the bit length**, so 0, 1 and 55
+  bytes all encode one block;
+- BLAKE2b and BLAKE2s have no trailer and no `0x80` at all — HAIFA carries the
+  length into the compression instead (`pad.haifa_counter`, RFC 7693 §3.2/§3.3),
+  and the empty message is the one case a bare modulo gets wrong.
+
+Each axis is pinned by a vector that fails when the axis is set wrong. The rule
+went from nine definitions to one, and `PadRule.tail` is memoized and keyed by
+value — SHA-256's rule and SM3's are equal and share an entry, so the array it
+returns is read-only.
+
+[`extension/md.py`](../../hash_frx/extension/md.py) holds the schedule around it:
+`chain` is the block loop, and `MdStream` is the streaming midstate as an opaque
+pytree with leading batch dims. `MdStream.absorb` and `.finalize` were each
+written twice — SHA-256's and SHA-512's copies had **zero differing code lines**
+after rename normalization — and are now written once.
+
+**The absorb compresses each block once.** Its live block count depends on
+`pending_len` by at most one, so both static candidates are computed and selected
+between; the two share a *prefix*, so continuing the high one from the low one
+costs `min + 1` compressions instead of `min + max`:
+
+| absorb (bytes) | before | after |
+|---:|---:|---:|
+| 64 | 1 | 1 |
+| 65 | 3 | 2 |
+| 200 | 7 | 4 |
+| 1000 | 31 | 16 |
+| 4096 | 64 | 64 |
+| 4097 | 129 | 65 |
+
+The unchanged rows are the half that is easy to break — the optimization must not
+add work where it does not help — and
+[`testing/absorb_cost_test.py`](../../hash_frx/testing/absorb_cost_test.py)
+asserts the count for both families. `keccak.streaming.ShakeAbsorb.absorb` had this form
+first, with the comment explaining it; the MD absorb re-derived it rather than
+reading it off the sponge in the same package, so both files now cross-reference
+each other.
+
+**The seven families are two wire ABIs, and only one of them shares a chain.**
+Words-in (`*_merkle_damgard`, padding applied outside the marked region) and
+bytes-in (`*_bytes`, padding applied inside) is the split
+[`markers.py`](../../hash_frx/markers.py) already draws. `chain` covers the three
+words-in families; the four bytes-in ones keep a two-line block loop of their own.
+That is measured rather than conceded: a shared bytes-in helper needs five to
+seven callbacks to share **three lines out of forty-one to fifty-six**, and the
+rest is each family's real content. `haifa_counter` is the residue that was
+genuinely shared, so it was extracted and the loop was not.
+
+### Sponge
+
+The byte-side sponge schedule is shared, and it was deliberately not generalized
+until it could be shaped against two implementations. Ascon
+([`ascon/`](../../hash_frx/ascon)) was the second, so
+[`extension/sponge.py`](../../hash_frx/extension/sponge.py) carries the schedule
+both run (absorb a block and permute; then read the rate and permute between
+reads, with none after the last) and `extension/pad.py` carries `SpongePad`. What
+stays family-specific is what actually differs: the state and its packing, the
+pad parameters, and the initial state.
+
+The **field** sponge ([`sponge.py`](../../hash_frx/sponge.py)) shares that
+vocabulary and not that schedule, and the reason is the loop form rather than the
+merge. Its block count is read at runtime through a `lax.while_loop` so a
+concrete and a symbolic `n` lower alike, where both byte sponges are
+Python-unrolled over static counts; it also has no batch axis, no padding, and a
+single truncating read instead of an iterated squeeze. A body parameterized on
+which loop it is would be two bodies behind one name, so the two schedules are
+siblings in `extension/sponge.py`. The same split holds one layer down: field
+trip counts are runtime operands where byte ones are static, so the XLA envelopes
+keep both forms too.
+
+### Tree
+
+[`extension/tree.py`](../../hash_frx/extension/tree.py) is BLAKE3's schedule — the
+unit ceiling, the intra-chunk chain, and bottom-up pairing. Like the MD chain it
+is host arithmetic and control flow: it answers *how many* and *which pairs with
+which*, and the caller answers *with what ops*. That is what makes it testable
+without a device, which is the layer these rules actually live on.
+
+### Why there is no seam under the compression functions
+
+The extensions above take a plain `compress_block` callback rather than a
+`CompressionFunction` Protocol, mirroring what `Permutation` does for the n→n
+kind. That seam was proposed, written, and removed again — it had no implementors
+and nothing consumed it, and reading the candidates afterwards showed the shape
+had been chosen before the families were read.
+
+The honest candidate set is the three that take a per-block counter and flag at
+all, and they disagree on every axis a seam would have to fix:
+
+| | counter / final flag | IV arrival | partial block | result width |
+|---|---|---|---|---|
+| BLAKE3 | `counter [B,2]`, `flags [B]` — **device operands** | one `iv [8]` | `block_len [B]` operand | `[B,16]`, **double** its `[B,8]` state |
+| BLAKE2b | `t: int`, `f: bool` — **host scalars** folded to literal XORs | pre-split `iv_lo [8]`, `iv_hi [8]` | none | `[B,16]` = state width |
+| BLAKE2s | same as 2b | pre-split `iv_a [4]`, `iv_b [4]` | none | `[B,8]` = state width |
+
+BLAKE3's counter varies per row because chunks batch, so it must be traced;
+BLAKE2's message length is static, so its counter folds into the working vector
+as a scalar literal. That is one concept on opposite sides of the host/device
+boundary, and a seam spanning it has to move one across — pushing BLAKE2's
+scalars onto the device **adds operands to a marked region**, which is a wire-ABI
+change, and pulling BLAKE3's onto the host is not possible at all. `block_len`
+and the 8→16 widening have no BLAKE2 counterpart.
+
+Separately, [`compression.py`](../../hash_frx/compression.py) already spells
+`Compression`/`CompressionParams` for the unrelated truncated-permutation n→1
+construction, so a second "compression" seam would sit badly beside it.
+
+The decline is recorded in `extension/tree.py`'s own docstring, next to the
+callback that took the seam's place, rather than only in review history.
+
+## Adapters — constructions over a finished hash
+
+An adapter reads `digest` and nothing below it. [`adapter/`](../../hash_frx/adapter)
+holds them: HMAC and HKDF, MGF1, PBKDF2, the `Xof` and `Dual` holders, the
+per-hash `block_size` table, and the named duplex conventions.
+
+The intersection rule that shapes the seams decides where HMAC's block size
+lives. HMAC ([`adapter/hmac.py`](../../hash_frx/adapter/hmac.py)) and HKDF over it
+([`adapter/hkdf.py`](../../hash_frx/adapter/hkdf.py)) are constructions *over*
+`ByteHash` the way `Sponge`/`Compression` are over `Permutation`, and FIPS
+198-1's `B` is a parameter only a block-keyed construction can interpret —
+BLAKE3's keyed mode is native and has no `B` for HMAC to read. So
+`Hmac(hash, block_size)` carries it, and the seam stays `digest` alone; the
+parallel is `DuplexSponge` owning its `+`-merge rather than narrowing it into
+`Permutation`.
 
 ## What may live here at all
 
@@ -111,10 +258,18 @@ marker owned by the consumer that knows what a transcript is.
 
 The cost of an unfused streaming call is real and worth stating so nobody
 re-derives it. Because the padding choice is data-dependent, both
-`sha256_stream_absorb` and `sha256_stream_finalize` compress every candidate
-block count and select, so an absorb followed by a finalize emits **3**
+`sha256_stream_absorb` and `sha256_stream_finalize` emit every candidate block
+count and select between them, so an absorb followed by a finalize emits **3**
 composites and roughly 818 StableHLO ops of glue at a message inside one block —
 a longer absorb adds a candidate and its composite (a 70-byte one is 4).
+
+The op figure predates the prefix-chaining absorb and is an upper bound now.
+*Emitting* both candidates is not the same as *compressing* both: the absorb's
+two candidates share a prefix, so it still emits two `chain` regions but folds
+`min + 1` blocks rather than `min + max`
+([above](#extensions--one-schedule-per-construction)). The finalize is the half
+that still speculates in full — its one-block and two-block layouts are separate
+shapes, chosen on a `pending_len` only known at runtime.
 
 Two independent costs hide in that count, and only one of them is a marker's to
 remove. A marker removes the launch overhead *around* the work; it does not
@@ -234,11 +389,11 @@ wherever the message length is part of the *input shape*. `digest` takes
 static by construction —
 [`keccak/sponge.py`](../../hash_frx/keccak/sponge.py) states the trade in one
 line ("every loop bound here is static … that is what lets `digest` take a
-tracer"), and `_padding_tail` builds the pad as a host constant *from* the
-static length. So an eager caller whose messages are not all one length pays a
-**compilation per length**, not a kernel per call — and on the CPU backend at
-`B = 1` that compilation is four to five orders of magnitude above the warm
-call it enables, which is itself an order above the `hashlib` row. The host
+tracer"), and `extension/pad.py`'s `PadRule` builds the pad as a host constant
+*from* the static length. So an eager caller whose messages are not all one
+length pays a **compilation per length**, not a kernel per call — and on the CPU
+backend at `B = 1` that compilation is four to five orders of magnitude above the
+warm call it enables, which is itself an order above the `hashlib` row. The host
 row's real saving is the compile, and it dwarfs the dispatch saving that the
 batch-shape table above measures.
 
@@ -257,9 +412,12 @@ measured fresh when they matter.
 Naming the causes is what keeps the condition honest, because it also says what
 retires it: a marker ABI taking the length as an operand, with the block loop
 inside the emitter, compiles once per buffer width rather than once per length.
-SHA-256 has one on the CPU backend — its runtime-length digest ABI
-([`sha256.py`](../../hash_frx/sha256.py)) — so a message widened to a shared
-buffer width is hashed at its own length by a kernel every other length reuses.
+SHA-256 has one on **both** cpu and gpu — its runtime-length digest ABI
+([`sha256.py`](../../hash_frx/sha256.py), `_BYTES_EMITTER_BACKENDS`) — so a
+message widened to a shared buffer width is hashed at its own length by a kernel
+every other length reuses. That ABI is now the only whole-message form: the
+static-tail arm it once shared the marker name with was retired once the operand
+form reached every backend that has an emitter at all.
 Where that holds, condition 1's larger half is gone and the host row rests on
 dispatch alone, which is a far weaker justification than the paragraphs above
 describe.

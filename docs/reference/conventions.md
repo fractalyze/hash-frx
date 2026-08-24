@@ -11,6 +11,47 @@ apart; read them in
 [`zorch`'s page](https://github.com/fractalyze/zorch/blob/main/docs/reference/conventions.md),
 which states them in full.
 
+## Adding a hash: a seam implementation and a row
+
+The [three layers](../blocks/hash.md#three-layers) exist so that a new family
+costs a round function and its constants. The recipe is three steps, and none of
+them is "copy the family next door":
+
+1. **Implement the primitive seam.** A fixed-width permutation implements
+   [`Permutation`](../../hash_frx/permutation.py); a byte hash's compression or
+   round function is a plain callable the extension takes. Write the round
+   function, its constants and its parameter surface — with the document and
+   section each constant comes from, per [byte-exactness](#byte-exactness-is-the-gate).
+2. **Pick the extension that already runs your schedule.** Merkle–Damgård is
+   [`extension/pad.py`](../../hash_frx/extension/pad.py)'s `PadRule` plus
+   [`extension/md.py`](../../hash_frx/extension/md.py)'s `chain` and `MdStream`;
+   a byte sponge is [`extension/sponge.py`](../../hash_frx/extension/sponge.py)
+   plus `SpongePad`; a chunk tree is
+   [`extension/tree.py`](../../hash_frx/extension/tree.py); a construction over a
+   `Permutation` is [`sponge.py`](../../hash_frx/sponge.py),
+   [`duplex_sponge.py`](../../hash_frx/duplex_sponge.py) or
+   [`compression.py`](../../hash_frx/compression.py). If your family needs a
+   parameter the rule does not carry, add the axis to the rule and pin it with a
+   vector that fails when the axis is set wrong — do not fork the rule.
+3. **Add the rows.** A device row and, where
+   [both conditions hold](../blocks/hash.md#which-hashes-get-a-host-row), a host
+   row: a row is a `_hash_one` callable plus its `digest_size` over
+   [`byte_hash.host_digest`](../../hash_frx/byte_hash.py). Register the marker
+   name in [`markers.py`](../../hash_frx/markers.py), override `_parameters()`,
+   and end the module with its [seam conformance pin](#seam-conformance-pins).
+
+**There is no routing step**, and nothing in the list writes a padding rule, a
+length field or a block loop. Those were transcribed nine times before the
+schedules were extracted and are written once now; a tenth copy is a regression
+rather than a new family.
+
+**A new extension is the one case that is not routine.** Shape it against every
+family that will enter it *before* writing it, never against the first one — a
+surface generalized from a single implementation encodes that implementation's
+accidents as the family's. What that discipline caught, and the one case where a
+seam was written early and had to be withdrawn, is in
+[`blocks/hash.md`](../blocks/hash.md#extensions--one-schedule-per-construction).
+
 ## A marked body is authored to lower, not to read
 
 The [fusion contract](../README.md#the-fusion-contract) says what the unit is.
