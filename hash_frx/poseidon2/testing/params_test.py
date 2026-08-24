@@ -25,7 +25,7 @@ def _good(**over: Any) -> Poseidon2Params:
         internal_rounds=ir,
         external_constants_initial=fnp.zeros((er, w), dtype=F),
         external_constants_terminal=fnp.zeros((er, w), dtype=F),
-        internal_constants=fnp.zeros((ir, w), dtype=F),
+        internal_constants=fnp.zeros((ir,), dtype=F),
         internal_diag=fnp.ones((w,), dtype=F),
     )
     base.update(over)
@@ -43,15 +43,27 @@ class Poseidon2ParamsTest(absltest.TestCase):
 
     def test_bad_rc_shape_raises(self) -> None:
         with self.assertRaises(ValueError) as cm:
-            _good(internal_constants=fnp.zeros((19, 16), dtype=F))  # wrong round count
+            _good(internal_constants=fnp.zeros((19,), dtype=F))  # wrong round count
         self.assertIn("internal_constants", str(cm.exception))
 
-    def test_nonzero_internal_lane_raises(self) -> None:
-        bad = np.zeros((20, 16), dtype=np.int32)
-        bad[0, 1] = 1  # lane 1 nonzero
+    def test_internal_constants_are_one_per_round(self) -> None:
+        """One constant per partial round, not a width-wide row.
+
+        The partial round S-boxes lane 0 alone, so only lane 0's constant is
+        ever read. Carrying `(internal_rounds, width)` made every caller build
+        a zero matrix and fill column 0 for `poseidon2.py` to slice back out —
+        a round trip with no information in it, and a zero-lane validation to
+        police the padding it introduced.
+        """
+        self.assertEqual(_good().internal_constants.shape, (20,))
+
+    def test_width_wide_internal_constants_raise(self) -> None:
+        """The old `(internal_rounds, width)` spelling is refused rather than
+        silently sliced: a caller still passing the padded matrix gets told,
+        instead of having lanes 1..w-1 quietly discarded."""
         with self.assertRaises(ValueError) as cm:
-            _good(internal_constants=fnp.array(bad, dtype=F))
-        self.assertIn("lane", str(cm.exception).lower())
+            _good(internal_constants=fnp.zeros((20, 16), dtype=F))
+        self.assertIn("internal_constants", str(cm.exception))
 
 
 class Poseidon2ParamsValueEqualityTest(absltest.TestCase):

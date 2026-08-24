@@ -178,9 +178,9 @@ def _permutation_body(
 ) -> Array:
     """The straight-line permute on a single `(width,)` state, taking the
     Poseidon2Fusion ABI operands explicitly: round constants flattened row-major,
-    int_rc the lane-0 column. The internal J scale rides as the `internal_j_scale`
-    marker attribute (a scalar constant survives `lax.scan`, where an operand is
-    hoisted).
+    int_rc one constant per partial round. The internal J scale rides as the
+    `internal_j_scale` marker attribute (a scalar constant survives `lax.scan`,
+    where an operand is hoisted).
 
     The decomposition every `hash_frx.perm.poseidon2` region runs, spliced inline (the
     generic marker's single-kernel requirement allows no call). A batch is
@@ -246,7 +246,7 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
     return (
         state,
         p.external_constants_initial.reshape(-1),
-        p.internal_constants[:, 0],
+        p.internal_constants,
         p.external_constants_terminal.reshape(-1),
         p.internal_diag,
     )

@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 import frx.numpy as fnp
-import numpy as np
 from zk_dtypes import koalabear_mont as F
 
 from hash_frx.poseidon2.params import Poseidon2Params
@@ -252,8 +251,6 @@ KOALABEAR16_EXPECTED = fnp.array(
 
 
 def koalabear16_params() -> Poseidon2Params:
-    internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
-    internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
     return Poseidon2Params(
         width=_WIDTH,
         dtype=F,
@@ -262,7 +259,7 @@ def koalabear16_params() -> Poseidon2Params:
         internal_rounds=_IR,
         external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=F),
         external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=F),
-        internal_constants=fnp.array(internal_rc, dtype=F),
+        internal_constants=fnp.array(_INTERNAL_RC, dtype=F),
         internal_diag=fnp.array(_INTERNAL_DIAG, dtype=F),
     )
 

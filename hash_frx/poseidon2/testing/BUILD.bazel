@@ -13,7 +13,6 @@ py_library(
     deps = [
         "//hash_frx/poseidon2",
         requirement("frx"),
-        requirement("numpy"),
         requirement("zk_dtypes"),
     ],
 )
