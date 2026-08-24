@@ -3,19 +3,28 @@
 
 `params.py` ships the *shape* — `Poseidon2Params` and `default_external_matrix`
 — and this module ships *instances* of it: the parameterizations consumers
-actually run, each pinned to the released implementation it reproduces. The
-split mirrors [`adapter/duplex.py`](../adapter/duplex.py), where the
-construction owns the axes and the adapter owns the members: a set is a claim
-about an external codebase, and a claim about the outside world needs a name
-and a citation rather than a comment.
+actually run, each pinned to the released implementation it reproduces. A set
+is a claim about an external codebase, and a claim about the outside world
+needs a name and a citation rather than a comment.
+
+The repo's precedent for a shipped named set is
+[`vision/params.py`](../vision/params.py)'s `vision_mark32_params` — same
+package as the primitive, which is why this lives under `poseidon2/` rather
+than under `adapter/` (that layer is constructions built over a finished hash:
+HMAC, HKDF, PBKDF2, MGF1). It differs from Vision's on one axis: Vision takes
+`dtype` as a parameter because its constants are dtype-independent, while a
+Poseidon2 set's round constants are field elements, so the field is baked in
+and this target carries the `zk_dtypes` dep that the engine deliberately does
+not.
 
 **What this fixes is a duplication that fails silently.** Before this module
 the constants lived in each consumer's own tree, verified in exactly one place
 (hash-frx's test fixture, against Plonky3) and used in several. A round-constant
 table that is wrong does not crash; it produces a hash that is merely
 *different*, and the difference surfaces as a Merkle root mismatch three layers
-away. Shipping the set with `testing/standard_test.py` holding it to the
-reference is what makes the constants and their proof travel together.
+away. `testing/poseidon2_test.py`'s `test_permute_byte_matches_plonky3` runs
+these parameters, so the constants and the assertion that pins them to Plonky3
+now live in one repo instead of two.
 
 **Which sets belong here.** The test is "is this set one scheme's?".
 KoalaBear-16 below is a general Plonky3 parameterization, so it passes. A set
@@ -233,11 +242,11 @@ _INTERNAL_DIAG = [
     127,
 ]
 
-# The parameter bundle behind `KoalaBear16`. Public so a consumer can build a
-# variant off it (`dataclasses.replace`) without transcribing the tables again,
-# but deliberately NOT in the package's export table: `KoalaBear16` is the one
-# name this set answers to at the root, and a second spelling there is exactly
-# what `adapter/mgf1.py` argues against.
+# The parameter bundle behind `KoalaBear16`, exported alongside it. A consumer
+# building a variant (`dataclasses.replace` for a different internal diagonal or
+# J scale — SP1's set is exactly that) needs the params, not the permutation,
+# and reaching them through the module path would import the file layout the
+# root's lazy table exists to hide.
 KOALABEAR16_PARAMS = Poseidon2Params(
     width=_WIDTH,
     dtype=_F,

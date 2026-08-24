@@ -20,9 +20,11 @@ py_library(
 )
 
 # The named standard parameter sets. A separate target from the engine on
-# purpose: the engine is field-agnostic and deps no field, while a named set
-# is a concrete parameterization over a concrete dtype and pulls `zk_dtypes`.
-# Same split `adapter/block_size` makes for the same reason.
+# purpose: the engine is field-agnostic and deps no field, while a named set is
+# a concrete parameterization over a concrete dtype and so pulls `zk_dtypes`.
+# The split keeps that dep off every engine consumer -- note it runs the
+# opposite way to `adapter/block_size`, which splits out in order to dep
+# nothing at all.
 py_library(
     name = "standard",
     srcs = [

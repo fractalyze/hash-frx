@@ -30,6 +30,8 @@ from hash_frx.testing.marker_seam import assert_marker_matches_emission
 
 class Poseidon2Koalabear16Test(absltest.TestCase):
     def test_permute_byte_matches_plonky3(self) -> None:
+        # Runs the shipped `KOALABEAR16_PARAMS`, so this is what holds the
+        # published constants to the revision `standard.py` names.
         p = koalabear16_perm()
         out = p.permute(fnp.arange(16, dtype=F))
         self.assertTrue(bool(fnp.array_equal(out, KOALABEAR16_EXPECTED)))

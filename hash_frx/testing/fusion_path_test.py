@@ -45,8 +45,6 @@ from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.poseidon import poseidon as poseidon_mod
 from hash_frx.poseidon import sparse as sparse_mod
 from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
-from hash_frx.poseidon2.poseidon2 import Poseidon2
-from hash_frx.poseidon2.standard import KOALABEAR16_PARAMS
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.ripemd160 import Ripemd160
 from hash_frx.sha256 import Sha256
@@ -147,10 +145,7 @@ class DeviceCellTest(absltest.TestCase):
         # backend-veto mock; these three families have no gate test of their
         # own.
         for module, build in (
-            # A fresh construction, not `koalabear16_perm()`: `fusion_path` is
-            # snapshotted in `__init__`, and that accessor now hands back the
-            # module-level `KoalaBear16`, built before this mock is installed.
-            (poseidon2_mod, lambda: Poseidon2(KOALABEAR16_PARAMS)),
+            (poseidon2_mod, koalabear16_perm),
             (sha256_mod, Sha256),
             (blake3_rows, Blake3),
         ):

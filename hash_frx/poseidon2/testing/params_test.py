@@ -41,29 +41,20 @@ class Poseidon2ParamsTest(absltest.TestCase):
         self.assertEqual(ext.shape, (16, 16))
         self.assertEqual(ext.dtype, F)
 
-    def test_bad_rc_shape_raises(self) -> None:
-        with self.assertRaises(ValueError) as cm:
-            _good(internal_constants=fnp.zeros((19,), dtype=F))  # wrong round count
-        self.assertIn("internal_constants", str(cm.exception))
+    def test_bad_internal_constants_shape_raises(self) -> None:
+        """One constant per partial round: `(internal_rounds,)`.
 
-    def test_internal_constants_are_one_per_round(self) -> None:
-        """One constant per partial round, not a width-wide row.
-
-        The partial round S-boxes lane 0 alone, so only lane 0's constant is
-        ever read. Carrying `(internal_rounds, width)` made every caller build
-        a zero matrix and fill column 0 for `poseidon2.py` to slice back out —
-        a round trip with no information in it, and a zero-lane validation to
-        police the padding it introduced.
+        The partial round S-boxes lane 0, so the old `(internal_rounds, width)`
+        spelling was structurally-zero padding every caller built and the ABI
+        sliced back out. Both a wrong round count and the old width-wide
+        spelling are refused by the same shape check — the latter rather than
+        being silently sliced down to lane 0.
         """
-        self.assertEqual(_good().internal_constants.shape, (20,))
-
-    def test_width_wide_internal_constants_raise(self) -> None:
-        """The old `(internal_rounds, width)` spelling is refused rather than
-        silently sliced: a caller still passing the padded matrix gets told,
-        instead of having lanes 1..w-1 quietly discarded."""
-        with self.assertRaises(ValueError) as cm:
-            _good(internal_constants=fnp.zeros((20, 16), dtype=F))
-        self.assertIn("internal_constants", str(cm.exception))
+        for bad in (fnp.zeros((19,), dtype=F), fnp.zeros((20, 16), dtype=F)):
+            with self.subTest(shape=bad.shape):
+                with self.assertRaises(ValueError) as cm:
+                    _good(internal_constants=bad)
+                self.assertIn("internal_constants", str(cm.exception))
 
 
 class Poseidon2ParamsValueEqualityTest(absltest.TestCase):
@@ -91,8 +82,7 @@ class DtypeSpellingTest(absltest.TestCase):
     They compare equal, so equality alone never caught this: as jit cache keys
     they are two entries, and a consumer that spelled the dtype the other way
     silently re-traced every call. `dtype` is normalized to the scalar type,
-    which is also the spelling that stays callable for the zero comparisons in
-    `__post_init__` — `np.dtype(F)(0)` raises.
+    the spelling `np.dtype(x).type` round-trips to.
     """
 
     def test_both_spellings_normalize_to_one_key(self) -> None:

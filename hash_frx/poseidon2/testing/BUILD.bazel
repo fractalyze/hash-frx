@@ -72,18 +72,3 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
-
-py_test(
-    name = "standard_test",
-    size = "medium",
-    srcs = ["standard_test.py"],
-    deps = [
-        ":koalabear16",
-        "//hash_frx",
-        "//hash_frx/poseidon2",
-        "//hash_frx/poseidon2:standard",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)

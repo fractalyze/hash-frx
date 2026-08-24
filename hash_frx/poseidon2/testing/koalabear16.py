@@ -17,14 +17,12 @@ from zk_dtypes import koalabear_mont as F
 
 from hash_frx.poseidon2.params import Poseidon2Params
 from hash_frx.poseidon2.poseidon2 import Poseidon2
-from hash_frx.poseidon2.standard import KOALABEAR16_PARAMS, KoalaBear16
+from hash_frx.poseidon2.standard import KOALABEAR16_PARAMS
 
-_WIDTH, _ER, _IR, _ALPHA = (
-    KOALABEAR16_PARAMS.width,
-    KOALABEAR16_PARAMS.external_rounds,
-    KOALABEAR16_PARAMS.internal_rounds,
-    KOALABEAR16_PARAMS.alpha,
-)
+# Literals, deliberately not read off `KOALABEAR16_PARAMS`: these build the
+# expected marker text, and an expectation derived from the object under test
+# follows it silently when it changes.
+_WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 
 # This parameterization's marker metadata as StableHLO prints it (dict keys
 # alphabetical) — shared by the emission contract test and the vmap marker
@@ -73,8 +71,14 @@ def koalabear16_params() -> Poseidon2Params:
 
 
 def koalabear16_perm() -> Poseidon2:
-    """The shipped koalabear-16 Poseidon2 permutation instance (width 16)."""
-    return KoalaBear16
+    """A fresh permutation over the shipped koalabear-16 parameters.
+
+    Fresh per call, not the module-level `KoalaBear16`: several tests build two
+    and require them to compare equal by value (the static jit key) or to see a
+    backend mock installed after import. Handing back one shared instance makes
+    those pass on identity instead, which is the regression they exist to catch.
+    """
+    return Poseidon2(KOALABEAR16_PARAMS)
 
 
 def koalabear16_scaled_perm() -> Poseidon2:
