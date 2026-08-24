@@ -19,6 +19,23 @@ py_test(
     ],
 )
 
+# `nblocks` under a tracer. Split from `pad_test` rather than folded into it:
+# `pad.py` pulls no frx and `pad_test` is what proves a rule can be read and
+# tested without a backend, so only the cases that genuinely need one pay for
+# it. This one does need one — it calls `frx.jit`, so it takes the plugin deps
+# too, and on the GPU leg those are what make `cuda` a known backend at all.
+py_test(
+    name = "pad_traced_test",
+    size = "small",
+    srcs = ["pad_traced_test.py"],
+    deps = [
+        "//hash_frx/extension:pad",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 # The schedules against a recording fake rather than against a family. Deps
 # `:sponge` alone: `absorb_squeeze` emits no array op — every one reaches it
 # through the caller's callbacks — so its rules are checked over plain Python
