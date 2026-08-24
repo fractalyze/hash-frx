@@ -39,6 +39,7 @@ directory, and that mismatch is bookkeeping rather than a design boundary.
 | The rules a hash primitive is written to — fusion authoring, the seam and pin requirements, byte-exactness, and the assertions that must bite | [`reference/conventions.md`](reference/conventions.md) |
 | Why the layer is shaped this way — the three layers, why each schedule is written once, what may live here at all, the SHA-256 pair, which hashes get a host row, fusion as a design property | [`blocks/hash.md`](blocks/hash.md)                 |
 | Getting a dev loop — backend selection, the two test legs, the lowering gate, the CUDA version trap, an unreleased XLA, the compile cache | [`reference/development.md`](reference/development.md) |
+| Depending on this package from another repo — the import form, the Bazel dep that goes with it, and what to do about a name the root does not export | [`reference/consuming.md`](reference/consuming.md) |
 
 ## Primitives — the seams a consumer codes against
 
