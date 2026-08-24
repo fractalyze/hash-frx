@@ -76,9 +76,12 @@ _EXPORTS: dict[str, str] = {
     "SparsePoseidon": "hash_frx.poseidon.sparse",
     "Vision": "hash_frx.vision.vision",
     # -- primitive parameters ----------------------------------------------
+    "KECCAK256_RATE": "hash_frx.keccak.byte_hashes",
     "KOALABEAR16_PARAMS": "hash_frx.poseidon2.standard",
     "Poseidon2Params": "hash_frx.poseidon2.params",
     "PoseidonParams": "hash_frx.poseidon.params",
+    "SHA3_256_RATE": "hash_frx.keccak.byte_hashes",
+    "SHA3_512_RATE": "hash_frx.keccak.byte_hashes",
     "SHAKE128_RATE": "hash_frx.keccak.byte_hashes",
     "SHAKE256_RATE": "hash_frx.keccak.byte_hashes",
     "SparsePoseidonParams": "hash_frx.poseidon.params",
@@ -236,6 +239,9 @@ if TYPE_CHECKING:
     from hash_frx.fusion import fused_region_over as fused_region_over
     from hash_frx.fusion import inert_region_spec as inert_region_spec
     from hash_frx.grostl.grostl import Grostl256 as Grostl256
+    from hash_frx.keccak.byte_hashes import KECCAK256_RATE as KECCAK256_RATE
+    from hash_frx.keccak.byte_hashes import SHA3_256_RATE as SHA3_256_RATE
+    from hash_frx.keccak.byte_hashes import SHA3_512_RATE as SHA3_512_RATE
     from hash_frx.keccak.byte_hashes import SHAKE128_RATE as SHAKE128_RATE
     from hash_frx.keccak.byte_hashes import SHAKE256_RATE as SHAKE256_RATE
     from hash_frx.keccak.byte_hashes import HostSha3_256 as HostSha3_256
