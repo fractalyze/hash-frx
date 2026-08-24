@@ -305,5 +305,77 @@ class SpongePadTailIsSafeToShareTest(absltest.TestCase):
         self.assertIs(SHA3_256_PAD.tail(1), SpongePad(rate=136, head=0x06).tail(1))
 
 
+# `nblocks` is what a RUNTIME-LENGTH path sizes its block loop from, so it has to
+# hold for every rule rather than for the trailer-carrying ones alone. The
+# vectors below are literal, per this file's rule that a test recomputing the
+# implementation proves only that the implementation is deterministic; the
+# invariant test that follows then ties them to `tail`, which the vectors at the
+# top of this file already pin.
+
+
+class NblocksTest(parameterized.TestCase):
+    """Block counts, literal per this file's rule, for the two shapes that do not
+    use the trailer formula."""
+
+    @parameterized.named_parameters(
+        # `pad10*1` never pads to nothing, so a rate-aligned message gains a
+        # whole block and the count is `length // rate + 1` everywhere.
+        ("ascon_empty", ASCON_PAD, 0, 1),
+        ("ascon_partial", ASCON_PAD, 7, 1),
+        ("ascon_exact_block", ASCON_PAD, 8, 2),
+        ("ascon_two_blocks", ASCON_PAD, 63, 8),
+        ("sha3_empty", SHA3_256_PAD, 0, 1),
+        ("sha3_one_short", SHA3_256_PAD, 135, 1),
+        ("sha3_exact_block", SHA3_256_PAD, 136, 2),
+        # HAIFA zero-fills and carries the length in a counter, so a
+        # block-aligned message needs NO padding — the one family whose block
+        # count is not the trailer formula. The empty message still runs the
+        # compression once.
+        ("blake2s_empty", BLAKE2S, 0, 1),
+        ("blake2s_partial", BLAKE2S, 1, 1),
+        ("blake2s_exact_block", BLAKE2S, 64, 1),
+        ("blake2s_spills", BLAKE2S, 65, 2),
+        ("blake2s_two_exact", BLAKE2S, 128, 2),
+        ("blake2b_exact_block", BLAKE2B, 128, 1),
+        ("blake2b_spills", BLAKE2B, 129, 2),
+    )
+    def test_nblocks(
+        self, rule: PadRule | SpongePad, length: int, expected: int
+    ) -> None:
+        self.assertEqual(rule.nblocks(length), expected)
+
+
+class NblocksAgreesWithTailTest(parameterized.TestCase):
+    """`nblocks` and `tail` are two views of one rule, and this is the contract
+    between them: the padded message is exactly `nblocks` whole blocks.
+
+    Restating either one per call site is what let a family's batch digest and
+    its streaming finalize disagree about where the length field goes, so the
+    agreement is pinned here rather than assumed.
+    """
+
+    @parameterized.named_parameters(
+        ("sha256", SHA256, 64),
+        ("sha512", SHA512, 128),
+        ("ripemd160", RIPEMD160, 64),
+        ("sm3", SM3, 64),
+        ("grostl", GROSTL, 64),
+        ("blake2s", BLAKE2S, 64),
+        ("blake2b", BLAKE2B, 128),
+        ("ascon", ASCON_PAD, 8),
+        ("sha3_256", SHA3_256_PAD, 136),
+    )
+    def test_padded_length_is_whole_blocks(
+        self, rule: PadRule | SpongePad, block_size: int
+    ) -> None:
+        for length in range(0, 300):
+            padded = length + len(rule.tail(length))
+            self.assertEqual(
+                padded,
+                rule.nblocks(length) * block_size,
+                f"{rule} disagrees with its own tail at length {length}",
+            )
+
+
 if __name__ == "__main__":
     absltest.main()

@@ -90,7 +90,7 @@ class PadRule:
             )
 
     def nblocks(self, length: int) -> int:
-        """How many blocks a `length`-byte message pads to, under a trailer.
+        """How many blocks a `length`-byte message pads to.
 
         Plain `//` and `+`, so it holds over a TRACED length as readily as a host
         one — which is what lets a runtime-length path size its block loop from
@@ -100,9 +100,21 @@ class PadRule:
         is exactly the field that varies: SHA-512 claims 16 bytes where the rest
         claim 8.
 
-        `Trailer.NONE` has no length field to make room for, so its block count
-        is not this — `tail` handles that family separately.
+        **`Trailer.NONE` counts differently, and the difference is a whole
+        block.** HAIFA reserves nothing, because the length reaches the
+        compression as a counter rather than through the message — so a
+        block-aligned message pads to nothing and stays at `length / block_size`
+        blocks, where a trailer forces a further one. The empty message still
+        occupies a block: the compression runs once regardless.
         """
+        if self.trailer is Trailer.NONE:
+            # `+ (length == 0)` rather than a branch on it: a Python `if` or a
+            # `max()` would convert a traced bool and raise, which would leave
+            # HAIFA the one family this method cannot serve — and HAIFA is half
+            # of why it was made total. Adding the comparison keeps the whole
+            # expression arithmetic, so it holds over a tracer like the line
+            # below it, and stays numpy-only so the module still pulls no frx.
+            return -(-length // self.block_size) + (length == 0)
         return (length + self.reserve) // self.block_size + 1
 
     # Memoized because all seven families memoized their own copy: a digest
@@ -122,15 +134,13 @@ class PadRule:
         traced message: the tail is a host constant threaded through the marked
         region as an operand, never something read off the message.
         """
-        if self.trailer is Trailer.NONE:
-            # HAIFA: zero-fill to a block, and a whole empty block for the empty
-            # message, since the compression still has to run once.
-            if length == 0:
-                return _frozen(np.zeros(self.block_size, dtype=np.uint8))
-            return _frozen(np.zeros(-length % self.block_size, dtype=np.uint8))
-
         nblocks = self.nblocks(length)
         tail = np.zeros(nblocks * self.block_size - length, dtype=np.uint8)
+        if self.trailer is Trailer.NONE:
+            # HAIFA: a bare zero fill. Both of its cases — the whole block for
+            # the empty message, and none at all for a block-aligned one — are
+            # `nblocks`' floor, so they are stated there and not again here.
+            return _frozen(tail)
         tail[0] = 0x80
         value = length * 8 if self.trailer is Trailer.BIT_LENGTH else nblocks
         encoded = (
@@ -189,8 +199,12 @@ class SpongePad:
     message.
 
     Keccak spelled the size as `nblocks * rate - length` for
-    `nblocks = length // rate + 1` and Ascon as `rate - length % rate`; the two
-    reduce to each other, and this is the surviving spelling.
+    `nblocks = length // rate + 1` and Ascon as `rate - length % rate`. The two
+    reduce to each other, and Ascon's was the survivor while there was nothing
+    else to say the count — but `nblocks` says it now, and it is the member a
+    traced length can use where `tail` cannot. So the size is derived from it
+    rather than spelled a second way, and the block rule lives in one place for
+    both rules.
     """
 
     rate: int
@@ -213,6 +227,15 @@ class SpongePad:
                 "pad10*1's trailing 1 (FIPS 202 section 5.1)"
             )
 
+    def nblocks(self, length: int) -> int:
+        """Whole blocks a `length`-byte message pads to.
+
+        `length // rate + 1`, with no case for the boundary because `pad10*1` is
+        never empty (the class docstring gives the rule). Holds over a traced
+        length for the reason `PadRule.nblocks` gives.
+        """
+        return length // self.rate + 1
+
     # Memoized and handed out read-only for the reason `PadRule.tail` states:
     # keying is by VALUE, so two rows with equal parameters share one entry and
     # a caller writing through the array would change the other's padding.
@@ -225,7 +248,7 @@ class SpongePad:
         byte and it becomes `head | 0x80`, which is the standard's single-byte
         pad rather than a special case.
         """
-        tail = np.zeros(self.rate - length % self.rate, dtype=np.uint8)
+        tail = np.zeros(self.nblocks(length) * self.rate - length, dtype=np.uint8)
         tail[0] = self.head
         if self.final_bit:
             tail[-1] |= 0x80
