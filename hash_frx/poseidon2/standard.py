@@ -37,6 +37,8 @@ and folds a Montgomery R^-1 into `internal_j_scale`, is *not* here.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import frx.numpy as fnp
 from zk_dtypes import koalabear_mont as _F
 
@@ -242,22 +244,54 @@ _INTERNAL_DIAG = [
     127,
 ]
 
-# The parameter bundle behind `KoalaBear16`, exported alongside it. A consumer
-# building a variant (`dataclasses.replace` for a different internal diagonal or
-# J scale — SP1's set is exactly that) needs the params, not the permutation,
-# and reaching them through the module path would import the file layout the
-# root's lazy table exists to hide.
-KOALABEAR16_PARAMS = Poseidon2Params(
-    width=_WIDTH,
-    dtype=_F,
-    alpha=_ALPHA,
-    external_rounds=_ER,
-    internal_rounds=_IR,
-    external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=_F),
-    external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=_F),
-    internal_constants=fnp.array(_INTERNAL_RC, dtype=_F),
-    internal_diag=fnp.array(_INTERNAL_DIAG, dtype=_F),
-)
 
-# Plonky3's KoalaBear width-16 Poseidon2, ready to permute.
-KoalaBear16 = Poseidon2(KOALABEAR16_PARAMS)
+def _params() -> Poseidon2Params:
+    """The parameter bundle, built once and cached into `globals()` so that
+    `KoalaBear16` and the `KOALABEAR16_PARAMS` export share one object."""
+    cached = globals().get("KOALABEAR16_PARAMS")
+    if cached is not None:
+        return cached
+    params = Poseidon2Params(
+        width=_WIDTH,
+        dtype=_F,
+        alpha=_ALPHA,
+        external_rounds=_ER,
+        internal_rounds=_IR,
+        external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=_F),
+        external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=_F),
+        internal_constants=fnp.array(_INTERNAL_RC, dtype=_F),
+        internal_diag=fnp.array(_INTERNAL_DIAG, dtype=_F),
+    )
+    globals()["KOALABEAR16_PARAMS"] = params
+    return params
+
+
+def __getattr__(name: str) -> Any:
+    """Build `KOALABEAR16_PARAMS` / `KoalaBear16` on first access (PEP 562).
+
+    Not module-scope values, for the reason `fusion.routing` gives: constructing
+    a `Poseidon2` reads `frx.default_backend()` to pick its marker, so building
+    one at import freezes the routing to whichever backend happened to be
+    default when this module loaded. `keccak/sponge.py` declines a module-level
+    `KeccakF1600()` on the same grounds. Deferring also keeps the cost off a
+    consumer that only wants `KOALABEAR16_PLONKY3_COMMIT` — importing this
+    module was 95 ms and a live device before, and is now free.
+
+    Each binding is cached in `globals()`, so this runs once per name and the
+    root package's own lazy re-export sees a plain attribute afterwards. A named
+    instance still snapshots its routing at that first access; what this fixes
+    is the snapshot happening at import, before a consumer has had any chance to
+    select a backend.
+    """
+    if name == "KOALABEAR16_PARAMS":
+        return _params()
+    if name == "KoalaBear16":
+        perm = Poseidon2(_params())
+        globals()["KoalaBear16"] = perm
+        return perm
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+if TYPE_CHECKING:  # mypy cannot see through the runtime `__getattr__`
+    KOALABEAR16_PARAMS: Poseidon2Params
+    KoalaBear16: Poseidon2
