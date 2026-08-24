@@ -58,20 +58,20 @@ SHA256_MARKER = "hash_frx.digest.sha256"
 SHA256_MARKER_VERSION = 1
 
 SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
-# The raw-bytes whole-message form, in either of TWO operand ABIs:
+# The raw-bytes whole-message form:
 #
-#   static tail    [h0 u32[8], k u32[64], msg u8[B, L],    tail u8[P]] -> u8[B, 32]
-#   runtime length [h0 u32[8], k u32[64], msg u8[B, LMAX], len  s32[]] -> u8[B, 32]
+#   [h0 u32[8], k u32[64], msg u8[B, LMAX], len s32[]] -> u8[B, 32]
 #
-# Both carry FIPS 180-4 padding and word packing inside the marker. The blocks
+# FIPS 180-4 padding and word packing live inside the marker. The blocks
 # marker above takes pre-padded words, so every consumer runs a pad-and-pack
 # pass over the whole batch first — at a Merkle-leaf-scale batch
 # (2^20 x 1 KiB) that pass writes and re-reads ~1.1 GB a recognizing emitter
 # can instead synthesize in registers.
 #
-# In the runtime-length ABI `LMAX` is the buffer's CAPACITY and `len` says how
-# much of it is live, which is what collapses the compile count
-# (`sha256_bytes_len` says what that buys and why a wider buffer is free).
+# `LMAX` is the buffer's CAPACITY and `len` says how much of it is live, which
+# is what collapses the compile count: one kernel serves every length the buffer
+# can hold, where a length carried in the message SHAPE makes each one a fresh
+# module (`sha256_bytes_len` says why the spare capacity is free).
 #
 # `len` is ONE scalar for the whole batch, deliberately: the CPU emitter packs
 # 16 digest rows into vector lanes, and a per-row length would stop them
@@ -79,13 +79,14 @@ SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
 # a non-scalar `len` rather than silently taking row 0's, so a per-row ABI stays
 # a separate decision rather than an accident.
 #
-# ONE name for both is safe HERE and would not be in general: the two differ in
-# operand 3's element type AND rank (u8[P] against s32[]), so they are disjoint
-# rather than merely unlikely to collide, and the recognizer reads that
-# difference in a single place. A recognizer that knows only the static ABI
-# declines the runtime one on its operands and inlines — right bytes, no kernel
-# — which is what the `frx>=` floor in pyproject.toml exists to keep off the
-# wire.
+# The recognizer dispatches on the OPERANDS rather than on the name, so it also
+# claims a second whole-message ABI carrying the length as the message's extent
+# (`tail u8[P]` at operand 3 — disjoint from `len s32[]` in element type AND
+# rank). Nothing here emits that spelling, so this module owns one ABI while the
+# version below still covers both: a contract change under this name is one
+# decision for the pair. The `frx>=` floor in pyproject.toml names the first
+# wheel whose recognizer claims the form emitted here; an older one declines it
+# on its operands and inlines — right bytes, no kernel.
 SHA256_BYTES_MARKER_VERSION = 1
 
 # Whether the pinned Fractalyze XLA plugin ships the dedicated SHA-256 emitter,
@@ -97,30 +98,17 @@ SHA256_BYTES_MARKER_VERSION = 1
 _DEDICATED_EMITTER_AVAILABLE = True
 _EMITTER_BACKENDS = ("cpu", "gpu")
 
-# Whether the pinned plugin claims `hash_frx.digest.sha256_bytes`. A plugin
-# without that recognizer declines the name and inlines the decomposition —
-# right bytes, `GENERIC` path — which at digest scale is the slow path, so
-# `digest` only routes to the bytes marker where a recognizer exists. True
-# since the pyproject floor: that wheel's emitter pads and packs in-register
-# from the bytes operand, retiring the padded-words materialization.
-_BYTES_EMITTER_AVAILABLE = True
-
-# Whether the pinned plugin claims the RUNTIME-LENGTH ABI of that same name,
-# and on which backends. Its own flag and its own backend tuple rather than
-# `_BYTES_EMITTER_AVAILABLE` / `_EMITTER_BACKENDS` above, because acceptance is
-# per-ABI and not per-name: Fractalyze XLA gates this form on
-# `allow_sha256_bytes_len_fusion`, separate from the flag both compilers set,
-# so a backend can claim `hash_frx.digest.sha256_bytes` and still decline the
-# length operands on it. A backend that declines gets neither a kernel nor the
+# Whether the pinned plugin claims the whole-message marker, and on which
+# backends. Its own flag and its own backend tuple rather than the pair above,
+# because acceptance is per-MARKER and not per-family: Fractalyze XLA gates this
+# one on `allow_sha256_bytes_len_fusion`, separate from the `allow_sha256_fusion`
+# both compilers set for the blocks marker, so a backend can carry one and
+# decline the other. A backend that declines gets neither a kernel nor the
 # compile saving — worse, the decomposition speculates every block the buffer
-# could need — so `digest` keeps the static-length ABI there instead of
-# emitting into a decline.
+# could need — so `digest` falls back to the blocks form there instead of
+# emitting into a decline. Metal is that backend.
 _LEN_EMITTER_AVAILABLE = True
-# cpu-only is a HOLD, not a capability gap: the pinned wheel carries the GPU
-# emitter too (fractalyze/xla#582). Adding "gpu" here makes `digest`'s
-# static-tail arm unreachable — the two tuples would be equal — so it belongs
-# with retiring that arm, which owes a GPU re-measurement (hash-frx#267).
-_LEN_EMITTER_BACKENDS = ("cpu",)
+_LEN_EMITTER_BACKENDS = ("cpu", "gpu")
 
 
 def _routes_to_dedicated_emitter() -> bool:
@@ -129,16 +117,10 @@ def _routes_to_dedicated_emitter() -> bool:
     return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
-def _routes_to_bytes_marker() -> bool:
-    """Whether `digest` should emit the raw-bytes marker on this
-    backend (`fusion.routing`)."""
-    return routing(_BYTES_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
-
-
 def _routes_to_length_abi() -> bool:
-    """Whether `digest` should emit the bytes marker's RUNTIME-LENGTH ABI on
-    this backend (`fusion.routing`; `_LEN_EMITTER_AVAILABLE` says why this is a
-    separate question from the name)."""
+    """Whether `digest` should emit the whole-message marker on this backend
+    (`fusion.routing`; `_LEN_EMITTER_AVAILABLE` says why this is a separate
+    question from the blocks marker's own switch)."""
     return routing(_LEN_EMITTER_AVAILABLE, _LEN_EMITTER_BACKENDS)
 
 
@@ -306,17 +288,15 @@ def block_to_words(blocks: Array) -> Array:
     return pack_be(blocks.reshape(b, blocks.shape[-1] // 64, 64))
 
 
-def _padded_words(msg: Array, tail: Array | None = None) -> Array:
+def _padded_words(msg: Array) -> Array:
     """A uint8 [B, L] batch padded and packed: uint32 [B, nblocks, 16].
 
     A concatenation and a reshape, which is the whole point: the message is only
     ever an operand here, never something written into a host buffer, so this
-    holds a tracer as readily as a concrete array. `tail` defaults to the
-    FIPS 180-4 padding for L; `sha256_bytes` passes its tail operand explicitly
-    so its marked region captures nothing.
+    holds a tracer as readily as a concrete array. The tail is the FIPS 180-4
+    padding for L, a host constant because L is static.
     """
-    if tail is None:
-        tail = fnp.asarray(_PAD.tail(msg.shape[-1]))
+    tail = fnp.asarray(_PAD.tail(msg.shape[-1]))
     return block_to_words(padded_batch(msg, tail))
 
 
@@ -408,48 +388,6 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     )
 
 
-# Module-level jit zone for the same reason as `sha256_merkle_damgard`: the
-# composite re-traces its decomposition per emission, and a Merkle commit
-# emits one digest call per tree level.
-@partial(frx.jit, inline=True)
-def sha256_bytes(msg: Array) -> Array:
-    """Whole-message SHA-256 over raw bytes as ONE marked region:
-    uint8 [B, L] -> uint8 [B, 32], padding and word packing inside the marker.
-
-    The blocks marker (`sha256_merkle_damgard`) takes pre-padded words, so its
-    consumers pack the padded word layout as ordinary graph ops first — a
-    materialized pass over the whole batch that a recognizing emitter can do
-    in registers instead, the padding being a function of the static length.
-    This form hands the emitter the raw bytes; where no recognizer is wired
-    the marker inlines its decomposition, so the bytes are unchanged.
-
-    Whole-message only: a resumed stream pads at its running total rather
-    than at `L`, so the streaming path stays on the blocks marker.
-
-    Operands are explicit in the recognizer's positional ABI order
-    [h0, k, msg, tail]. `tail` is `_PAD.tail(L)` passed as an operand
-    rather than captured (a captured constant would prepend at operand 0);
-    it is derivable from the static L — a recognizing emitter reads it
-    rather than re-deriving it — and load-bearing for the inlined
-    decomposition."""
-
-    def decomposition(
-        h0: Array, k: Array, msg: Array, tail: Array, **_attrs: object
-    ) -> Array:
-        state = fnp.broadcast_to(h0, (msg.shape[0], 8))
-        return serialize_digest(compress(state, _padded_words(msg, tail), k))
-
-    return fused_region(
-        decomposition,
-        INITIAL_STATE,
-        _Kd,
-        msg,
-        fnp.asarray(_PAD.tail(msg.shape[-1])),
-        name=SHA256_BYTES_MARKER,
-        version=SHA256_BYTES_MARKER_VERSION,
-    )
-
-
 def _capacity(msg: ArrayLike) -> int:
     """The buffer width `digest` hashes `msg` out of.
 
@@ -529,7 +467,9 @@ def _at_capacity(msg: ArrayLike, capacity: int) -> Array:
     return fnp.asarray(buf)
 
 
-# Module-level jit zone for the same reason as `sha256_bytes` above.
+# Module-level jit zone for the same reason as `sha256_merkle_damgard`: the
+# composite re-traces its decomposition per emission, and a Merkle commit emits
+# one digest call per tree level.
 @partial(frx.jit, inline=True)
 def sha256_bytes_len(buf: Array, length: Array) -> Array:
     """Whole-message SHA-256 over the live prefix of a capacity buffer, as ONE
@@ -539,8 +479,8 @@ def sha256_bytes_len(buf: Array, length: Array) -> Array:
     The digest is of `buf[:, :length]`; `LMAX` sizes the allocation and nothing
     else, since the emitter loops on `length` and never reads past it. That is
     the whole point of the form — one compiled kernel serves every length the
-    buffer can hold, where `sha256_bytes` carries the length in its message
-    shape and so compiles once per length.
+    buffer can hold, where a length carried in the message shape compiles once
+    per length.
 
     `length` rides as an int32 SCALAR — `np.int32`, not a Python int and not a
     device array. `jit` keys on an operand's aval rather than its value, so any
@@ -554,12 +494,12 @@ def sha256_bytes_len(buf: Array, length: Array) -> Array:
     It is one scalar for the whole batch (`SHA256_BYTES_MARKER` says why), so
     every row of `buf` is hashed at the same length.
 
-    Whole-message only, as `sha256_bytes` is: a resumed stream pads at its
-    running total rather than at `length`.
+    Whole-message only: a resumed stream pads at its running total rather than
+    at `length`, so the streaming path stays on the blocks marker.
 
     Operands are explicit in the recognizer's positional ABI order
-    [h0, k, msg, len], for the reason `sha256_bytes` states — a captured constant
-    would prepend and land at operand 0.
+    [h0, k, msg, len]: a captured constant would prepend and land at operand 0,
+    which is not where the recognizer reads it.
     """
     if buf.shape[-1] < 1:
         # The recognizer's floor, restated where it can still be a clear error.
@@ -601,12 +541,12 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
 
     Byte-identical to the FIPS 180-4 standard per message. The device
     compression is emitted as one name-routed marker; which one depends on the
-    pinned plugin. The runtime-length ABI of `sha256_bytes` where its
+    pinned plugin. The whole-message form (`sha256_bytes_len`) where its
     recognizer exists, hashing out of a `_capacity` buffer so that a host caller
     whose lengths vary compiles once per width rather than once per length; else
-    the raw-bytes form (`sha256_bytes`); else the blocks form with the padded
-    words packed here. All three produce identical bytes, and differ only in
-    where the padding runs and in what the compilation is keyed on.
+    the blocks form with the padded words packed here. Both produce identical
+    bytes, and differ only in where the padding runs and in what the compilation
+    is keyed on.
 
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash inside
     its own `@jit` or `vmap` without reaching past the seam for
@@ -618,10 +558,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     if _routes_to_length_abi():
         length = message_length(msg)
         return sha256_bytes_len(_at_capacity(msg, _capacity(msg)), np.int32(length))
-    msg = device_message(msg)
-    if _routes_to_bytes_marker():
-        return sha256_bytes(msg)
-    return sha256_merkle_damgard(INITIAL_STATE, _padded_words(msg))
+    return sha256_merkle_damgard(INITIAL_STATE, _padded_words(device_message(msg)))
 
 
 # ---------------------------------------------------------------------------
