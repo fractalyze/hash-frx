@@ -71,7 +71,7 @@ SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
 # `LMAX` is the buffer's CAPACITY and `len` says how much of it is live, which
 # is what collapses the compile count: one kernel serves every length the buffer
 # can hold, where a length carried in the message SHAPE makes each one a fresh
-# module (`sha256_bytes_len` says why the spare capacity is free).
+# module (`sha256_bytes` says why the spare capacity is free).
 #
 # `len` is ONE scalar for the whole batch, deliberately: the CPU emitter packs
 # 16 digest rows into vector lanes, and a per-row length would stop them
@@ -107,8 +107,8 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 # compile saving — worse, the decomposition speculates every block the buffer
 # could need — so `digest` falls back to the blocks form there instead of
 # emitting into a decline. Metal is that backend.
-_LEN_EMITTER_AVAILABLE = True
-_LEN_EMITTER_BACKENDS = ("cpu", "gpu")
+_BYTES_EMITTER_AVAILABLE = True
+_BYTES_EMITTER_BACKENDS = ("cpu", "gpu")
 
 
 def _routes_to_dedicated_emitter() -> bool:
@@ -117,11 +117,11 @@ def _routes_to_dedicated_emitter() -> bool:
     return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
-def _routes_to_length_abi() -> bool:
+def _routes_to_bytes_marker() -> bool:
     """Whether `digest` should emit the whole-message marker on this backend
-    (`fusion.routing`; `_LEN_EMITTER_AVAILABLE` says why this is a separate
+    (`fusion.routing`; `_BYTES_EMITTER_AVAILABLE` says why this is a separate
     question from the blocks marker's own switch)."""
-    return routing(_LEN_EMITTER_AVAILABLE, _LEN_EMITTER_BACKENDS)
+    return routing(_BYTES_EMITTER_AVAILABLE, _BYTES_EMITTER_BACKENDS)
 
 
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
@@ -471,7 +471,7 @@ def _at_capacity(msg: ArrayLike, capacity: int) -> Array:
 # composite re-traces its decomposition per emission, and a Merkle commit emits
 # one digest call per tree level.
 @partial(frx.jit, inline=True)
-def sha256_bytes_len(buf: Array, length: Array) -> Array:
+def sha256_bytes(buf: Array, length: Array) -> Array:
     """Whole-message SHA-256 over the live prefix of a capacity buffer, as ONE
     marked region: uint8 [B, LMAX] with an int32 scalar byte count -> uint8
     [B, 32].
@@ -541,7 +541,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
 
     Byte-identical to the FIPS 180-4 standard per message. The device
     compression is emitted as one name-routed marker; which one depends on the
-    pinned plugin. The whole-message form (`sha256_bytes_len`) where its
+    pinned plugin. The whole-message form (`sha256_bytes`) where its
     recognizer exists, hashing out of a `_capacity` buffer so that a host caller
     whose lengths vary compiles once per width rather than once per length; else
     the blocks form with the padded words packed here. Both produce identical
@@ -555,9 +555,9 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     buffer holding the message, so the message had to be concrete. Built from the
     length instead, it never reads the message at all.
     """
-    if _routes_to_length_abi():
+    if _routes_to_bytes_marker():
         length = message_length(msg)
-        return sha256_bytes_len(_at_capacity(msg, _capacity(msg)), np.int32(length))
+        return sha256_bytes(_at_capacity(msg, _capacity(msg)), np.int32(length))
     return sha256_merkle_damgard(INITIAL_STATE, _padded_words(device_message(msg)))
 
 

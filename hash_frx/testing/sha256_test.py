@@ -241,7 +241,7 @@ class Sha256DigestRoutingTest(absltest.TestCase):
         # which is exactly the branch this test exists to tell apart.
         msg = np.zeros((1, 64), dtype=np.uint8)
         names = emitted_composites(sha256.digest, msg)
-        if sha256._routes_to_length_abi():
+        if sha256._routes_to_bytes_marker():
             self.assertEqual(names, [sha256.SHA256_BYTES_MARKER])
         else:
             self.assertEqual(names, [sha256.SHA256_MARKER])
@@ -252,7 +252,7 @@ class Sha256DigestRoutingTest(absltest.TestCase):
         # routed digest from one that emitted into a decline. The FUSION's
         # routing key can, because the rewriter picks it off the operands, so it
         # is what pins that the length operand actually arrived.
-        if not sha256._routes_to_length_abi():
+        if not sha256._routes_to_bytes_marker():
             self.skipTest("no whole-message recognizer on this backend")
         assert_marker_recognized(
             self,
@@ -262,7 +262,7 @@ class Sha256DigestRoutingTest(absltest.TestCase):
         )
 
 
-class Sha256BytesLenAbiTest(parameterized.TestCase):
+class Sha256BytesTest(parameterized.TestCase):
     """The whole-message marker, whose message length is an operand rather than
     part of the message shape.
 
@@ -289,7 +289,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # buffer far wider than it, so the padded length is what `length`
         # implies rather than what the extent does.
         msg = (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A))[None, :]
-        got = sha256.sha256_bytes_len(
+        got = sha256.sha256_bytes(
             self._buffer(msg, max(length + slack, 1)), np.int32(length)
         )
         self.assertEqual(
@@ -304,9 +304,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
             0, 256, size=(4, length), dtype=np.uint8
         )
         np.testing.assert_array_equal(
-            np.asarray(
-                sha256.sha256_bytes_len(self._buffer(msgs, 512), np.int32(length))
-            ),
+            np.asarray(sha256.sha256_bytes(self._buffer(msgs, 512), np.int32(length))),
             np.asarray(
                 sha256.sha256_merkle_damgard(
                     sha256.INITIAL_STATE, sha256._padded_words(fnp.asarray(msgs))
@@ -323,7 +321,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         short, long = b"abc", b"hello world, a longer one"
 
         def two(a: Array, la: Array, b: Array, lb: Array) -> tuple[Array, Array]:
-            return sha256.sha256_bytes_len(a, la), sha256.sha256_bytes_len(b, lb)
+            return sha256.sha256_bytes(a, la), sha256.sha256_bytes(b, lb)
 
         got_a, got_b = frx.jit(two)(
             self._buffer(np.frombuffer(short, dtype=np.uint8)[None, :], 128),
@@ -338,8 +336,8 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         msg = np.random.default_rng(9).integers(0, 256, (3, 120), dtype=np.uint8)
         buf, length = self._buffer(msg, 128), np.int32(msg.shape[-1])
         np.testing.assert_array_equal(
-            np.asarray(frx.jit(sha256.sha256_bytes_len)(buf, length)),
-            np.asarray(sha256.sha256_bytes_len(buf, length)),
+            np.asarray(frx.jit(sha256.sha256_bytes)(buf, length)),
+            np.asarray(sha256.sha256_bytes(buf, length)),
         )
 
     def test_recognized_where_routed(self) -> None:
@@ -347,8 +345,8 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # plugin must claim it as one custom fusion. An unrecognized name inlines
         # its decomposition — right bytes, no kernel — which no value-level test
         # above can tell apart.
-        if not sha256._routes_to_length_abi():
-            self.skipTest("no runtime-length recognizer on this backend")
+        if not sha256._routes_to_bytes_marker():
+            self.skipTest("no whole-message recognizer on this backend")
         # `sha256_bytes_len` is the FUSION's routing key, not the marker name:
         # the two are different namespaces. This form travels under the
         # `hash_frx.digest.sha256_bytes` composite name, and Fractalyze XLA's
@@ -358,7 +356,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         assert_marker_recognized(
             self,
             "sha256_bytes_len",
-            sha256.sha256_bytes_len,
+            sha256.sha256_bytes,
             fnp.asarray(np.zeros((2, 128), dtype=np.uint8)),
             np.int32(100),
         )
@@ -369,7 +367,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # a substring assertion would not tell them apart.
         self.assertEqual(
             emitted_composites(
-                sha256.sha256_bytes_len,
+                sha256.sha256_bytes,
                 fnp.asarray(np.zeros((2, 128), dtype=np.uint8)),
                 np.int32(100),
             ),
@@ -381,7 +379,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # Baked in, every length would be a fresh module again — and the module
         # would still compute the right bytes, so only the signature shows it.
         txt = (
-            frx.jit(sha256.sha256_bytes_len)
+            frx.jit(sha256.sha256_bytes)
             .lower(fnp.asarray(np.zeros((1, 128), dtype=np.uint8)), np.int32(100))
             .as_text()
         )
@@ -395,7 +393,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # decomposition that indexes the message through a clamp with no byte to
         # clamp to. An empty message is `length = 0` in a non-empty buffer.
         with self.assertRaisesRegex(ValueError, "LMAX >= 1"):
-            sha256.sha256_bytes_len(
+            sha256.sha256_bytes(
                 fnp.asarray(np.zeros((1, 0), dtype=np.uint8)), np.int32(0)
             )
 
@@ -404,7 +402,7 @@ class Sha256BytesLenAbiTest(parameterized.TestCase):
         # Fractalyze XLA gates this marker on its own flag: the two agreeing is
         # a fact about the pinned wheel rather than a property, so the tuple is
         # pinned here instead of derived, and a widening stays a conscious edit.
-        self.assertEqual(sha256._LEN_EMITTER_BACKENDS, ("cpu", "gpu"))
+        self.assertEqual(sha256._BYTES_EMITTER_BACKENDS, ("cpu", "gpu"))
 
 
 class Sha256CapacityTest(parameterized.TestCase):
