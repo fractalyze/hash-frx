@@ -18,3 +18,21 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+# The named standard parameter sets. A separate target from the engine on
+# purpose: the engine is field-agnostic and deps no field, while a named set
+# is a concrete parameterization over a concrete dtype and pulls `zk_dtypes`.
+# Same split `adapter/block_size` makes for the same reason.
+py_library(
+    name = "standard",
+    srcs = [
+        "__init__.py",
+        "standard.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":poseidon2",
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ],
+)

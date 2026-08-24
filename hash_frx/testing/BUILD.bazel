@@ -201,6 +201,7 @@ py_test(
         "//hash_frx/keccak",
         "//hash_frx/poseidon",
         "//hash_frx/poseidon2",
+        "//hash_frx/poseidon2:standard",
         "//hash_frx/poseidon2/testing:koalabear16",
         "//hash_frx/vision",
         requirement("absl_py"),
