@@ -70,14 +70,8 @@ SHA256_BYTES_MARKER = "hash_frx.digest.sha256_bytes"
 # can instead synthesize in registers.
 #
 # In the runtime-length ABI `LMAX` is the buffer's CAPACITY and `len` says how
-# much of it is live. The static form takes the length as part of the message's
-# SHAPE, so every distinct length is a fresh module and a fresh compile (~90 ms,
-# which for a caller whose lengths vary is essentially the whole cost of
-# hashing); one compiled kernel serves every length a buffer can hold instead.
-# The emitter loops on `len` rather than on the extent, so bytes at or past it
-# are never read and a wider buffer costs allocation instead of work — which is
-# what separates this from padding to a bucket in HLO, which reaches the same
-# compile count and then pays the full capacity on every call.
+# much of it is live, which is what collapses the compile count
+# (`sha256_bytes_len` says what that buys and why a wider buffer is free).
 #
 # `len` is ONE scalar for the whole batch, deliberately: the CPU emitter packs
 # 16 digest rows into vector lanes, and a per-row length would stop them
@@ -122,6 +116,10 @@ _BYTES_EMITTER_AVAILABLE = True
 # could need — so `digest` keeps the static-length ABI there instead of
 # emitting into a decline.
 _LEN_EMITTER_AVAILABLE = True
+# cpu-only is a HOLD, not a capability gap: the pinned wheel carries the GPU
+# emitter too (fractalyze/xla#582). Adding "gpu" here makes `digest`'s
+# static-tail arm unreachable — the two tuples would be equal — so it belongs
+# with retiring that arm, which owes a GPU re-measurement (hash-frx#267).
 _LEN_EMITTER_BACKENDS = ("cpu",)
 
 
@@ -137,9 +135,10 @@ def _routes_to_bytes_marker() -> bool:
     return routing(_BYTES_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
-def _routes_to_bytes_len_marker() -> bool:
-    """Whether `digest` should emit the runtime-length marker on this
-    backend (`fusion.routing`)."""
+def _routes_to_length_abi() -> bool:
+    """Whether `digest` should emit the bytes marker's RUNTIME-LENGTH ABI on
+    this backend (`fusion.routing`; `_LEN_EMITTER_AVAILABLE` says why this is a
+    separate question from the name)."""
     return routing(_LEN_EMITTER_AVAILABLE, _LEN_EMITTER_BACKENDS)
 
 
@@ -505,7 +504,7 @@ def _at_capacity(msg: ArrayLike, capacity: int) -> Array:
 
     Lives here rather than on the seam because `_capacity` does: the policy and
     the widening are only ever called together, and no second family has a
-    runtime-length marker to share them with yet.
+    runtime-length ABI to share them with yet.
     """
     length = message_length(msg)
     if capacity < length:
@@ -616,7 +615,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     buffer holding the message, so the message had to be concrete. Built from the
     length instead, it never reads the message at all.
     """
-    if _routes_to_bytes_len_marker():
+    if _routes_to_length_abi():
         length = message_length(msg)
         return sha256_bytes_len(_at_capacity(msg, _capacity(msg)), np.int32(length))
     msg = device_message(msg)

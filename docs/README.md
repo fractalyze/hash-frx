@@ -139,9 +139,9 @@ than a lost kernel.
 The runtime-length ABI of `hash_frx.digest.sha256_bytes` is gated the same way
 and for a third reason. It takes the message length as an operand rather than as
 part of the message shape, so one compiled kernel serves every length its buffer
-can hold —
-but its decomposition has to derive a data-dependent block count from that
-operand, which in plain HLO means speculating every block the buffer could need.
+can hold — but its decomposition has to derive a data-dependent block count from
+that operand, which in plain HLO means speculating every block the buffer could
+need.
 Inlining it is therefore *slower* than the static-length marker it replaces,
 where an unrecognized name normally costs only the fusion. Being early costs
 performance rather than nothing, so the switch tracks the pin and the backend.
@@ -157,7 +157,9 @@ hash underneath it.
 name does not error: the composite inlines and fusion is silently lost. A
 contract change therefore rides `composite.version` rather than a rename. The
 operand layout is equally part of that ABI, which is what keeps a region's
-constants from being written as closed-over values.
+constants from being written as closed-over values — and, where two operand
+forms are disjoint in element type *and* rank, is what lets them share one name
+instead of needing a second (`hash_frx.digest.sha256_bytes` carries two).
 
 **Losing fusion is silent**, and nothing about it is caught by comparing bytes: a
 marker that stops being recognized inlines and still computes the right answer,
