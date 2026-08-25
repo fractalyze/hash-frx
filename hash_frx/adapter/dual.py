@@ -58,7 +58,7 @@ from frx import Array
 
 from hash_frx.blake2b.blake2b import Blake2b
 from hash_frx.blake2b.byte_hashes import HostBlake2b
-from hash_frx.blake2s import Blake2s, HostBlake2s
+from hash_frx.blake2s.blake2s import Blake2s, HostBlake2s
 from hash_frx.blake3.rows import (
     Blake3,
     Blake3DeriveKey,
@@ -77,8 +77,8 @@ from hash_frx.keccak.byte_hashes import (
     Shake128,
     Shake256,
 )
-from hash_frx.sha256 import HostSha256, Sha256
-from hash_frx.sha512 import (
+from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha512.sha512 import (
     HostSha384,
     HostSha512,
     HostSha512_256,
@@ -86,7 +86,7 @@ from hash_frx.sha512 import (
     Sha512,
     Sha512_256,
 )
-from hash_frx.sm3 import HostSm3, Sm3
+from hash_frx.sm3.sm3 import HostSm3, Sm3
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash

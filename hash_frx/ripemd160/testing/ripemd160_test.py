@@ -28,13 +28,13 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx import ripemd160
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
-from hash_frx.ripemd160 import Ripemd160
-from hash_frx.testing.host_ripemd160 import HostRipemd160
+from hash_frx.ripemd160 import ripemd160
+from hash_frx.ripemd160.ripemd160 import Ripemd160
+from hash_frx.ripemd160.testing.host_ripemd160 import HostRipemd160
+from hash_frx.ripemd160.testing.reference import VECTORS
 from hash_frx.testing.jit_cache import assert_single_trace
-from hash_frx.testing.ripemd160_reference import VECTORS
 
 # Padding-boundary lengths for the differential sweep: 0/1 (empty + tiny),
 # 55/56 (the one-vs-two-block cutoff — the 0x80 byte and the 8-byte length

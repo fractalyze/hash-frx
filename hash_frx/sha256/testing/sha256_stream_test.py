@@ -15,8 +15,8 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx import sha256
-from hash_frx.sha256 import (
+from hash_frx.sha256 import sha256
+from hash_frx.sha256.sha256 import (
     Sha256State,
     sha256_stream_absorb,
     sha256_stream_finalize,

@@ -27,11 +27,11 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx import sm3
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
-from hash_frx.sha256 import Sha256
-from hash_frx.sm3 import HostSm3, Sm3
+from hash_frx.sha256.sha256 import Sha256
+from hash_frx.sm3 import sm3
+from hash_frx.sm3.sm3 import HostSm3, Sm3
 from hash_frx.testing.jit_cache import assert_single_trace
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block

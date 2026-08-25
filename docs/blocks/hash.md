@@ -291,7 +291,7 @@ marker, and check that the schedule is the one you think it is.
 
 ## Two implementations of one standard
 
-`Sha256` and `HostSha256` ([`sha256.py`](../../hash_frx/sha256.py)) produce the
+`Sha256` and `HostSha256` ([`sha256/sha256.py`](../../hash_frx/sha256/sha256.py)) produce the
 same FIPS 180-4 bytes and differ only in substrate: one lowers to the device
 marker, the other loops `hashlib` on the host. `fusion_path` is what a consumer
 branches on, exactly as on the permutation side — the substrate is a value the
@@ -414,7 +414,7 @@ Naming the causes is what keeps the condition honest, because it also says what
 retires it: a marker ABI taking the length as an operand, with the block loop
 inside the emitter, compiles once per buffer width rather than once per length.
 SHA-256 has one on **both** cpu and gpu — its runtime-length digest ABI
-([`sha256.py`](../../hash_frx/sha256.py), `_BYTES_EMITTER_BACKENDS`) — so a
+([`sha256/sha256.py`](../../hash_frx/sha256/sha256.py), `_BYTES_EMITTER_BACKENDS`) — so a
 message widened to a shared buffer width is hashed at its own length by a kernel
 every other length reuses. That ABI is now the only whole-message form: the
 static-tail arm it once shared the marker name with was retired once the operand

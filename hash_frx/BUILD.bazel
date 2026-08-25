@@ -19,17 +19,12 @@ py_library(
     srcs = ["__init__.py"],
     visibility = ["//visibility:public"],
     deps = [
-        ":blake2s",
         ":byte_hash",
         ":compression",
         ":duplex_sponge",
         ":fusion",
         ":markers",
         ":permutation",
-        ":ripemd160",
-        ":sha256",
-        ":sha512",
-        ":sm3",
         ":sponge",
         "//hash_frx/adapter:block_size",
         "//hash_frx/adapter:dual",
@@ -41,6 +36,7 @@ py_library(
         "//hash_frx/adapter:xof",
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
+        "//hash_frx/blake2s",
         "//hash_frx/blake3",
         "//hash_frx/extension:md",
         "//hash_frx/grostl",
@@ -48,6 +44,10 @@ py_library(
         "//hash_frx/poseidon",
         "//hash_frx/poseidon2",
         "//hash_frx/poseidon2:standard",
+        "//hash_frx/ripemd160",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
+        "//hash_frx/sm3",
         "//hash_frx/vision",
     ],
 )
@@ -143,98 +143,6 @@ py_library(
     srcs = ["word64.py"],
     visibility = ["//visibility:public"],
     deps = [requirement("frx")],
-)
-
-# Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash plus the `Sha256` /
-# `HostSha256` ByteHash implementations. A standalone hash, not a Permutation; no
-# zk_dtypes / x64 dependency.
-py_library(
-    name = "sha256",
-    srcs = ["sha256.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":byte_hash",
-        ":fusion",
-        ":word",
-        "//hash_frx/extension:md",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
-# Byte-oriented SHA-512 (FIPS 180-4): SHA-256's 64-bit sibling over uint32 half
-# pairs — the `digest` batch hash behind the `hash_frx.digest.sha512` marker
-# plus the `Sha512` / `HostSha512` ByteHash pair. A standalone hash, not a
-# Permutation; no zk_dtypes / x64 dependency.
-py_library(
-    name = "sha512",
-    srcs = ["sha512.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":byte_hash",
-        ":fusion",
-        ":word",
-        ":word64",
-        "//hash_frx/extension:md",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
-# Byte-oriented BLAKE2s (RFC 7693, unkeyed): BLAKE2b's 32-bit sibling at
-# native uint32 — the `digest` batch hash behind the `hash_frx.digest.blake2s`
-# marker plus the `Blake2s` / `HostBlake2s` ByteHash pair. A standalone hash,
-# not a Permutation; no zk_dtypes / x64 dependency.
-py_library(
-    name = "blake2s",
-    srcs = ["blake2s.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":byte_hash",
-        ":fusion",
-        ":word",
-        "//hash_frx/extension:pad",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
-# Byte-oriented SM3 (GB/T 32905-2016; ISO/IEC 10118-3): the ShangMi
-# ecosystem's hash, SHA-256's structural cousin — the `digest` batch hash
-# behind the `hash_frx.digest.sm3` marker plus the `Sm3` / `HostSm3` ByteHash
-# pair. A standalone hash, not a Permutation; no zk_dtypes / x64 dependency.
-py_library(
-    name = "sm3",
-    srcs = ["sm3.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":byte_hash",
-        ":fusion",
-        ":word",
-        "//hash_frx/extension:md",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
-# Byte-oriented RIPEMD-160 (Dobbertin–Bosselaers–Preneel, ISO/IEC 10118-3;
-# Bitcoin HASH160's second half): the `digest` batch hash behind the
-# `hash_frx.digest.ripemd160` marker plus the `Ripemd160` ByteHash row. A
-# standalone hash, not a Permutation; no zk_dtypes / x64 dependency. No host
-# row ships — OpenSSL 3 moved RIPEMD-160 to the legacy provider, so the
-# differential partner is testonly (//hash_frx/testing:host_ripemd160).
-py_library(
-    name = "ripemd160",
-    srcs = ["ripemd160.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":byte_hash",
-        ":fusion",
-        ":word",
-        "//hash_frx/extension:pad",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
 )
 
 # Padding-free overwrite sponge — the Merkle leaf hasher over a Permutation.

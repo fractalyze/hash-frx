@@ -10,7 +10,7 @@ imported the layout would break on every move.
 **The re-exports are lazy** (PEP 562), and that is load-bearing rather than an
 optimization. Importing a hash puts its constant tables on the default backend,
 which *initializes* that backend — measured at this commit, `import hash_frx` is
-0.1 ms and starts no backend, while `import hash_frx.sha256` starts one. Binding
+0.1 ms and starts no backend, while `import hash_frx.sha256.sha256` starts one. Binding
 the names eagerly here would move that cost onto `import hash_frx` itself, which
 would in turn defeat `markers.py`'s stated property that the wire-surface
 registry can be read "free of every hash's dependencies" — reading the marker
@@ -104,50 +104,50 @@ _EXPORTS: dict[str, str] = {
     "AsconHash256": "hash_frx.ascon.ascon",
     "AsconXof128": "hash_frx.ascon.ascon",
     "Blake2b": "hash_frx.blake2b.blake2b",
-    "Blake2s": "hash_frx.blake2s",
+    "Blake2s": "hash_frx.blake2s.blake2s",
     "Blake3": "hash_frx.blake3.rows",
     "Blake3DeriveKey": "hash_frx.blake3.rows",
     "Blake3Keyed": "hash_frx.blake3.rows",
     "Grostl256": "hash_frx.grostl.grostl",
     "Keccak256": "hash_frx.keccak.byte_hashes",
-    "Ripemd160": "hash_frx.ripemd160",
-    "Sha256": "hash_frx.sha256",
-    "Sha384": "hash_frx.sha512",
+    "Ripemd160": "hash_frx.ripemd160.ripemd160",
+    "Sha256": "hash_frx.sha256.sha256",
+    "Sha384": "hash_frx.sha512.sha512",
     "Sha3_256": "hash_frx.keccak.byte_hashes",
     "Sha3_512": "hash_frx.keccak.byte_hashes",
-    "Sha512": "hash_frx.sha512",
-    "Sha512_256": "hash_frx.sha512",
+    "Sha512": "hash_frx.sha512.sha512",
+    "Sha512_256": "hash_frx.sha512.sha512",
     "Shake128": "hash_frx.keccak.byte_hashes",
     "Shake256": "hash_frx.keccak.byte_hashes",
-    "Sm3": "hash_frx.sm3",
+    "Sm3": "hash_frx.sm3.sm3",
     # -- rows: host (never traceable, return `np.ndarray`) -----------------
     "HostBlake2b": "hash_frx.blake2b.byte_hashes",
-    "HostBlake2s": "hash_frx.blake2s",
+    "HostBlake2s": "hash_frx.blake2s.blake2s",
     "HostBlake3": "hash_frx.blake3.rows",
     "HostBlake3DeriveKey": "hash_frx.blake3.rows",
     "HostBlake3Keyed": "hash_frx.blake3.rows",
-    "HostSha256": "hash_frx.sha256",
-    "HostSha384": "hash_frx.sha512",
+    "HostSha256": "hash_frx.sha256.sha256",
+    "HostSha384": "hash_frx.sha512.sha512",
     "HostSha3_256": "hash_frx.keccak.byte_hashes",
     "HostSha3_512": "hash_frx.keccak.byte_hashes",
-    "HostSha512": "hash_frx.sha512",
-    "HostSha512_256": "hash_frx.sha512",
+    "HostSha512": "hash_frx.sha512.sha512",
+    "HostSha512_256": "hash_frx.sha512.sha512",
     "HostShake128": "hash_frx.keccak.byte_hashes",
     "HostShake256": "hash_frx.keccak.byte_hashes",
-    "HostSm3": "hash_frx.sm3",
+    "HostSm3": "hash_frx.sm3.sm3",
     # -- streaming state (the midstate is per-construction, so are these) --
     "Blake3Stream": "hash_frx.blake3.streaming",
-    "Sha256State": "hash_frx.sha256",
-    "Sha512State": "hash_frx.sha512",
+    "Sha256State": "hash_frx.sha256.sha256",
+    "Sha512State": "hash_frx.sha512.sha512",
     "ShakeAbsorb": "hash_frx.keccak.streaming",
     "ShakeSqueeze": "hash_frx.keccak.streaming",
     "blake3_stream_init": "hash_frx.blake3.streaming",
-    "sha256_stream_absorb": "hash_frx.sha256",
-    "sha256_stream_finalize": "hash_frx.sha256",
-    "sha256_stream_init": "hash_frx.sha256",
-    "sha512_stream_absorb": "hash_frx.sha512",
-    "sha512_stream_finalize": "hash_frx.sha512",
-    "sha512_stream_init": "hash_frx.sha512",
+    "sha256_stream_absorb": "hash_frx.sha256.sha256",
+    "sha256_stream_finalize": "hash_frx.sha256.sha256",
+    "sha256_stream_init": "hash_frx.sha256.sha256",
+    "sha512_stream_absorb": "hash_frx.sha512.sha512",
+    "sha512_stream_finalize": "hash_frx.sha512.sha512",
+    "sha512_stream_init": "hash_frx.sha512.sha512",
     "shake128_init": "hash_frx.keccak.streaming",
     "shake256_init": "hash_frx.keccak.streaming",
     "shake_init": "hash_frx.keccak.streaming",
@@ -215,8 +215,8 @@ if TYPE_CHECKING:
     from hash_frx.ascon.permutation import AsconP as AsconP
     from hash_frx.blake2b.blake2b import Blake2b as Blake2b
     from hash_frx.blake2b.byte_hashes import HostBlake2b as HostBlake2b
-    from hash_frx.blake2s import Blake2s as Blake2s
-    from hash_frx.blake2s import HostBlake2s as HostBlake2s
+    from hash_frx.blake2s.blake2s import Blake2s as Blake2s
+    from hash_frx.blake2s.blake2s import HostBlake2s as HostBlake2s
     from hash_frx.blake3.rows import Blake3 as Blake3
     from hash_frx.blake3.rows import Blake3DeriveKey as Blake3DeriveKey
     from hash_frx.blake3.rows import Blake3Keyed as Blake3Keyed
@@ -277,25 +277,25 @@ if TYPE_CHECKING:
         KOALABEAR16_PARAMS as KOALABEAR16_PARAMS,
     )
     from hash_frx.poseidon2.standard import KoalaBear16 as KoalaBear16
-    from hash_frx.ripemd160 import Ripemd160 as Ripemd160
-    from hash_frx.sha256 import HostSha256 as HostSha256
-    from hash_frx.sha256 import Sha256 as Sha256
-    from hash_frx.sha256 import Sha256State as Sha256State
-    from hash_frx.sha256 import sha256_stream_absorb as sha256_stream_absorb
-    from hash_frx.sha256 import sha256_stream_finalize as sha256_stream_finalize
-    from hash_frx.sha256 import sha256_stream_init as sha256_stream_init
-    from hash_frx.sha512 import HostSha384 as HostSha384
-    from hash_frx.sha512 import HostSha512 as HostSha512
-    from hash_frx.sha512 import HostSha512_256 as HostSha512_256
-    from hash_frx.sha512 import Sha384 as Sha384
-    from hash_frx.sha512 import Sha512 as Sha512
-    from hash_frx.sha512 import Sha512_256 as Sha512_256
-    from hash_frx.sha512 import Sha512State as Sha512State
-    from hash_frx.sha512 import sha512_stream_absorb as sha512_stream_absorb
-    from hash_frx.sha512 import sha512_stream_finalize as sha512_stream_finalize
-    from hash_frx.sha512 import sha512_stream_init as sha512_stream_init
-    from hash_frx.sm3 import HostSm3 as HostSm3
-    from hash_frx.sm3 import Sm3 as Sm3
+    from hash_frx.ripemd160.ripemd160 import Ripemd160 as Ripemd160
+    from hash_frx.sha256.sha256 import HostSha256 as HostSha256
+    from hash_frx.sha256.sha256 import Sha256 as Sha256
+    from hash_frx.sha256.sha256 import Sha256State as Sha256State
+    from hash_frx.sha256.sha256 import sha256_stream_absorb as sha256_stream_absorb
+    from hash_frx.sha256.sha256 import sha256_stream_finalize as sha256_stream_finalize
+    from hash_frx.sha256.sha256 import sha256_stream_init as sha256_stream_init
+    from hash_frx.sha512.sha512 import HostSha384 as HostSha384
+    from hash_frx.sha512.sha512 import HostSha512 as HostSha512
+    from hash_frx.sha512.sha512 import HostSha512_256 as HostSha512_256
+    from hash_frx.sha512.sha512 import Sha384 as Sha384
+    from hash_frx.sha512.sha512 import Sha512 as Sha512
+    from hash_frx.sha512.sha512 import Sha512_256 as Sha512_256
+    from hash_frx.sha512.sha512 import Sha512State as Sha512State
+    from hash_frx.sha512.sha512 import sha512_stream_absorb as sha512_stream_absorb
+    from hash_frx.sha512.sha512 import sha512_stream_finalize as sha512_stream_finalize
+    from hash_frx.sha512.sha512 import sha512_stream_init as sha512_stream_init
+    from hash_frx.sm3.sm3 import HostSm3 as HostSm3
+    from hash_frx.sm3.sm3 import Sm3 as Sm3
     from hash_frx.sponge import Sponge as Sponge
     from hash_frx.sponge import SpongeParams as SpongeParams
     from hash_frx.sponge import SpongeType as SpongeType

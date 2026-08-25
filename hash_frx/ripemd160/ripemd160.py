@@ -36,7 +36,7 @@ No host `ByteHash` row ships from here, unlike SHA-2/SHA-3: OpenSSL 3 moved
 RIPEMD-160 to the legacy provider, so `hashlib.new("ripemd160")` raises on
 most current builds, and a host row that fails by default is worse than none
 (issue #189). The differential partner is the testonly
-`hash_frx.testing.host_ripemd160.HostRipemd160` over the pure-Python oracle.
+`hash_frx.ripemd160.testing.host_ripemd160.HostRipemd160` over the pure-Python oracle.
 """
 
 from __future__ import annotations
@@ -317,7 +317,7 @@ class Ripemd160(DeviceRow):
     HASH160 batch (address derivation, Bitcoin-proof workloads) being the
     motivating case, downstream of a `sha256` batch that is already there. The
     strictly-sequential caller's alternative is the testonly
-    `hash_frx.testing.host_ripemd160.HostRipemd160` — pure-Python, so unlike
+    `hash_frx.ripemd160.testing.host_ripemd160.HostRipemd160` — pure-Python, so unlike
     the SHA-2/SHA-3 host rows it does not ship (OpenSSL 3's legacy provider
     took `hashlib`'s binding away)."""
 

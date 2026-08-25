@@ -24,7 +24,8 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx import sha256, sha512
+from hash_frx.sha256 import sha256
+from hash_frx.sha512 import sha512
 
 # (family, block size, marker, words per block, absorb entry points)
 _FAMILIES = (

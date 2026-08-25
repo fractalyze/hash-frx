@@ -63,9 +63,10 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx import sha256, sha512
 from hash_frx.adapter.block_size import block_size
 from hash_frx.adapter.hmac import Hmac
+from hash_frx.sha256 import sha256
+from hash_frx.sha512 import sha512
 
 # The FIPS 198-1 §4 pad bytes, restated from `hmac.py`'s private constants:
 # two spec literals a reviewer checks against the standard either way (the

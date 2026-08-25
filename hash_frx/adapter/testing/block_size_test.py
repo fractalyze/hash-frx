@@ -13,12 +13,10 @@ from __future__ import annotations
 
 from absl.testing import absltest
 
-from hash_frx import blake2s, ripemd160, sm3
-from hash_frx import sha256 as sha256_mod
-from hash_frx import sha512 as sha512_mod
 from hash_frx.adapter.block_size import _BLOCK_SIZES, block_size
 from hash_frx.ascon.ascon import AsconHash256
 from hash_frx.blake2b import blake2b
+from hash_frx.blake2s import blake2s
 from hash_frx.blake3.rows import Blake3, Blake3Keyed, HostBlake3
 from hash_frx.grostl import grostl
 from hash_frx.keccak.byte_hashes import (
@@ -33,8 +31,12 @@ from hash_frx.keccak.byte_hashes import (
     Shake128,
     Shake256,
 )
-from hash_frx.sha256 import HostSha256, Sha256
-from hash_frx.sha512 import Sha384, Sha512, Sha512_256
+from hash_frx.ripemd160 import ripemd160
+from hash_frx.sha256 import sha256 as sha256_mod
+from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha512 import sha512 as sha512_mod
+from hash_frx.sha512.sha512 import Sha384, Sha512, Sha512_256
+from hash_frx.sm3 import sm3
 from hash_frx.testing.rows import ALL_ROWS
 
 

@@ -19,9 +19,9 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx import sha256
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
+from hash_frx.sha256 import sha256
 from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
     emitted_composites,
@@ -51,9 +51,10 @@ class Sha256Test(parameterized.TestCase):
 
     @parameterized.parameters(*_LENGTHS)
     def test_marked_equals_inline(self, length: int) -> None:
-        # The hash_frx.sha256 marker only tags the region; with no dedicated emitter
-        # wired it inlines its decomposition, so the marked digest must byte-equal
-        # the unmarked compression at every padding boundary.
+        # The hash_frx.digest.sha256 marker only tags the region; with no
+        # dedicated emitter wired it inlines its decomposition, so the marked
+        # digest must byte-equal the unmarked compression at every padding
+        # boundary.
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
         blocks = sha256._padded_words(fnp.asarray(msg[None, :]))
         marked = np.asarray(sha256.sha256_merkle_damgard(sha256.INITIAL_STATE, blocks))
@@ -63,7 +64,8 @@ class Sha256Test(parameterized.TestCase):
 
     def test_emits_single_composite_marker(self) -> None:
         # digest lowers to exactly one stablehlo.composite, name-routed to the
-        # dedicated hash_frx.sha256 emitter (parallel to hash_frx.poseidon2).
+        # dedicated hash_frx.digest.sha256 emitter (parallel to
+        # hash_frx.perm.poseidon2).
         blocks = sha256._padded_words(
             fnp.asarray(np.arange(64, dtype=np.uint8))[None, :]
         )

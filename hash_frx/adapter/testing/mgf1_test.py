@@ -41,8 +41,8 @@ from absl.testing import absltest, parameterized
 from hash_frx.adapter.mgf1 import Mgf1, mgf1
 from hash_frx.byte_hash import ByteHash
 from hash_frx.keccak.byte_hashes import Shake256
-from hash_frx.sha256 import HostSha256, Sha256
-from hash_frx.sha512 import Sha512
+from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha512.sha512 import Sha512
 
 _SEED = bytes(range(32))
 _HLEN = 32

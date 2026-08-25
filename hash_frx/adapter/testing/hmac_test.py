@@ -20,7 +20,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.adapter.hmac import Hmac
-from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import HostSha256, Sha256
 
 # RFC 4231 §4 HMAC-SHA-256 rows. `trunc` is the RFC's own output truncation
 # (case 5 keeps 128 bits); None keeps the full digest.
