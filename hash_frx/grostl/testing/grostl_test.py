@@ -28,13 +28,13 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx.byte_hash import ByteHash
+from hash_frx.byte_hash import ByteHash, capacity
 from hash_frx.fusion import FusionPath
 from hash_frx.grostl import grostl
 from hash_frx.grostl.grostl import Grostl256
 from hash_frx.grostl.testing.host_grostl256 import HostGrostl256
 from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS
-from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.jit_cache import assert_single_trace, assert_trace_growth
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 # Whether this leg can actually reach the Grøstl emitter. Read off the shipped
@@ -76,6 +76,62 @@ class Grostl256KatTest(parameterized.TestCase):
             np.asarray(Grostl256().digest(msgs)),
             np.asarray(HostGrostl256().digest(msgs)),
         )
+
+
+class Grostl256CapacityTest(parameterized.TestCase):
+    """The runtime-length form: `LMAX` sizes the buffer, `len` decides the
+    digest, and compilation keys on the first rather than the second."""
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_the_digest_is_the_message_not_the_buffer(self, length: int) -> None:
+        # The form's central claim, and the one a wrong `len` would break
+        # silently: the same message in buffers of several widths must digest
+        # identically, and equal what the oracle says. The slack is filled with
+        # 0xFF rather than zeros — a kernel that hashed the whole buffer, or
+        # padded at `LMAX` instead of `len`, would agree on a zero fill by
+        # accident on at least the block-aligned cases.
+        msgs = _message(length)
+        want = np.asarray(HostGrostl256().digest(msgs))
+        # Exact fit and one far-wider buffer. The two middle widths this swept
+        # before (`length + 1`, `length + 64`) made no claim these two do not,
+        # and each distinct width is a fresh compile of the unrolled body — the
+        # cost every other case in this file is annotated to avoid. `max(·, 1)`
+        # is the ABI's `LMAX >= 1` floor, which the empty message needs.
+        for width in (max(length, 1), 512):
+            with self.subTest(capacity=width):
+                buf = np.full((msgs.shape[0], width), 0xFF, dtype=np.uint8)
+                buf[:, :length] = msgs
+                got = grostl.grostl256_bytes(fnp.asarray(buf), np.int32(length))
+                np.testing.assert_array_equal(np.asarray(got), want)
+
+    def test_a_zero_width_buffer_is_refused(self) -> None:
+        # `LMAX >= 1` is an ABI term, not an emitter detail: the decomposition
+        # gathers the message through a clamp, which needs a byte in bounds to
+        # land on even when no byte is live.
+        with self.assertRaisesRegex(ValueError, "LMAX >= 1"):
+            grostl.grostl256_bytes(
+                fnp.asarray(np.zeros((1, 0), dtype=np.uint8)), np.int32(0)
+            )
+
+    def test_compilation_is_keyed_on_the_capacity_not_the_length(self) -> None:
+        # The acceptance criterion, measured rather than asserted: the zone's
+        # own compile cache is counted (`jit_cache.assert_trace_growth`, which
+        # carries why the bound is an inequality), not a stand-in for it. The
+        # range spans two rungs of the ladder — enough to show the collapse, and
+        # two Grøstl compiles is already seconds.
+        lengths = list(range(20, 128, 7))
+        widths = {
+            capacity(np.zeros((1, n), np.uint8), grostl._PAD.block_size)
+            for n in lengths
+        }
+        self.assertEqual(widths, {64, 128})
+
+        calls = [
+            functools.partial(grostl.digest, np.zeros((1, n), dtype=np.uint8))
+            for n in lengths
+        ]
+        # Sixteen lengths, at most two traces: the collapse itself.
+        assert_trace_growth(self, grostl.grostl256_bytes, calls, at_most=len(widths))
 
 
 class SboxCircuitTest(absltest.TestCase):
@@ -125,7 +181,7 @@ class Grostl256MarkerTest(absltest.TestCase):
 
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         # The wire surface an emitter will read: name, version, and the
-        # documented [iv, rc_p, rc_q, msg, tail] operand order. Five invars
+        # documented [iv, rc_p, rc_q, buf, len] operand order. Five invars
         # exactly is the captured-constants-free property — an array the body
         # closed over would be lifted in AHEAD of these, one per call site
         # (the operand-ABI rule in docs/reference/conventions.md).
@@ -135,8 +191,17 @@ class Grostl256MarkerTest(absltest.TestCase):
         self.assertEqual(eqn.params["version"], grostl.GROSTL256_MARKER_VERSION)
         self.assertLen(eqn.invars, 5)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
-        # L = 100: two blocks once padded, so the tail is 28 bytes.
-        self.assertEqual(shapes, [(64,), (10, 8, 8), (10, 8, 8), (2, 100), (28,)])
+        # The message is already on the device, so it keeps its own extent as
+        # the capacity and nothing is widened (`byte_hash.capacity`).
+        self.assertEqual(shapes, [(64,), (10, 8, 8), (10, 8, 8), (2, 100), ()])
+        # Operand 4 is what tells the two forms apart, and it is disjoint from
+        # the retired `tail u8[P]` in element type AND rank — the discriminator
+        # the recognizer relies on (fractalyze/xla#581).
+        self.assertEqual(eqn.invars[4].aval.dtype, fnp.int32)
+        self.assertEqual(eqn.invars[3].aval.dtype, fnp.uint8)
+        # The version does not select the form: one name, both forms, and the
+        # rewriter never reads `composite.version`.
+        self.assertEqual(grostl.GROSTL256_MARKER_VERSION, 1)
 
 
 class Grostl256MarkerRecognizedTest(absltest.TestCase):

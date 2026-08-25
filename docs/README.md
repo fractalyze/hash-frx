@@ -168,14 +168,17 @@ also decides whether a `Sponge` over it wraps its whole hash as
 a plugin without the arm rejects outright, which is a failed compile rather
 than a lost kernel.
 
-`hash_frx.digest.sha256_bytes` is gated the same way and for a third reason. It
+`hash_frx.digest.sha256_bytes` is gated the same way and for a third reason, and
+`hash_frx.digest.grostl256` now carries the same gate for the same reason. Each
 takes the message length as an operand rather than as part of the message shape,
 so one compiled kernel serves every length its buffer can hold — but its
 decomposition has to derive a data-dependent block count from that operand,
 which in plain HLO means speculating every block the buffer could need.
-Inlining it is therefore *slower* than the blocks marker `digest` falls back to,
-where an unrecognized name normally costs only the fusion. Being early costs
-performance rather than nothing, so the switch tracks the pin and the backend.
+Inlining it is therefore *slower* than the static-tail form it replaced, where
+an unrecognized name normally costs only the fusion. Being early costs
+performance rather than nothing, so the switch tracks the pin and the backend —
+and for Grøstl, which kept no fallback arm, it is the `frx>=` floor rather than a
+routing switch that refuses the wheels below it.
 
 The pin and the backend are not the only things that decide routing. A third
 axis is the **parameterization's own values**: an emitter's marker carries its

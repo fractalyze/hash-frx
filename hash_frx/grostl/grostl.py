@@ -21,10 +21,13 @@ over the eight bit planes rather than a 256-entry lookup, so no gather ever
 reaches the body (`_sbox` carries the circuit's provenance).
 
 Contract: `digest(msg)` takes uint8 `[B, L]` and returns uint8 `[B, 32]`
-digests (the trailing-256-bit truncation of Ω, spec section 3.3). Length `L`
-is static, so the padding is data-independent: a host tail built from the
-length alone (`_PAD`), concatenated on — which is what lets `msg`
-itself be traced. Requires no x64; everything is uint8.
+digests (the trailing-256-bit truncation of Ω, spec section 3.3). The live byte
+count reaches the marker as an OPERAND rather than through the message shape, so
+`digest` hashes out of a capacity buffer and compilation keys on that buffer's
+width instead of on each length. The padding is still data-independent — built
+from the length and never read off the message — which is what lets `msg` itself
+be traced; it is now selected in-graph (`_runtime_padded_blocks`) where it used
+to be a host constant. Requires no x64; everything is uint8.
 """
 
 from __future__ import annotations
@@ -38,10 +41,11 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
+from hash_frx.byte_hash import DeviceRow, at_capacity, capacity, message_length
+from hash_frx.extension.md import padded_region
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
-from hash_frx.word import roll
+from hash_frx.word import roll, unpack_be
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -368,6 +372,59 @@ def _compress(h: Array, m: Array, rc_p: Array, rc_q: Array) -> Array:
     return p ^ q ^ h
 
 
+def _block_count_field(nblocks: Array) -> Array:
+    """Grøstl v2.0.1 §3.1's 64-bit block count, big-endian: uint8 [8].
+
+    The trailer this family strengthens with is the number of blocks the PADDED
+    message occupies, not the bit length the other Merkle-Damgard rows write —
+    `PadRule.tail` encodes the same value on the static path, and this is its
+    counterpart for a traced length.
+
+    Takes the count rather than the byte length, because the caller has already
+    derived it to size the region: `sha256._length_field` takes a length because
+    a BIT length is not otherwise in hand, and copying that signature here would
+    have put a second `(len + 8) // 64 + 1` chain in every emitted body — in a
+    different dtype from the first, so not even one XLA would fold together.
+
+    The high word is zero rather than derived. The count rides as an int32, so
+    a message is under 2^31 bytes and its block count under 2^25, which no
+    32-bit half can overflow — where SHA-256's field has to split, because a
+    byte count near 2^31 has a BIT length near 2^34 and one word would wrap.
+    Stacking two words anyway is what makes the field eight bytes wide by
+    construction rather than by an assumption about `unpack_be`'s shape.
+    """
+    return unpack_be(fnp.stack([fnp.uint32(0), nblocks.astype(fnp.uint32)]))
+
+
+def _runtime_padded_blocks(buf: Array, length: Array) -> Array:
+    """The first `length` bytes of each row, padded to whole blocks: uint8
+    [B, LMAX] plus an int32 scalar -> uint8 [B, NB * 64].
+
+    What `_PAD.tail` builds from a static length, built from a traced one: the
+    tail cannot be a host constant when the length is runtime data, so the
+    region comes from `md.padded_region` — the same select `MdStream.finalize`
+    pads with, widened from its two blocks to every block the buffer could
+    need. `sha256._runtime_padded_words` is the sibling and differs only in
+    packing its result into big-endian words; Grøstl compresses bytes, so this
+    one hands the region back as it is.
+
+    This is the marked region's decomposition rather than a path `digest` takes:
+    where the marker is recognized the emitter replaces it. The speculation it
+    costs — every block the buffer could need is compressed and the ones past
+    the message selected away — is exactly the data-dependent-length cost the
+    emitter exists to avoid paying, which is why this is written for
+    correctness and the floor below refuses the wheels that would run it.
+    """
+    lmax = buf.shape[-1]
+    pos = fnp.arange(_PAD.nblocks(lmax) * _PAD.block_size, dtype=fnp.int32)
+    # Bytes at or past `length` are padding, so the message read is clamped into
+    # range rather than guarded: every lane it could spoil is selected away.
+    content = buf[:, fnp.clip(pos, 0, lmax - 1)]
+    nblocks = _PAD.nblocks(length)
+    active = nblocks * fnp.int32(_PAD.block_size)
+    return padded_region(_PAD, content, length, active, _block_count_field(nblocks))
+
+
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
 # emission, and a Merkle commit emits one digest call per tree level — so the
 # uncached re-trace of the 20-permutation body would dominate the first-trace
@@ -375,45 +432,83 @@ def _compress(h: Array, m: Array, rc_p: Array, rc_q: Array) -> Array:
 # the cached jaxpr into the enclosing trace, so the emitted module (one
 # composite marker per digest) is unchanged.
 @partial(frx.jit, inline=True)
-def grostl256_bytes(msg: Array) -> Array:
-    """Whole-message Grøstl-256 over raw bytes as ONE marked region:
-    uint8 [B, L] -> uint8 [B, 32], padding, the compression chain and Ω all
-    inside the marker.
+def grostl256_bytes(buf: Array, length: Array) -> Array:
+    """Whole-message Grøstl-256 over the live prefix of a capacity buffer, as
+    ONE marked region: uint8 [B, LMAX] with an int32 scalar byte count -> uint8
+    [B, 32], padding, the compression chain and Ω all inside the marker.
 
-    A name-routed digest marker, so it is exempt from the generic
-    single-kernel rule (`sha256.sha256_merkle_damgard` states the exemption)
-    and the body may chain blocks; the ten rounds of each permutation are
-    Python-unrolled regardless, the count being static and small. Where the
-    pinned plugin carries the emitter (`_EMITTER_BACKENDS`) the marker lowers
-    to one kernel; elsewhere it inlines its decomposition — identical bytes,
-    no dedicated kernel, `GENERIC` fusion path — the emitter changing the
-    lowering, never the value.
+    The digest is of `buf[:, :length]`; `LMAX` sizes the allocation and nothing
+    else, since the emitter loops on `length` and never reads past it. That is
+    the whole point of the form — one compiled kernel serves every length the
+    buffer can hold, where a length carried in the message SHAPE compiles once
+    per length.
+
+    A name-routed digest marker, so it is exempt from the generic single-kernel
+    rule (`sha256.sha256_merkle_damgard` states the exemption) and the body may
+    chain blocks; the ten rounds of each permutation are Python-unrolled
+    regardless, the count being static and small. Where the pinned plugin
+    carries the emitter (`_EMITTER_BACKENDS`) the marker lowers to one kernel;
+    elsewhere it inlines its decomposition — identical bytes, no dedicated
+    kernel, `GENERIC` fusion path — the emitter changing the lowering, never the
+    value.
+
+    **This form REPLACES the static-tail one; there is no routing arm.** The
+    decomposition derives its block count from runtime data, so it speculates
+    every block the buffer could hold and is therefore *slower* than the
+    static-tail form wherever the marker is not recognized — not merely
+    un-fused. What keeps that interval from shipping is the `frx>=` floor in
+    `pyproject.toml`, raised in the change that swapped this form in. A new
+    plugin meeting an old producer needs no arm either: it still recognizes
+    `tail u8[P]` and keeps routing.
+
+    `length` rides as an int32 SCALAR — `np.int32`, not a Python int and not a
+    device array, for the reasons `sha256.sha256_bytes` sets out: a Python int
+    is weakly typed and an x64 build widens it to `s64[]`, which the recognizer
+    declines, and a device scalar costs a transfer per call. It is one scalar
+    for the whole batch, so every row of `buf` is hashed at the same length —
+    the `ByteHash` seam is `uint8[B, L]`, equal-length by construction.
 
     Operands are explicit in the recognizer's positional ABI order:
 
-    ``[0] iv``    uint8 [64]          — h_0 = iv_256 (§3.5)
+    ``[0] iv``    uint8 [64]           — h_0 = iv_256 (§3.5)
     ``[1] rc_p``  uint8 [rounds, 8, 8] — P's AddRoundConstant matrices (§3.4.2)
     ``[2] rc_q``  uint8 [rounds, 8, 8] — Q's
-    ``[3] msg``   uint8 [B, L]        — the unpadded message batch
-    ``[4] tail``  uint8 [P]           — the §3.6 padding for the static L
+    ``[3] buf``   uint8 [B, LMAX]      — the capacity buffer
+    ``[4] len``   int32 []             — live bytes, the digest is of buf[:, :len]
+
+    Operand 4 is what tells the two forms apart on the producer side as well as
+    in the recognizer: `len s32[]` against `tail u8[P]` is disjoint in element
+    type AND rank. `GROSTL256_MARKER_VERSION` stays 1 — the rewriter never
+    reads `composite.version`, so it cannot select an operand form.
 
     Passing every table explicitly (rather than closing over the module
     constants) is the operand-ABI rule in docs/reference/conventions.md: a
-    host-materialised array captured by the body would be lifted into an
-    unnamed operand *ahead* of these, one per call site, leaving no layout to
-    write down. `tail` is derivable from the static L — a recognizing emitter
-    reads it rather than re-deriving it — and load-bearing for the inlined
-    decomposition.
+    host-materialised array captured by the body would be lifted into an unnamed
+    operand *ahead* of these, one per call site, leaving no layout to write down.
     """
+    if buf.shape[-1] < 1:
+        # The recognizer's floor, restated where it can still be a clear error.
+        # It declines a zero-width buffer, which would leave the decomposition
+        # to run — and that one indexes the message through a clamp with no byte
+        # to clamp to. The empty message is `length = 0` in a buffer of at least
+        # one byte, never a buffer of none.
+        raise ValueError(
+            f"buf must be uint8 [B, LMAX >= 1], got width {buf.shape[-1]}: an "
+            "empty message is length 0 in a non-empty buffer"
+        )
 
     def decomposition(
-        iv: Array, rc_p: Array, rc_q: Array, msg: Array, tail: Array, **_attrs: object
+        iv: Array, rc_p: Array, rc_q: Array, msg: Array, ln: Array, **_attrs: object
     ) -> Array:
-        b = msg.shape[0]
-        padded = padded_batch(msg, tail)
-        h = fnp.broadcast_to(iv, (b, _BLOCK))
-        for i in range(padded.shape[-1] // _BLOCK):  # static, small
-            h = _compress(h, padded[:, i * _BLOCK : (i + 1) * _BLOCK], rc_p, rc_q)
+        padded = _runtime_padded_blocks(msg, ln)
+        live = _PAD.nblocks(ln)
+        h = fnp.broadcast_to(iv, (msg.shape[0], _BLOCK))
+        # The block count is runtime data, so every block the buffer could need
+        # is compressed and the ones past the message selected away. Static and
+        # small, and never the routed path (`_runtime_padded_blocks` says why).
+        for i in range(padded.shape[-1] // _BLOCK):
+            block = padded[:, i * _BLOCK : (i + 1) * _BLOCK]
+            h = fnp.where(i < live, _compress(h, block, rc_p, rc_q), h)
         # Ω(h) = trunc_256(P(h) ⊕ h): the trailing 32 bytes (§3.3).
         p = _from_state(_permutation(_to_state(h), rc_p, _SHIFT_P))
         return (p ^ h)[:, _BLOCK - GROSTL256_DIGEST_SIZE :]
@@ -423,8 +518,8 @@ def grostl256_bytes(msg: Array) -> Array:
         _IVd,
         _RC_Pd,
         _RC_Qd,
-        msg,
-        fnp.asarray(_PAD.tail(msg.shape[-1])),
+        buf,
+        length,
         name=GROSTL256_MARKER,
         version=GROSTL256_MARKER_VERSION,
     )
@@ -438,13 +533,23 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     digest is emitted as the one name-routed `hash_frx.digest.grostl256`
     marker (`grostl256_bytes`).
 
+    Hashed out of a `byte_hash.capacity` buffer, so a host caller whose lengths
+    vary compiles once per WIDTH rather than once per length: the live byte
+    count reaches the marker as an operand and the bytes past it are never read.
+    The widening runs on the host — on device it would itself be an eager op
+    keyed on `L`, trading one compile per length for a cheaper one rather than
+    removing it (`byte_hash.at_capacity` carries the measurement).
+
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
-    inside its own `@jit` or `vmap` without reaching past the `ByteHash` seam:
-    the padding is built from the static length and never reads the message
-    (`_PAD`), which is the same property `sha256.digest` states.
+    inside its own `@jit` or `vmap` without reaching past the `ByteHash` seam.
+    The padding is built from the length and never reads the message, which is
+    the property that allows it — the length is now the marker's operand rather
+    than the message's shape, and `_runtime_padded_blocks` builds the same three
+    regions in-graph that `_PAD.tail` built on the host.
     """
-    msg = device_message(msg)
-    return grostl256_bytes(msg)
+    length = message_length(msg)
+    buf = at_capacity(msg, capacity(msg, _PAD.block_size))
+    return grostl256_bytes(buf, np.int32(length))
 
 
 class Grostl256(DeviceRow):
