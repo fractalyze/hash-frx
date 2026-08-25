@@ -37,7 +37,7 @@ from hash_frx.sha256.sha256 import HostSha256, Sha256
 from hash_frx.sha512 import sha512 as sha512_mod
 from hash_frx.sha512.sha512 import Sha384, Sha512, Sha512_256
 from hash_frx.sm3 import sm3
-from hash_frx.testing.rows import ALL_ROWS
+from hash_frx.testing.rows import BYTE_HASH_ROWS
 
 
 class KnownWidthsTest(absltest.TestCase):
@@ -125,7 +125,7 @@ class TableNamesRealRowsTest(absltest.TestCase):
     """
 
     def test_every_key_names_a_shipped_row(self) -> None:
-        shipped = {type(case.make()).__name__ for case in ALL_ROWS}
+        shipped = {type(case.make()).__name__ for case in BYTE_HASH_ROWS}
         shipped |= {n.removeprefix("Host") for n in shipped}
         for name in _BLOCK_SIZES:
             with self.subTest(hash=name):

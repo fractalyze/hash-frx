@@ -36,8 +36,9 @@ table would work and would cost less to import. The argument is about where each
 form fails: naming the types breaks at IMPORT the moment a row is renamed, while
 a lookup keyed on a name answers the renamed row with "this family has no host
 sibling" — a wrong answer at a consumer's call site rather than an error at the
-table. `adapter/testing/dual_test.py` holds the table to `ALL_ROWS` in both
-directions either way, so the difference is how early it is caught, not whether.
+table. `adapter/testing/dual_test.py` holds the table to the registry's device
+and host buckets in both directions either way, so the difference is how early it
+is caught, not whether.
 [`block_size.py`](block_size.py) accepts the name-keyed form, and the later
 failure with it, because staying dep-free is worth more to a table that answers
 with an `int`; this one has to produce the class.

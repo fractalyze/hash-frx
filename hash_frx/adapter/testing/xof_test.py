@@ -37,7 +37,7 @@ from hash_frx.keccak.byte_hashes import (
     Shake256,
 )
 from hash_frx.sha256.sha256 import HostSha256, Sha256
-from hash_frx.testing.rows import ALL_ROWS
+from hash_frx.testing.rows import BYTE_HASH_ROWS
 
 # `_LENGTH` is inside every family's range — BLAKE2s caps at 32 and BLAKE2b at
 # 64 — so a failure is the type's claim being wrong rather than the length being
@@ -76,7 +76,7 @@ class VariableOutputFamiliesTest(parameterized.TestCase):
         # that took one and ignored it would pass an introspective check.
         named = {name for name, _ in _FAMILIES}
         missing = []
-        for case in ALL_ROWS:
+        for case in BYTE_HASH_ROWS:
             row_type = type(case.make())
             try:
                 fits = row_type(_LENGTH).digest_size == _LENGTH
