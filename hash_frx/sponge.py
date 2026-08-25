@@ -2,7 +2,7 @@
 
 `Sponge.hash(input, chaining=...)` absorbs in `rate`-sized blocks and squeezes
 the first `out` lanes. `chaining` (`SpongeChaining`) picks how the chain crosses
-capacity via a `_MODES` row, so a new one is a member + a row, never a method.
+capacity via a `_RULES` row, so a new one is a member + a row, never a method.
 
 That extension point covers sponges shaped like this one: 1-D field elements,
 an overwrite absorb, and a squeeze that truncates the final state. A sponge that
@@ -40,27 +40,17 @@ class SpongeChaining(enum.Enum):
     """How the chain crosses capacity between blocks (`Sponge.hash(..., chaining=...)`).
 
     Both members share the sponge skeleton — absorb into rate, permute, squeeze —
-    and differ on one axis only: whether capacity carries the chain on its own or
-    the prior block's digest is written into it. Behaviour is a `_MODES` row, so a
-    new one is a member + a row, not a method.
+    and differ only in a `_RULES` row, which is where their behaviour lives.
+    Naming this axis after Merkle–Damgård, as an earlier spelling did, claimed a
+    domain extension for a discipline inside this one (`docs/blocks/hash.md`,
+    "Names say the construction they implement").
 
-    Naming this axis after Merkle–Damgård, as an earlier spelling did, described a
-    whole other construction: an axis-B domain extension rather than a discipline
-    inside this one. `sha256_merkle_damgard` names Merkle–Damgård because it *is*
-    Merkle–Damgård; nothing here is (`docs/blocks/hash.md`, "Names say the
-    construction, not the shape").
-
-    **The values are a frozen wire spelling, not the concept names.** Each rides
-    the `hash_frx.digest.field_sponge` composite as `construction=` and the
-    emitter switches on it, so changing one is a wire-ABI change needing
-    dual-spelling recognition in Fractalyze XLA first (`fusion.py`; #165 is the
-    worked example). They stay as they are until that is staged.
+    **The values are a frozen wire spelling rather than the concept names**: each
+    rides the `hash_frx.digest.field_sponge` composite as `construction=`, so
+    renaming one stages exactly like a marker rename (`markers.py`).
     """
 
-    # Plonky3 PaddingFreeSponge (default): masked lanes keep the prior state, so
-    # untouched capacity carries the chain implicitly.
-    IMPLICIT_CAPACITY = "padding_free"
-    # The prior block's digest is written into capacity lanes [rate:rate+out].
+    IMPLICIT_CAPACITY = "padding_free"  # Plonky3 PaddingFreeSponge (default)
     DIGEST_IN_CAPACITY = "merkle_damgard"
 
 
@@ -72,10 +62,10 @@ SPONGE_HASH_MARKER_VERSION = 1
 
 
 @dataclass(frozen=True)
-class _Mode:
-    """One chaining discipline's behaviour — the whole per-member surface. A new
-    one is a single `_MODES` row (a `SpongeChaining` member + its two hooks), no
-    new module-level functions.
+class _Rule:
+    """One chaining rule's behaviour — the whole per-member surface. A new one is
+    a single `_RULES` row (a `SpongeChaining` member + its two hooks), no new
+    module-level functions.
 
     `tail_fill(state, rate)` fills a partial block's masked rate lanes;
     `set_capacity(state, cap, rate, out)` places the prior digest `cap`
@@ -88,17 +78,17 @@ class _Mode:
     fills_capacity: bool
 
 
-_MODES: dict[SpongeChaining, _Mode] = {
+_RULES: dict[SpongeChaining, _Rule] = {
     # Masked lanes keep the prior state; capacity carries the chain on its own,
     # so set_capacity is a no-op.
-    SpongeChaining.IMPLICIT_CAPACITY: _Mode(
+    SpongeChaining.IMPLICIT_CAPACITY: _Rule(
         tail_fill=lambda s, rate: s[:rate],
         set_capacity=lambda s, cap, rate, out: s,
         fills_capacity=False,
     ),
     # Masked lanes are zero-padded; capacity lanes [rate:rate+out] take the
     # prior block's digest.
-    SpongeChaining.DIGEST_IN_CAPACITY: _Mode(
+    SpongeChaining.DIGEST_IN_CAPACITY: _Rule(
         tail_fill=lambda s, rate: s[:rate] - s[:rate],
         set_capacity=lambda s, cap, rate, out: s.at[rate : rate + out].set(cap),
         fills_capacity=True,
@@ -115,8 +105,8 @@ def _absorb(
     chaining: SpongeChaining,
 ) -> Array:
     """Absorb over ``ceil(n/rate)`` blocks and squeeze the first ``out`` lanes —
-    shared by every `SpongeChaining`, whose `tail_fill`/`set_capacity` are the only
-    per-member pieces.
+    shared by every `SpongeChaining`, whose `tail_fill`/`set_capacity` are the
+    only per-member pieces.
 
     The schedule is `extension.sponge.field_absorb`: a ``while_loop``, so the
     bound is read at runtime and concrete and symbolic ``n`` lower the same way.
@@ -127,7 +117,7 @@ def _absorb(
     The squeeze is a truncation of the final state rather than an iterated read,
     which is why nothing here needs the byte schedule's permute-between-reads
     rule."""
-    mode = _MODES[chaining]
+    rule = _RULES[chaining]
     n = input.shape[0]
     nb = (n + rate - 1) // rate
     lanes = fnp.arange(rate)
@@ -138,8 +128,8 @@ def _absorb(
         # Last block reads past n; clamp OOB indices (masked out below).
         block = input[fnp.clip(start + lanes, 0, n - 1)]
         cap = s[:out]  # prior digest (zeros on block 0); snapshot before overwrite
-        s = s.at[:rate].set(fnp.where(lanes < w, block, mode.tail_fill(s, rate)))
-        return mode.set_capacity(s, cap, rate, out)
+        s = s.at[:rate].set(fnp.where(lanes < w, block, rule.tail_fill(s, rate)))
+        return rule.set_capacity(s, cap, rate, out)
 
     state = field_absorb(state, blocks=nb, absorb=merge, permute=permute)
     return state[:out]
@@ -264,18 +254,17 @@ class Sponge:
             raise TypeError(
                 f"input dtype {input.dtype} must match the sponge field {self.dtype}"
             )
-        # A capacity-filling rule (DIGEST_IN_CAPACITY) needs rate + out == width.
-        if _MODES[chaining].fills_capacity and (
+        if _RULES[chaining].fills_capacity and (
             self.rate + self.out != self._permutation.width
         ):
             raise ValueError(
-                f"{chaining.value} hash needs rate + out == width (the digest "
+                f"{chaining.name} hash needs rate + out == width (the digest "
                 f"fills the capacity), got {self.rate} + {self.out} != "
                 f"{self._permutation.width}"
             )
         # Zero absorbed blocks leave the state at its zero initialization, so
         # the digest is the zero prefix (Plonky3's PaddingFreeSponge on an
-        # empty iterator; the digest-feedback mode chains nothing either).
+        # empty iterator; DIGEST_IN_CAPACITY chains nothing either).
         # Static, so no marker or permute is emitted for a constant result —
         # without this the absorb gather slices a length-0 input and fails.
         if input.shape[0] == 0:

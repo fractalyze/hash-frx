@@ -5,9 +5,11 @@ A marker names the KERNEL that lowers — the fusible unit — not the taxonomy:
 an axis-B construction (Merkle–Damgård, Tree, Sponge, Duplex) is a schedule
 over a unit, so it gets no namespace of its own. A construction lives baked
 into a ``DIGEST`` name (`hash_frx.digest.sha256` IS Merkle–Damgård, the sponge
-markers ARE Sponge) and/or as a composite attribute (the sponge mode rides as
-``construction=<mode>``); Duplex is stateful, so it has no whole-hash marker
-at all — each step is a ``PERM``. Three kinds cover every kernel:
+markers ARE Sponge) and/or as a composite attribute (the field sponge's
+chaining rule rides as ``construction=<value>``, whose spellings are frozen
+wire ABI rather than `SpongeChaining`'s member names); Duplex is stateful, so
+it has no whole-hash marker at all — each step is a ``PERM``. Three kinds
+cover every kernel:
 
 - ``PERM`` — a permutation (n→n): one `permute` call is the marked region.
 - ``COMPRESS`` — a compression function (n→m): BLAKE3's parent-node and

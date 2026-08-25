@@ -103,7 +103,7 @@ class NonFieldPermutationTest(absltest.TestCase):
         self.assertEqual(got.dtype, fnp.uint32)
         np.testing.assert_array_equal(np.asarray(got), want)
 
-    def test_padding_free_sponge_carries_word_lanes(self) -> None:
+    def test_implicit_capacity_sponge_carries_word_lanes(self) -> None:
         # One exact rate block: overwrite the rate lanes, permute, squeeze `out`.
         s = Sponge(_WordPerm(), SpongeParams(rate=_RATE, out=_OUT))
         inp = np.arange(_RATE, dtype=np.uint32)
@@ -116,7 +116,7 @@ class NonFieldPermutationTest(absltest.TestCase):
         self.assertEqual(got.dtype, fnp.uint32)
         np.testing.assert_array_equal(np.asarray(got), want)
 
-    def test_merkle_damgard_sponge_carries_word_lanes(self) -> None:
+    def test_digest_in_capacity_sponge_carries_word_lanes(self) -> None:
         # Two blocks, so the construction's zero-fill and capacity carry both run.
         s = Sponge(_WordPerm(), SpongeParams(rate=_RATE, out=_OUT))
         inp = np.arange(2 * _RATE, dtype=np.uint32)

@@ -56,8 +56,9 @@ from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
 U32 = fnp.uint32
 
 # The whole padded absorb + squeeze as one region a dedicated emitter expands.
-# Not `hash_frx.digest.field_sponge`: that marker's `construction` attr switches between
-# two sponges that share an input domain and an absorb, and this one shares
+# Not `hash_frx.digest.field_sponge`: that marker's `construction` attr switches
+# between the chaining rules of one sponge, which share an input domain and an
+# absorb, and this one shares
 # neither (bytes rather than field elements, XOR rather than overwrite, an
 # iterated squeeze rather than a truncation). Reusing it would re-merge what the
 # module docstring keeps apart.
