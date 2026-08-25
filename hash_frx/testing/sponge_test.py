@@ -30,8 +30,8 @@ from hash_frx.poseidon2.testing.koalabear16 import (
 from hash_frx.sponge import (
     SPONGE_HASH_MARKER,
     Sponge,
+    SpongeChaining,
     SpongeParams,
-    SpongeType,
     _hash_body,
 )
 from hash_frx.testing.jit_cache import assert_single_trace
@@ -179,7 +179,7 @@ def _ref_merkle_damgard(
 ) -> fnp.ndarray:
     """Independent Merkle-Damgard reference: per-block unroll — zero-pad a short
     final block, chain the prior digest state[:out] into capacity [rate:rate+out].
-    Permutation-agnostic, so it cross-checks Sponge.hash(MERKLE_DAMGARD) over any
+    Permutation-agnostic, so it cross-checks Sponge.hash(DIGEST_IN_CAPACITY) over any
     permutation."""
     w = perm.width
     n = int(x.shape[0])
@@ -235,7 +235,7 @@ class MerkleDamgardTest(absltest.TestCase):
             # one full block, two full, then two partial-tail lengths.
             for n in (rate, 2 * rate, rate + rate // 2, 2 * rate + rate // 2):
                 x = fnp.arange(n, dtype=F)
-                got = s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD)
+                got = s.hash(x, chaining=SpongeChaining.DIGEST_IN_CAPACITY)
                 self.assertTrue(
                     bool(fnp.array_equal(got, _ref_merkle_damgard(perm, x, rate, out))),
                     f"width {perm.width}, len {n}",
@@ -244,7 +244,7 @@ class MerkleDamgardTest(absltest.TestCase):
     def test_requires_rate_plus_out_equals_width(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=4))  # 8 + 4 != 16
         with self.assertRaises(ValueError):
-            s.hash(fnp.arange(8, dtype=F), sponge_type=SpongeType.MERKLE_DAMGARD)
+            s.hash(fnp.arange(8, dtype=F), chaining=SpongeChaining.DIGEST_IN_CAPACITY)
 
     def test_lowers_under_symbolic_length(self) -> None:
         # Rides the shared while_loop absorb, so a symbolic `len(input)` lowers
@@ -252,7 +252,7 @@ class MerkleDamgardTest(absltest.TestCase):
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         (n,) = export.symbolic_shape("n")
         txt = (
-            frx.jit(lambda x: s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD))
+            frx.jit(lambda x: s.hash(x, chaining=SpongeChaining.DIGEST_IN_CAPACITY))
             .lower(frx.ShapeDtypeStruct((n,), F))
             .as_text()
         )
@@ -298,8 +298,8 @@ class EmptyInputTest(absltest.TestCase):
 
     def test_empty_input_hashes_to_zeros(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-        for sponge_type in SpongeType:
-            got = np.asarray(s.hash(fnp.zeros(0, dtype=F), sponge_type))
+        for chaining in SpongeChaining:
+            got = np.asarray(s.hash(fnp.zeros(0, dtype=F), chaining))
             np.testing.assert_array_equal(got, np.zeros(8, dtype=got.dtype))
 
 

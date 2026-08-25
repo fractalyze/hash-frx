@@ -460,11 +460,26 @@ is not itself the reason they stay.
 
 ## Names say the construction, not the shape
 
-An identifier names the construction it implements —
-`sha256_merkle_damgard`, `SpongeType.MERKLE_DAMGARD` — and shape words like
-"chain" stay in prose. A chain is what a Merkle–Damgård fold looks like, not what
-it is, and a name that describes the picture stops matching the moment a second
-construction has the same picture.
+An identifier names the construction it implements — `sha256_merkle_damgard` —
+and shape words like "chain" stay in prose. A chain is what a Merkle–Damgård
+fold looks like, not what it is, and a name that describes the picture stops
+matching the moment a second construction has the same picture.
+
+The rule cuts the other way too, and that half cost more to learn. A name may
+not claim a construction it does not implement, however well the picture fits:
+`SpongeChaining.DIGEST_IN_CAPACITY` was spelled `SpongeType.MERKLE_DAMGARD`, and
+what it selects is a discipline *inside* the sponge — whether the prior digest is
+written into capacity — not the Merkle–Damgård domain extension. The borrowed
+name read as though a sponge could be Merkle–Damgård, and it was cited on the
+epic as this rule's own precedent while being its clearest violation. Both
+members now name the mechanism, and the axis is `SpongeChaining` rather than
+`SpongeType` because a chaining discipline is what varies.
+
+Their **values** did not move: each rides the `hash_frx.digest.field_sponge`
+composite as `construction=`, so the strings are a wire ABI and a rename there
+needs the dual-spelling staging in Fractalyze XLA that any marker rename does.
+A frozen value under a corrected name is the normal end state of that split, not
+an inconsistency to tidy away.
 
 `zorch` carries its own copy of this layer alongside its dependency on this one,
 and one symbol differs across the two: `sha256_merkle_damgard` here is

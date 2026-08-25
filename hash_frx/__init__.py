@@ -98,8 +98,8 @@ _EXPORTS: dict[str, str] = {
     "SpillPermute": "hash_frx.duplex_sponge",
     "KeccakSponge": "hash_frx.keccak.sponge",
     "Sponge": "hash_frx.sponge",
+    "SpongeChaining": "hash_frx.sponge",
     "SpongeParams": "hash_frx.sponge",
-    "SpongeType": "hash_frx.sponge",
     # -- rows: device (traceable, return `Array`) --------------------------
     "AsconHash256": "hash_frx.ascon.ascon",
     "AsconXof128": "hash_frx.ascon.ascon",
@@ -297,8 +297,8 @@ if TYPE_CHECKING:
     from hash_frx.sm3.sm3 import HostSm3 as HostSm3
     from hash_frx.sm3.sm3 import Sm3 as Sm3
     from hash_frx.sponge import Sponge as Sponge
+    from hash_frx.sponge import SpongeChaining as SpongeChaining
     from hash_frx.sponge import SpongeParams as SpongeParams
-    from hash_frx.sponge import SpongeType as SpongeType
     from hash_frx.vision.params import VisionParams as VisionParams
     from hash_frx.vision.params import vision_mark32_params as vision_mark32_params
     from hash_frx.vision.vision import Vision as Vision
