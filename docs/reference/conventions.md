@@ -6,10 +6,9 @@ This page carries only what is specific to writing hash primitives. The rules
 every FRX consumer shares — `@jit` placement, `for` vs `lax.scan` vs `vmap`,
 pytree registration mechanics, type annotations, the `testing/` layout, the
 comment rules — are not repeated here. They follow from FRX and XLA semantics
-rather than from what a repo computes, so a copy per repo is how they drift
-apart; read them in
-[`zorch`'s page](https://github.com/fractalyze/zorch/blob/main/docs/reference/conventions.md),
-which states them in full.
+rather than from what a repo computes, so no repo owns them and a copy per repo
+is how they drift apart. The playbook injects them at session start as
+[`conventions/frx.md`](https://github.com/fractalyze/claude-plugins/blob/main/plugins/playbook/conventions/frx.md).
 
 ## Adding a hash: a seam implementation and a row
 
