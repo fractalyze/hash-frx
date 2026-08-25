@@ -33,6 +33,8 @@ from frx.typing import ArrayLike
 from hash_frx.byte_hash import (
     DeviceRow,
     HostRow,
+    at_capacity,
+    capacity,
     device_message,
     host_digest,
     message_length,
@@ -387,85 +389,6 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     )
 
 
-def _capacity(msg: ArrayLike) -> int:
-    """The buffer width `digest` hashes `msg` out of.
-
-    A message still on the HOST is widened to the next power of two, floored at
-    one block. The width is what compilation is keyed on, so the policy trades
-    how many distinct buffers a caller compiles against how many padding bytes
-    it ships per call: doubling bounds the second under 2x the message while
-    keeping the first logarithmic — fifteen widths span a byte to a megabyte.
-    Widening it costs a numpy copy, and collapsing a compile per length into one
-    per width is the whole point of the form.
-
-    A message ALREADY on the device keeps its own extent, so nothing is padded
-    and only the marker changes. Widening it would be a dispatched device op
-    rather than a host copy — measured at 4.2x the digest it precedes (B = 256,
-    L = 65) — and it buys that caller nothing: a batch materialized at one length
-    is not re-entering the trace cache with new ones, and under `jit` the
-    enclosing trace compiles once whatever the width. So the capacity is
-    whatever buffer the caller already has.
-
-    Coarser widths are not ruled out by the kernel: measured on the pinned wheel,
-    a 32-byte message costs the same (~6 us at B = 256) in a 32-byte buffer as in
-    a 2048-byte one, because the emitter loops on the length operand — where
-    hashing the whole buffer instead would have cost 20x. What bounds the width
-    is the bytes crossing to the device, which a short message does not amortize.
-    """
-    length = message_length(msg)
-    if isinstance(msg, Array):
-        # `LMAX >= 1` is the recognizer's floor: the emitter's clamped
-        # message-side index needs somewhere in bounds to land, even at `len` 0.
-        return max(length, 1)
-    block = _PAD.block_size
-    return block if length <= block else 1 << (length - 1).bit_length()
-
-
-def _at_capacity(msg: ArrayLike, capacity: int) -> Array:
-    """`msg` widened to the uint8 `[B, capacity]` buffer the marker hashes out
-    of: `[B, L]` -> `[B, capacity]`, for `capacity >= L`.
-
-    The width is a CAPACITY rather than a length: the marker takes the live byte
-    count as an operand, so its emitter stops there and the bytes past `L` are
-    never read. They are left zero on that ground — nothing derives from them.
-
-    **Where the widening runs decides whether the compile saving is real.**
-    Widening on device is itself an eager op keyed on `L`, so it would trade one
-    compile per length for a cheaper compile per length rather than removing one:
-    measured at ~22 ms against the ~90 ms whole-digest compile it exists to
-    collapse. Host data is therefore widened with numpy, before it reaches a
-    device at all — a copy and one transfer, no compile. An input already on
-    device cannot take that path without a round trip, and a tracer cannot take
-    it at all, so both are widened in-graph: right in either case, and free for
-    the tracer, whose enclosing trace compiles once regardless.
-
-    Lives here rather than on the seam because `_capacity` does: the policy and
-    the widening are only ever called together, and no second family has a
-    runtime-length ABI to share them with yet.
-    """
-    length = message_length(msg)
-    if capacity < length:
-        raise ValueError(
-            f"capacity ({capacity}) must be >= the message length ({length})"
-        )
-    if isinstance(msg, Array):
-        # An already-uint8 array is handed back untouched rather than run through
-        # a converting call: those return the identical object and still pay a
-        # full eager dispatch — `device_message` 5.1 us, `.astype` 2.6 us, against
-        # the ~3 us digest they precede. This is the only branch a device-resident
-        # caller takes, so that dispatch would be pure overhead on every call.
-        u8 = msg if msg.dtype == fnp.uint8 else msg.astype(fnp.uint8)
-        if capacity == length:
-            return u8
-        return padded_batch(u8, fnp.zeros(capacity - length, dtype=fnp.uint8))
-    host = np.asarray(msg, dtype=np.uint8)
-    if capacity == length:
-        return fnp.asarray(host)
-    buf = np.zeros((host.shape[0], capacity), dtype=np.uint8)
-    buf[:, :length] = host
-    return fnp.asarray(buf)
-
-
 # Module-level jit zone for the same reason as `sha256_merkle_damgard`: the
 # composite re-traces its decomposition per emission, and a Merkle commit emits
 # one digest call per tree level.
@@ -541,11 +464,11 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     Byte-identical to the FIPS 180-4 standard per message. The device
     compression is emitted as one name-routed marker; which one depends on the
     pinned plugin. The whole-message form (`sha256_bytes`) where its
-    recognizer exists, hashing out of a `_capacity` buffer so that a host caller
-    whose lengths vary compiles once per width rather than once per length; else
-    the blocks form with the padded words packed here. Both produce identical
-    bytes, and differ only in where the padding runs and in what the compilation
-    is keyed on.
+    recognizer exists, hashing out of a `byte_hash.capacity` buffer so that a
+    host caller whose lengths vary compiles once per width rather than once per
+    length; else the blocks form with the padded words packed here. Both produce
+    identical bytes, and differ only in where the padding runs and in what the
+    compilation is keyed on.
 
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash inside
     its own `@jit` or `vmap` without reaching past the seam for
@@ -556,7 +479,8 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     """
     if _routes_to_bytes_marker():
         length = message_length(msg)
-        return sha256_bytes(_at_capacity(msg, _capacity(msg)), np.int32(length))
+        buf = at_capacity(msg, capacity(msg, _PAD.block_size))
+        return sha256_bytes(buf, np.int32(length))
     return sha256_merkle_damgard(INITIAL_STATE, _padded_words(device_message(msg)))
 
 
