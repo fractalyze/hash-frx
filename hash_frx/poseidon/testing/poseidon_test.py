@@ -150,13 +150,17 @@ def _to_goldilocks_field(rows: tuple[tuple[int, ...], ...]) -> fnp.ndarray:
 
 def _goldilocks_params() -> PoseidonParams:
     """The same width-3 shape over Goldilocks, with an MDS entry past
-    `2**63 - 1` — what the marker's int64 attribute cannot hold at all.
+    `2**63 - 1` — #117's trigger, and the only way to reach it: a 31-bit field
+    cannot hold a value that large, so `_WIDE_MDS` above cannot stand in.
 
-    This is fractalyze/hash-frx#117's trigger, and the add-chain bound catches it
-    first: the gate runs on Python ints before `_poseidon_marker_attrs` casts to
-    int64, so the `OverflowError` that issue reports is unreachable while the
-    bound stays far below `2**63`. `alpha` is 7 here because 3 divides
-    `p - 1 = 2**32 * (2**32 - 1)`'s factor 3, and an S-box has to permute.
+    What this pins is an *ordering*, not a second rejection branch — it takes the
+    same `[0, 64)` exit `_WIDE_MDS` does. The gate reads canonical Python ints
+    and runs before `_poseidon_marker_attrs` casts them to int64, so #117's
+    `OverflowError` is unreachable. Compute those attributes any earlier and this
+    case raises while every other test still passes.
+
+    `alpha` is 7 rather than 3 because 3 divides `p - 1`, and an S-box has to
+    permute.
     """
     return PoseidonParams(
         width=_WIDTH,
@@ -178,16 +182,12 @@ def _poseidon_params_with(mds_rows: tuple[tuple[int, ...], ...]) -> PoseidonPara
 
 class PoseidonUnroutableMdsTest(parameterized.TestCase):
     """A parameter set the dedicated emitter cannot express takes the generic
-    marker rather than failing the compile.
+    marker rather than failing the compile, which is what routing one to it used
+    to cost: an `unparsable composite.attributes` error naming a marker that was
+    never malformed.
 
-    The emitter applies the MDS as a small-integer add-chain, so it takes
-    entries in `[0, 64)` and no all-zero row; its recognizer rejects anything
-    else outright. Routing such a set to it used to surface as an
-    `unparsable composite.attributes` compile failure — a real one, since no
-    add-chain can multiply by a 31-bit field element.
-
-    `_poseidon_params()`'s own small matrix is the other side of the gate: the
-    marker-emission tests below still pin it to the dedicated path, so this is a
+    `_poseidon_params()`'s own small matrix is the other side of the gate — the
+    marker-emission tests below still pin it to the dedicated path — so this is a
     question the MDS answers rather than a blanket no.
     """
 

@@ -13,6 +13,11 @@ rounds are unrolled (fixed, small counts) and the dense MDS uses the normal-form
 helper (`apply_matrix`) so nothing lowers to a reduce/dot/gather that would
 split the kernel.
 
+The dedicated emitter does not serve every parameterization. It applies the MDS
+as a small-integer add-chain, so a matrix outside that range — which is every
+matrix over a real field — takes the generic marker instead, one kernel either
+way. `_select_fused_region_name` is where that is decided.
+
 Classic Poseidon (ark-sponge style): each round is `ARC -> S-box -> dense MDS`.
 The rounds split full/partial/full — `full_rounds/2` full rounds (S-box `x^alpha`
 on all lanes), then `partial_rounds` partial rounds (S-box on the last lane
@@ -74,13 +79,12 @@ _EMITTER_BACKENDS = ("cpu", "gpu")
 # back or loses fusion silently.
 #
 # It also stands in for the int64 representability the marker attribute needs
-# (fractalyze/hash-frx#117): the bound is far below `2**63 - 1`, so an entry too
-# wide for the attribute fails this check first and never reaches
-# `_poseidon_marker_attrs`' int64 cast. That holds only while the bound stays
-# under `_I64_MAX`, which is why the relationship is written down rather than
-# left to arithmetic.
+# (#117) — a bound this far below `2**63 - 1` rejects a too-wide entry before the
+# cast can see it, which `_goldilocks_params` in the test pins. That falls out of
+# the bound rather than being a second gate, so it stops holding if
+# fractalyze/xla#604 lifts the add-chain restriction, and #117 then needs the
+# explicit `_fits_i64`-shaped check `sparse.py` already carries.
 _DEDICATED_EMITTER_MDS_BOUND = 64
-_I64_MAX = 2**63 - 1
 
 
 def _routes_to_dedicated_emitter() -> bool:
