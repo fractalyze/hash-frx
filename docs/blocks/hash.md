@@ -419,13 +419,19 @@ message widened to a shared buffer width is hashed at its own length by a kernel
 every other length reuses. That ABI is now the only whole-message form: the
 static-tail arm it once shared the marker name with was retired once the operand
 form reached every backend that has an emitter at all.
+
+Grøstl-256 is the second family on it, cpu only
+([`grostl/grostl.py`](../../hash_frx/grostl/grostl.py), `_EMITTER_BACKENDS`), and it
+carries the form under its EXISTING marker name rather than a sibling: the two
+operand forms are told apart by operand 4 being disjoint in element type and
+rank, so no second name and no `composite.version` bump were needed.
 Where that holds, condition 1's larger half is gone and the host row rests on
 dispatch alone, which is a far weaker justification than the paragraphs above
 describe.
 
-Everywhere else the compile-per-length term stands as stated: every other
-family, and SHA-256 on any backend whose plugin carries no emitter for that
-ABI. So condition 1 is a question about a (hash, backend) pair rather than about
+Everywhere else the compile-per-length term stands as stated: the five
+remaining tail-operand families, and either of the two above on a backend whose
+plugin carries no emitter for that ABI. So condition 1 is a question about a (hash, backend) pair rather than about
 the package, and a host row retired on the strength of one cell would be a
 regression in the others.
 

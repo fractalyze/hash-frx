@@ -34,7 +34,7 @@ from hash_frx.grostl import grostl
 from hash_frx.grostl.grostl import Grostl256
 from hash_frx.grostl.testing.host_grostl256 import HostGrostl256
 from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS
-from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.jit_cache import assert_single_trace, assert_trace_growth
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 # Whether this leg can actually reach the Grøstl emitter. Read off the shipped
@@ -92,7 +92,12 @@ class Grostl256CapacityTest(parameterized.TestCase):
         # accident on at least the block-aligned cases.
         msgs = _message(length)
         want = np.asarray(HostGrostl256().digest(msgs))
-        for width in (max(length, 1), length + 1, length + 64, 512):
+        # Exact fit and one far-wider buffer. The two middle widths this swept
+        # before (`length + 1`, `length + 64`) made no claim these two do not,
+        # and each distinct width is a fresh compile of the unrolled body — the
+        # cost every other case in this file is annotated to avoid. `max(·, 1)`
+        # is the ABI's `LMAX >= 1` floor, which the empty message needs.
+        for width in (max(length, 1), 512):
             with self.subTest(capacity=width):
                 buf = np.full((msgs.shape[0], width), 0xFF, dtype=np.uint8)
                 buf[:, :length] = msgs
@@ -110,31 +115,23 @@ class Grostl256CapacityTest(parameterized.TestCase):
 
     def test_compilation_is_keyed_on_the_capacity_not_the_length(self) -> None:
         # The acceptance criterion, measured rather than asserted: the zone's
-        # own compile cache is read before and after, so this counts traces and
-        # not a stand-in for them. The range spans two rungs of the ladder
-        # (64 and 128) — enough to show the collapse, and two Grøstl compiles
-        # is already seconds.
-        #
-        # `assertLessEqual` and not equality because the zone is shared
-        # process-wide: an earlier case may have seeded one of these widths,
-        # which is the same reason `jit_cache.assert_single_trace` compares
-        # against a snapshot instead of an absolute count.
+        # own compile cache is counted (`jit_cache.assert_trace_growth`, which
+        # carries why the bound is an inequality), not a stand-in for it. The
+        # range spans two rungs of the ladder — enough to show the collapse, and
+        # two Grøstl compiles is already seconds.
         lengths = list(range(20, 128, 7))
-        widths = {capacity(np.zeros((1, n), np.uint8), 64) for n in lengths}
+        widths = {
+            capacity(np.zeros((1, n), np.uint8), grostl._PAD.block_size)
+            for n in lengths
+        }
         self.assertEqual(widths, {64, 128})
 
-        before = grostl.grostl256_bytes._cache_size()
-        for n in lengths:
-            grostl.digest(np.zeros((1, n), dtype=np.uint8))
-        grown = grostl.grostl256_bytes._cache_size() - before
-
-        self.assertLessEqual(grown, len(widths))
-        self.assertLess(grown, len(lengths))
-        # And a second pass over the same lengths adds nothing at all.
-        settled = grostl.grostl256_bytes._cache_size()
-        for n in lengths:
-            grostl.digest(np.zeros((1, n), dtype=np.uint8))
-        self.assertEqual(grostl.grostl256_bytes._cache_size(), settled)
+        calls = [
+            functools.partial(grostl.digest, np.zeros((1, n), dtype=np.uint8))
+            for n in lengths
+        ]
+        # Sixteen lengths, at most two traces: the collapse itself.
+        assert_trace_growth(self, grostl.grostl256_bytes, calls, at_most=len(widths))
 
 
 class SboxCircuitTest(absltest.TestCase):

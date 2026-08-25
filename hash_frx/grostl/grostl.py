@@ -21,10 +21,13 @@ over the eight bit planes rather than a 256-entry lookup, so no gather ever
 reaches the body (`_sbox` carries the circuit's provenance).
 
 Contract: `digest(msg)` takes uint8 `[B, L]` and returns uint8 `[B, 32]`
-digests (the trailing-256-bit truncation of Ω, spec section 3.3). Length `L`
-is static, so the padding is data-independent: a host tail built from the
-length alone (`_PAD`), concatenated on — which is what lets `msg`
-itself be traced. Requires no x64; everything is uint8.
+digests (the trailing-256-bit truncation of Ω, spec section 3.3). The live byte
+count reaches the marker as an OPERAND rather than through the message shape, so
+`digest` hashes out of a capacity buffer and compilation keys on that buffer's
+width instead of on each length. The padding is still data-independent — built
+from the length and never read off the message — which is what lets `msg` itself
+be traced; it is now selected in-graph (`_runtime_padded_blocks`) where it used
+to be a host constant. Requires no x64; everything is uint8.
 """
 
 from __future__ import annotations
@@ -369,13 +372,19 @@ def _compress(h: Array, m: Array, rc_p: Array, rc_q: Array) -> Array:
     return p ^ q ^ h
 
 
-def _block_count_field(msg_bytes: Array) -> Array:
+def _block_count_field(nblocks: Array) -> Array:
     """Grøstl v2.0.1 §3.1's 64-bit block count, big-endian: uint8 [8].
 
     The trailer this family strengthens with is the number of blocks the PADDED
     message occupies, not the bit length the other Merkle-Damgard rows write —
     `PadRule.tail` encodes the same value on the static path, and this is its
     counterpart for a traced length.
+
+    Takes the count rather than the byte length, because the caller has already
+    derived it to size the region: `sha256._length_field` takes a length because
+    a BIT length is not otherwise in hand, and copying that signature here would
+    have put a second `(len + 8) // 64 + 1` chain in every emitted body — in a
+    different dtype from the first, so not even one XLA would fold together.
 
     The high word is zero rather than derived. The count rides as an int32, so
     a message is under 2^31 bytes and its block count under 2^25, which no
@@ -384,8 +393,7 @@ def _block_count_field(msg_bytes: Array) -> Array:
     Stacking two words anyway is what makes the field eight bytes wide by
     construction rather than by an assumption about `unpack_be`'s shape.
     """
-    blocks = _PAD.nblocks(msg_bytes.astype(fnp.uint32))
-    return unpack_be(fnp.stack([fnp.uint32(0), blocks]))
+    return unpack_be(fnp.stack([fnp.uint32(0), nblocks.astype(fnp.uint32)]))
 
 
 def _runtime_padded_blocks(buf: Array, length: Array) -> Array:
@@ -412,8 +420,9 @@ def _runtime_padded_blocks(buf: Array, length: Array) -> Array:
     # Bytes at or past `length` are padding, so the message read is clamped into
     # range rather than guarded: every lane it could spoil is selected away.
     content = buf[:, fnp.clip(pos, 0, lmax - 1)]
-    active = _PAD.nblocks(length) * fnp.int32(_PAD.block_size)
-    return padded_region(_PAD, content, length, active, _block_count_field(length))
+    nblocks = _PAD.nblocks(length)
+    active = nblocks * fnp.int32(_PAD.block_size)
+    return padded_region(_PAD, content, length, active, _block_count_field(nblocks))
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
