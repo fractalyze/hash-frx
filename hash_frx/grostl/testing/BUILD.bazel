@@ -62,6 +62,7 @@ py_test(
         "//hash_frx:fusion",
         "//hash_frx/grostl",
         "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_recognized",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

@@ -171,10 +171,10 @@ def _composite(fn: Any, *args: Any) -> Any:
 
 class Sha512MarkerTest(absltest.TestCase):
     def test_no_leg_routes_a_sha512_marker_yet(self) -> None:
-        # The pre-emitter pin (the vision/grostl arrangement): both module
-        # flags say "no emitter", so every unpatched instance reads GENERIC on
-        # every backend. When an emitter lands these flip with the frx floor
-        # and this case flips to the keccak-style backend gate.
+        # The pre-emitter pin (the vision arrangement): both module flags
+        # say "no emitter", so every unpatched instance reads GENERIC on every
+        # backend. When an emitter lands these flip with the frx floor and this
+        # case flips to the keccak-style backend gate, the way grostl's did.
         self.assertFalse(sha512._DEDICATED_EMITTER_AVAILABLE)
         self.assertEqual(sha512._EMITTER_BACKENDS, ())
         self.assertIs(Sha512().fusion_path, FusionPath.GENERIC)

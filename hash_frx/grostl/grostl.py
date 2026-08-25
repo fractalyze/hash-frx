@@ -58,21 +58,24 @@ GROSTL256_MARKER_VERSION = 1
 
 GROSTL256_DIGEST_SIZE = 32
 
-# Whether the pinned Fractalyze XLA plugin ships a dedicated Grøstl emitter,
-# and on which backends. None exists yet — this is the pre-emitter half of the
-# keccak arrangement (`keccak.permutation._DEDICATED_EMITTER_AVAILABLE`
-# carries the family-wide rationale), the same posture `vision` holds: both
-# flags flip together with the `frx>=` floor in `pyproject.toml` when an
-# emitter lands, and `fusion_path_test`'s matrix law holds them to agree.
+# Whether the pinned Fractalyze XLA plugin ships a dedicated Grøstl emitter.
+# `keccak.permutation._DEDICATED_EMITTER_AVAILABLE` carries the family-wide
+# rationale: the flag flips together with the `frx>=` floor in `pyproject.toml`,
+# and `fusion_path_test`'s matrix law holds it and the backend tuple to agree.
 # The marker is emitted regardless — there is no per-block routing alternative
 # for a whole-hash digest — and unrecognized it inlines its decomposition:
-# right bytes, `GENERIC` fusion path.
-_DEDICATED_EMITTER_AVAILABLE = False
+# right bytes, `GENERIC` fusion path. That fallback is the expensive one for
+# this hash rather than a mild one, because what the decomposition costs is
+# fusion COUNT rather than op count: every boundary between the inlined rounds
+# materializes a `[B, 8, 8]` state.
+_DEDICATED_EMITTER_AVAILABLE = True
 
-# Which backends have that emitter — a different question from the pin, asked
-# alongside it. Empty until one is written; a backend gaining an arm joins
-# this tuple and nothing else here moves (the keccak/poseidon2 pattern).
-_EMITTER_BACKENDS: tuple[str, ...] = ()
+# Which backends carry that emitter — a different question from the pin, asked
+# alongside it. The round core sits in `xla/codegen/emitters/grostl.{h,cc}`
+# rather than inside the CPU emitter, so a GPU arm can be written without
+# re-deriving it; a backend gaining one joins this tuple and nothing else here
+# moves (the keccak/poseidon2 pattern).
+_EMITTER_BACKENDS: tuple[str, ...] = ("cpu",)
 
 
 def _routes_to_dedicated_emitter() -> bool:
@@ -380,11 +383,11 @@ def grostl256_bytes(msg: Array) -> Array:
     A name-routed digest marker, so it is exempt from the generic
     single-kernel rule (`sha256.sha256_merkle_damgard` states the exemption)
     and the body may chain blocks; the ten rounds of each permutation are
-    Python-unrolled regardless, the count being static and small. No plugin
-    ships a Grøstl recognizer yet (`_DEDICATED_EMITTER_AVAILABLE`), so today
-    the marker inlines its decomposition on every backend — identical bytes,
-    no dedicated kernel — and an emitter landing changes the lowering, never
-    the value.
+    Python-unrolled regardless, the count being static and small. Where the
+    pinned plugin carries the emitter (`_EMITTER_BACKENDS`) the marker lowers
+    to one kernel; elsewhere it inlines its decomposition — identical bytes,
+    no dedicated kernel, `GENERIC` fusion path — the emitter changing the
+    lowering, never the value.
 
     Operands are explicit in the recognizer's positional ABI order:
 
@@ -446,10 +449,10 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
 
 class Grostl256(DeviceRow):
     """`ByteHash` for device Grøstl-256 — `digest` runs the batch through the
-    `hash_frx.digest.grostl256` marker. No plugin recognizes that name yet, so
-    `fusion_path` reads `GENERIC` on every backend today: the marker inlines,
-    the bytes are the standard's, and an emitter landing flips the module
-    flags and nothing here moves.
+    `hash_frx.digest.grostl256` marker. `fusion_path` reads `DEDICATED` where
+    the pinned plugin carries the emitter and `GENERIC` where it does not; the
+    marker rides either way and the bytes are the standard's, so a backend
+    gaining an arm moves the module flags and nothing here.
 
     For batched hashing where the messages already live on the device. The
     strictly-sequential caller's alternative is the testonly

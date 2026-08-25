@@ -303,8 +303,9 @@ from "device and traceable, marker un-routed" (`GENERIC`) from "host loop over
 a native library" (`HOST`), because a consumer that cannot tell the middle
 state from the last will size a nonce window for the host path against a
 device hash. Keccak's byte rows are the standing `GENERIC` case on the CPU leg
-(the Keccak arms are GPU-only); BLAKE3's rows were `GENERIC` everywhere until
-the emitter shipped and now read `DEDICATED` on cpu and gpu, with Metal keeping
+(the Keccak arms are GPU-only) and Grøstl-256 is that case inverted, its
+emitter being CPU-only; BLAKE3's rows were `GENERIC` everywhere until the
+emitter shipped and now read `DEDICATED` on cpu and gpu, with Metal keeping
 `GENERIC` alive. The gap is a property of the pin and the backend, not of the
 design — so the seam names it as a value, and the return type of `digest`
 (`Array` against `np.ndarray`) remains the authority `is_traceable` answers
