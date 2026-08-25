@@ -245,6 +245,89 @@ def padded_batch(msg: Array, tail: Array) -> Array:
     )
 
 
+def capacity(msg: ArrayLike, block_size: int) -> int:
+    """The buffer width a runtime-length marker hashes `msg` out of.
+
+    A message still on the HOST is widened to the next power of two, floored at
+    one block. The width is what compilation is keyed on, so the policy trades
+    how many distinct buffers a caller compiles against how many padding bytes
+    it ships per call: doubling bounds the second under 2x the message while
+    keeping the first logarithmic — fifteen widths span a byte to a megabyte.
+    Widening it costs a numpy copy, and collapsing a compile per length into one
+    per width is the whole point of the form.
+
+    A message ALREADY on the device keeps its own extent, so nothing is padded
+    and only the marker changes. Widening it would be a dispatched device op
+    rather than a host copy — measured at 4.2x the digest it precedes (B = 256,
+    L = 65) — and it buys that caller nothing: a batch materialized at one length
+    is not re-entering the trace cache with new ones, and under `jit` the
+    enclosing trace compiles once whatever the width. So the capacity is
+    whatever buffer the caller already has.
+
+    Coarser widths are not ruled out by the kernel: measured on the pinned wheel,
+    a 32-byte message costs the same (~6 us at B = 256) in a 32-byte buffer as in
+    a 2048-byte one, because the emitter loops on the length operand — where
+    hashing the whole buffer instead would have cost 20x. What bounds the width
+    is the bytes crossing to the device, which a short message does not amortize.
+
+    `block_size` is the family's, passed rather than read off a `PadRule`: the
+    rule lives in `extension/pad.py`, which the extensions import from this seam
+    and not the other way round. It is also the only thing about the family the
+    policy needs — the floor is one block, and nothing else here is per-family.
+    """
+    length = message_length(msg)
+    if isinstance(msg, Array):
+        # `LMAX >= 1` is the recognizer's floor: the emitter's clamped
+        # message-side index needs somewhere in bounds to land, even at `len` 0.
+        return max(length, 1)
+    return block_size if length <= block_size else 1 << (length - 1).bit_length()
+
+
+def at_capacity(msg: ArrayLike, width: int) -> Array:
+    """`msg` widened to the uint8 `[B, width]` buffer the marker hashes out of:
+    `[B, L]` -> `[B, width]`, for `width >= L`.
+
+    The width is a CAPACITY rather than a length: the marker takes the live byte
+    count as an operand, so its emitter stops there and the bytes past `L` are
+    never read. They are left zero on that ground — nothing derives from them.
+
+    **Where the widening runs decides whether the compile saving is real.**
+    Widening on device is itself an eager op keyed on `L`, so it would trade one
+    compile per length for a cheaper compile per length rather than removing one:
+    measured at ~22 ms against the ~90 ms whole-digest compile it exists to
+    collapse. Host data is therefore widened with numpy, before it reaches a
+    device at all — a copy and one transfer, no compile. An input already on
+    device cannot take that path without a round trip, and a tracer cannot take
+    it at all, so both are widened in-graph: right in either case, and free for
+    the tracer, whose enclosing trace compiles once regardless.
+
+    Sits next to `capacity` for the reason `padded_batch` sits next to
+    `device_message`: the policy and the widening are only ever called together,
+    and this is the last thing that happens to a message before a runtime-length
+    marker reads it. `sha256` held both while it was the only family with such a
+    marker; Grostl-256 is the second, and four more tail-operand rows follow.
+    """
+    length = message_length(msg)
+    if width < length:
+        raise ValueError(f"width ({width}) must be >= the message length ({length})")
+    if isinstance(msg, Array):
+        # An already-uint8 array is handed back untouched rather than run through
+        # a converting call: those return the identical object and still pay a
+        # full eager dispatch — `device_message` 5.1 us, `.astype` 2.6 us, against
+        # the ~3 us digest they precede. This is the only branch a device-resident
+        # caller takes, so that dispatch would be pure overhead on every call.
+        u8 = msg if msg.dtype == fnp.uint8 else msg.astype(fnp.uint8)
+        if width == length:
+            return u8
+        return padded_batch(u8, fnp.zeros(width - length, dtype=fnp.uint8))
+    host = np.asarray(msg, dtype=np.uint8)
+    if width == length:
+        return fnp.asarray(host)
+    buf = np.zeros((host.shape[0], width), dtype=np.uint8)
+    buf[:, :length] = host
+    return fnp.asarray(buf)
+
+
 def host_digest(
     hash_one: Callable[[ReadableBuffer], bytes], digest_size: int, msg: ArrayLike
 ) -> np.ndarray:

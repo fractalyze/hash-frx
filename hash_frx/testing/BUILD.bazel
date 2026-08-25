@@ -279,6 +279,21 @@ py_test(
     ],
 )
 
+# The ladder's device branch needs a materialized array, which is why these
+# cases are here and not in `byte_hash_test` — that target is deliberately pure
+# numpy and takes no GPU plugin wheels.
+py_test(
+    name = "capacity_test",
+    size = "small",
+    srcs = ["capacity_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 py_test(
     name = "linear_test",
     size = "small",

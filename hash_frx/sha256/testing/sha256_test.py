@@ -19,7 +19,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx.byte_hash import ByteHash
+from hash_frx.byte_hash import ByteHash, capacity
 from hash_frx.fusion import FusionPath
 from hash_frx.sha256 import sha256
 from hash_frx.testing.marker_recognized import (
@@ -411,37 +411,9 @@ class Sha256BytesTest(parameterized.TestCase):
 
 
 class Sha256CapacityTest(parameterized.TestCase):
-    """`_capacity` — the buffer width `digest` hashes out of, which is what its
-    compilation is keyed on."""
-
-    @parameterized.parameters(
-        (0, 64), (1, 64), (64, 64), (65, 128), (100, 128), (128, 128), (1000, 1024)
-    )
-    def test_a_host_message_widens_to_the_next_power_of_two(
-        self, length: int, want: int
-    ) -> None:
-        # Floored at one block, so short messages share a width rather than each
-        # compiling their own.
-        self.assertEqual(sha256._capacity(np.zeros((1, length), np.uint8)), want)
-
-    @parameterized.parameters(1, 65, 100, 1000)
-    def test_a_device_message_keeps_its_own_extent(self, length: int) -> None:
-        # Widening one would be a dispatched device op that buys the caller
-        # nothing, so only the marker changes for a batch already materialized.
-        msg = fnp.asarray(np.zeros((1, length), dtype=np.uint8))
-        self.assertEqual(sha256._capacity(msg), length)
-
-    def test_an_empty_device_message_still_clears_the_recognizer_floor(self) -> None:
-        # `LMAX >= 1`: the emitter's clamped message-side index needs a byte to
-        # land on even when no byte is live.
-        msg = fnp.asarray(np.zeros((1, 0), dtype=np.uint8))
-        self.assertEqual(sha256._capacity(msg), 1)
-
-    def test_a_capacity_below_the_message_is_rejected(self) -> None:
-        # A capacity is a buffer the message must fit in; a smaller one would
-        # truncate it into a digest of the wrong bytes rather than fail.
-        with self.assertRaisesRegex(ValueError, "must be >= the message length"):
-            sha256._at_capacity(np.zeros((1, 64), dtype=np.uint8), 32)
+    """SHA-256's use of the seam's capacity ladder. The ladder's own cases —
+    the width policy and the widening — live in `capacity_test`; what is
+    SHA-256's is which block size it hands over and what that buys `digest`."""
 
     def test_digest_compiles_once_per_width_not_once_per_length(self) -> None:
         # The property the form exists for. Counting compilations directly is
@@ -449,7 +421,8 @@ class Sha256CapacityTest(parameterized.TestCase):
         # (capacity, length-aval) pairs `digest` hands to the marker.
         lengths = range(20, 400, 7)
         widths = {
-            sha256._capacity(np.zeros((1, length), np.uint8)) for length in lengths
+            capacity(np.zeros((1, length), np.uint8), sha256._PAD.block_size)
+            for length in lengths
         }
         self.assertLess(len(widths), len(list(lengths)) // 8)
         self.assertEqual(widths, {64, 128, 256, 512})
