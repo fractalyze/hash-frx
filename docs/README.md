@@ -177,6 +177,17 @@ Inlining it is therefore *slower* than the blocks marker `digest` falls back to,
 where an unrecognized name normally costs only the fusion. Being early costs
 performance rather than nothing, so the switch tracks the pin and the backend.
 
+The pin and the backend are not the only things that decide routing. A third
+axis is the **parameterization's own values**: an emitter's marker carries its
+constants as attributes, and a recognizer declines a set whose numbers it cannot
+serve — so a permutation can be on a pin and a backend that both ship the
+emitter, and still belong on the generic marker. `SparsePoseidon` asks it of the
+four matrices it bit-casts into int64 attributes, and classic `Poseidon` of the
+MDS its emitter applies as a small-integer add-chain; both answer it in a
+`_select_fused_region_name` alongside the pin question. Ask it wherever an
+emitter's attributes carry values rather than only shape, because getting it
+wrong is a failed compile rather than a lost kernel.
+
 A permutation advertises which path it is on through `fusion_path`
 (`hash_frx.fusion.FusionPath`: `DEDICATED` / `GENERIC` / `HOST`, the last only
 on the byte seam), and hands out its operand layout through

@@ -63,10 +63,38 @@ _DEDICATED_EMITTER_AVAILABLE = True
 _EMITTER_BACKENDS = ("cpu", "gpu")
 
 
+# The dedicated emitter applies the MDS with a small-integer **add-chain** —
+# `c * x` is `x` added `c` times — so it takes entries in `[0, 64)` and no
+# all-zero row, and its recognizer rejects the config outright otherwise
+# (`ParsePoseidonConfig`, Fractalyze XLA `xla/codegen/emitters/poseidon.cc`,
+# whose own comment calls the add-chain a stopgap for the toy config). Flipped
+# together with the `frx>=` floor in `pyproject.toml`, like
+# `_DEDICATED_EMITTER_AVAILABLE` above: it is that emitter's envelope, so it
+# moves when the pin does — a copy that drifts either brings the failed compile
+# back or loses fusion silently.
+#
+# It also stands in for the int64 representability the marker attribute needs
+# (fractalyze/hash-frx#117): the bound is far below `2**63 - 1`, so an entry too
+# wide for the attribute fails this check first and never reaches
+# `_poseidon_marker_attrs`' int64 cast. That holds only while the bound stays
+# under `_I64_MAX`, which is why the relationship is written down rather than
+# left to arithmetic.
+_DEDICATED_EMITTER_MDS_BOUND = 64
+_I64_MAX = 2**63 - 1
+
+
 def _routes_to_dedicated_emitter() -> bool:
     """Whether the pin *and* the backend both carry this emitter
     (`fusion.routing`, which carries the rationale)."""
     return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
+
+
+def _fits_add_chain(mds_rows: tuple[tuple[int, ...], ...]) -> bool:
+    """Whether the dedicated emitter's add-chain can apply this MDS."""
+    in_range = all(
+        0 <= entry < _DEDICATED_EMITTER_MDS_BOUND for row in mds_rows for entry in row
+    )
+    return in_range and all(any(row) for row in mds_rows)
 
 
 class Poseidon:
@@ -86,12 +114,7 @@ class Poseidon:
         # stage into the jaxpr if done inside the traced `permute` body. The
         # marker carries these ints (flattened row-major) as the `mds` attribute.
         self._mds_rows = params.mds_rows
-        # Classic Poseidon has no free-form fallback of its own — the only
-        # routing question is whether the pin and the backend carry the
-        # dedicated `hash_frx.perm.poseidon` emitter.
-        name = (
-            POSEIDON_MARKER if _routes_to_dedicated_emitter() else FUSED_REGION_MARKER
-        )
+        name = self._select_fused_region_name(self._mds_rows)
         # A generic region carries no version: the recognizer reads only the name
         # there, so a version would claim a contract the marker does not have.
         self.fused_region_marker = (
@@ -99,6 +122,22 @@ class Poseidon:
             POSEIDON_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
         )
         self.fusion_path = FusionPath.from_marker(name)
+
+    def _select_fused_region_name(self, mds_rows: tuple[tuple[int, ...], ...]) -> str:
+        """Route to the dedicated `PoseidonFusion` when the pin *and* the
+        backend ship it AND this MDS is one its add-chain can apply, else the
+        generic marker — which the `ZorchFusedRegionRewriter` still fuses to one
+        kernel, so an unroutable set gets the right bytes off the dedicated path
+        rather than a compile that fails on the recognizer's
+        "unparsable composite.attributes".
+
+        The MDS is what decides it, and a real one rarely fits: every entry has
+        to sit in `[0, 64)` (see `_DEDICATED_EMITTER_MDS_BOUND`), which no matrix
+        over a 31-bit field does.
+        """
+        if not _routes_to_dedicated_emitter():
+            return FUSED_REGION_MARKER
+        return POSEIDON_MARKER if _fits_add_chain(mds_rows) else FUSED_REGION_MARKER
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
