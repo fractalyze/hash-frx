@@ -119,3 +119,27 @@ class Hmac(Row):
         so an `Hmac` riding as pytree aux stays re-trace-safe (the hash rows
         already compare by value)."""
         return (self.byte_hash, self.block_size)
+
+
+# No seam-conformance pin, which is a decision rather than the omission it was.
+#
+# `docs/reference/conventions.md` asks every implementation module to end with
+# `_: type[<Seam>] = <Class>`. This one implements no seam, so `type[ByteHash]`
+# is the annotation that is definitely wrong: it would assert the class is a
+# byte hash, and the point of `Hmac` is that it KEYS one.
+#
+# Nor is a `Mac` Protocol declared to pin against. Both in-tree consumers take
+# `mac: Hmac` by concrete type and mean it — HKDF is defined over HMAC
+# specifically (RFC 5869 §2, and `hkdf.py` says "rather than a pluggable PRF"),
+# and `pbkdf2.py` reaches past `mac` into `block_key`, `block_size` and
+# `byte_hash` to precompute its ipad/opad midstates, so a protocol serving both
+# would be this class spelled twice. One implementation, no consumer that wants
+# the abstraction: that is a seam invented to satisfy a pin. `xof.py` declines a
+# Protocol for the neighbouring reason.
+#
+# What holds the class instead: `testing/rows.py` registers it, so the equality
+# contract it does implement — its jit cache key — is asserted by
+# `row_conformance_test`; `adapter/testing/hmac_test.py` pins the construction
+# against the published RFC 4231 vectors, whose rows cover both arms of FIPS
+# 198-1's key processing; and if someone adds the wrong pin here, that suite's
+# `PinTest` fails on it.

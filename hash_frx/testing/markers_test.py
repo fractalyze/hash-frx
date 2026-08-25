@@ -37,7 +37,7 @@ from hash_frx.ripemd160 import ripemd160
 from hash_frx.sha256 import sha256
 from hash_frx.sha512 import sha512
 from hash_frx.sm3 import sm3
-from hash_frx.testing.package_sweep import shipped_sources
+from hash_frx.testing.package_sweep import declared_anywhere
 from hash_frx.vision import vision
 
 # Every emitting module's (name, version) pair, read from the constants the
@@ -91,9 +91,7 @@ class MarkerRegistryTest(absltest.TestCase):
         # sees what this test's BUILD deps place in runfiles, so a new hash
         # package joins those deps when it joins the registry.
         pattern = re.compile(r'^[A-Z0-9_]*MARKER = "(hash_frx\.[a-z0-9_.]+)"', re.M)
-        found: set[str] = set()
-        for _name, path in shipped_sources():
-            found |= set(pattern.findall(path.read_text()))
+        found = declared_anywhere(pattern)
         self.assertEqual(found, {m.name for m in MARKERS})
 
     def test_every_row_is_spelled_in_its_kinds_namespace(self) -> None:

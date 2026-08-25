@@ -180,6 +180,23 @@ A module shipping two implementations of one seam names each pin, since mypy
 rejects re-annotating `_` — [`sha256/sha256.py`](../../hash_frx/sha256/sha256.py) pins `Sha256`
 and `HostSha256` separately.
 
+**On the `ByteHash` side the rule is checked.** `row_conformance_test`'s
+`PinTest` holds the pins and the byte-hash registry to each other in both
+directions, and per module. That guard exists because the hole was real: `Mgf1`
+was the one implementation module with no pin, and it shipped a `fusion_path`
+the `ByteHash` Protocol does not accept.
+
+**The `Permutation` pins are still hand-kept**, so a seventh permutation can
+ship unpinned and nothing fails. That is an unwritten sweep rather than an
+impossible one — the same shape would work, matching shipped classes that define
+`permute` against the pins — and it is worth writing when someone next touches
+that seam.
+
+**A module that implements no seam carries a comment where its pin would be**,
+stating what does hold the class instead — a convention, not something enforced.
+The one case that exists is
+[`adapter/hmac.py`](../../hash_frx/adapter/hmac.py), which argues it there.
+
 The pin bites only because the full-annotation rule is enforced
 (`disallow_untyped_defs` in [`pyproject.toml`](../../pyproject.toml)): against an
 unannotated implementation it compiles and proves nothing.
