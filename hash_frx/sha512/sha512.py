@@ -542,18 +542,6 @@ def sha512_stream_absorb(state: Sha512State, data: Array) -> Sha512State:
     return _STREAM.absorb(state, data)
 
 
-def _length_field(msg_bytes: Array) -> Array:
-    """FIPS 180-4 §5.1.2's 128-bit message length, in bits, big-endian: uint8 [16].
-
-    The high 64 bits are zero outright — an int32 byte count cannot reach
-    2^64 bits. The low 64 ride as a uint32 half pair, because the bit length
-    outgrows a uint32: a count near 2^31 has a bit length near 2^34.
-    """
-    count = msg_bytes.astype(fnp.uint32)
-    low = unpack_be(fnp.stack([count >> fnp.uint32(29), count << fnp.uint32(3)]))
-    return fnp.concatenate([fnp.zeros(8, dtype=fnp.uint8), low])
-
-
 # The incremental schedule, with this family's pieces plugged in. `chain` is
 # the same marked region `digest` runs, so the streaming path and the batch
 # digest go through ONE marker rather than two.
@@ -563,7 +551,6 @@ _STREAM = MdStream(
     deserialize=deserialize_digest,
     chain=sha512_merkle_damgard,
     make_state=Sha512State,
-    length_field=_length_field,
 )
 
 

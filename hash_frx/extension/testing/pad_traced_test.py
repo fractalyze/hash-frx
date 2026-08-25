@@ -23,12 +23,17 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
+from hash_frx.extension.md import trailer_field
 from hash_frx.extension.pad import PadRule, SpongePad, Trailer
 
 SHA256 = PadRule(64, Trailer.BIT_LENGTH)
 SHA512 = PadRule(128, Trailer.BIT_LENGTH, reserve=16)
 BLAKE2S = PadRule(64, Trailer.NONE)
 BLAKE2B = PadRule(128, Trailer.NONE)
+# The two axes no SHA-2 rule exercises, both shipped: Grøstl counts blocks
+# where the rest count bits, and RIPEMD-160 writes the field little-endian.
+GROSTL = PadRule(64, Trailer.BLOCK_COUNT)
+RIPEMD160 = PadRule(64, Trailer.BIT_LENGTH, big_endian=False)
 ASCON_PAD = SpongePad(rate=8, head=0x01, final_bit=False)
 SHA3_256_PAD = SpongePad(rate=136, head=0x06)
 
@@ -69,6 +74,85 @@ class NblocksSizesALoopBoundTest(absltest.TestCase):
             return BLAKE2S.nblocks(ln) * fnp.int32(BLAKE2S.block_size)
 
         self.assertEqual(int(frx.jit(active)(np.int32(65))), 128)
+
+
+class TrailerFieldMirrorsTheHostTailTest(parameterized.TestCase):
+    """`md.trailer_field` against `PadRule.tail`, rule by rule.
+
+    The static tail is the oracle rather than a second transcription of the
+    standards: it is already held to all seven families by `pad_test`, and what
+    is under test here is only that the TRACED path reaches the same bytes. So a
+    disagreement is the traced branch being wrong, never both being wrong
+    together — which is what a hand-written per-family field could not claim,
+    since it had nothing to be compared against.
+
+    Every axis is covered because every axis is a shipped rule: bit length
+    against block count, big-endian against little, and eight reserved bytes
+    against sixteen. `Trailer.NONE` is the one rule with no field at all.
+    """
+
+    @parameterized.named_parameters(
+        ("sha256", SHA256),
+        ("sha512", SHA512),
+        ("grostl", GROSTL),
+        ("ripemd160", RIPEMD160),
+    )
+    def test_matches_the_last_reserved_bytes_of_the_host_tail(
+        self, pad: PadRule
+    ) -> None:
+        # Lengths across the block boundary in both directions, including the
+        # empty message and one that pushes `nblocks` up a block.
+        for length in (0, 1, 55, 56, 63, 64, 65, 119, 120, 1000):
+            with self.subTest(length=length):
+                want = pad.tail(length)[-pad.reserve :]
+                got = np.asarray(trailer_field(pad, fnp.int32(length)))
+                np.testing.assert_array_equal(got, want)
+
+    @parameterized.named_parameters(
+        ("sha256", SHA256),
+        ("sha512", SHA512),
+        ("grostl", GROSTL),
+        ("ripemd160", RIPEMD160),
+    )
+    def test_survives_a_tracer(self, pad: PadRule) -> None:
+        # The reason this file exists: the field is built for a length only the
+        # runtime knows, so a branch that reaches for `bool()` on the count has
+        # no traced path at all and the host cases above cannot tell.
+        traced = frx.jit(lambda n: trailer_field(pad, n))(fnp.int32(120))
+        np.testing.assert_array_equal(np.asarray(traced), pad.tail(120)[-pad.reserve :])
+
+    @parameterized.named_parameters(("sha256", SHA256), ("sha512", SHA512))
+    def test_a_bit_length_matches_the_standard_encoding(self, pad: PadRule) -> None:
+        # Reaches where the host tail cannot be the oracle: `PadRule.tail`
+        # memoizes per length, so a gigabyte case would materialize a gigabyte
+        # of padding to check eight bytes. Against the arithmetic instead.
+        for count in (0, 1, 55, 1 << 20, (1 << 29) - 1, 1 << 29, (1 << 31) - 1):
+            with self.subTest(count=count):
+                got = np.asarray(trailer_field(pad, fnp.int32(count))).tobytes()
+                self.assertEqual(got, (count * 8).to_bytes(pad.reserve, "big"))
+
+    @parameterized.named_parameters(("sha256", SHA256), ("sha512", SHA512))
+    def test_a_bit_length_survives_the_int32_counter_wrap(self, pad: PadRule) -> None:
+        """Past 2 GiB the int32 byte counter is negative, and the encoding is
+        still right: it reinterprets the wrapped value as a uint32, which is the
+        same bit pattern. That is why the ceiling is 4 GiB, not 2.
+
+        Held once on the rule rather than once per family: SHA-256 and SHA-512
+        each carried this case against their own copy of the field, and the two
+        copies were the thing that could drift."""
+        for count in (1 << 31, (1 << 31) + 12345, (1 << 32) - 1):
+            with self.subTest(count=count):
+                wrapped = np.asarray(count & 0xFFFFFFFF, np.uint32).astype(np.int32)
+                got = np.asarray(trailer_field(pad, fnp.asarray(wrapped))).tobytes()
+                self.assertEqual(got, (count * 8).to_bytes(pad.reserve, "big"))
+
+    @parameterized.named_parameters(("blake2s", BLAKE2S), ("blake2b", BLAKE2B))
+    def test_haifa_has_no_field_to_build(self, pad: PadRule) -> None:
+        # Rejected rather than answered with zeros: HAIFA's length reaches the
+        # compression as a counter, so a caller asking for a field here has
+        # confused the two arrangements.
+        with self.assertRaisesRegex(ValueError, "Trailer.NONE has no length field"):
+            trailer_field(pad, fnp.int32(64))
 
 
 if __name__ == "__main__":

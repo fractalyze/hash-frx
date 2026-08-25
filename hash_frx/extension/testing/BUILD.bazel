@@ -29,6 +29,7 @@ py_test(
     size = "small",
     srcs = ["pad_traced_test.py"],
     deps = [
+        "//hash_frx/extension:md",
         "//hash_frx/extension:pad",
         requirement("absl_py"),
         requirement("frx"),

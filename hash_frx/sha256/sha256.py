@@ -39,8 +39,9 @@ from hash_frx.byte_hash import (
     host_digest,
     message_length,
     padded_batch,
+    require_capacity_buffer,
 )
-from hash_frx.extension.md import MdStream, chain, padded_region
+from hash_frx.extension.md import MdStream, chain, padded_message_region
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
@@ -218,23 +219,6 @@ _Kd = fnp.asarray(_K)
 _PAD = PadRule(64, Trailer.BIT_LENGTH)
 
 
-def _length_field(msg_bytes: Array) -> Array:
-    """FIPS 180-4 §5.1.1's 64-bit message length, in bits, big-endian: uint8 [8].
-
-    Carried as a uint32 half pair off the int32 byte count, because the bit
-    length outgrows a uint32: a count near 2^31 has a bit length near 2^34, so
-    `count * 8` in one word wraps at 512 MiB and encodes a shorter message —
-    the same digest for two different lengths. The high half is the count's top
-    3 bits, the low half the count shifted into place.
-
-    The other half of `_PAD` for the paths that cannot read a host-built tail:
-    the streaming finalize, which pads at a runtime `pending_len`, and the
-    runtime-length region below.
-    """
-    count = msg_bytes.astype(fnp.uint32)
-    return unpack_be(fnp.stack([count >> fnp.uint32(29), count << fnp.uint32(3)]))
-
-
 def _compress(state: Array, w16: Array, k: Array) -> Array:
     """One block: state [B, 8] (a..h) + message words w16 [B, 16] -> state [B, 8].
     `k` is the [64] round-constant table (an explicit operand so the marked
@@ -305,27 +289,12 @@ def _runtime_padded_words(msg: Array, length: Array) -> Array:
     """The first `length` bytes of each row, padded and packed: uint8 [B, LMAX]
     plus an int32 scalar -> uint32 [B, NB, 16].
 
-    What `_padded_words` builds from a static length, built from a traced one:
-    the tail cannot be a host constant when the length is runtime data, so the
-    region comes from `md.padded_region` — the same select `MdStream.finalize`
-    pads with, widened from its two blocks to every block the buffer could need.
-
-    This is the marked region's decomposition rather than a path `digest` takes:
-    where the marker is recognized the emitter replaces it, and where it is not
-    `digest` stays on the blocks marker. So it is written for
-    correctness, and the speculation it costs — every block the buffer could need
-    is packed, and the ones past the message selected away — is exactly the
-    data-dependent-length cost the emitter exists to avoid paying.
+    What `_padded_words` builds from a static length, built from a traced one.
+    The region is `md.padded_message_region`'s — shared with every other
+    runtime-length family — and what stays here is this family's own big-endian
+    packing of it, which is the half that is genuinely SHA-256's.
     """
-    lmax = msg.shape[-1]
-    pos = fnp.arange(_PAD.nblocks(lmax) * _PAD.block_size, dtype=fnp.int32)
-    # Bytes at or past `length` are padding, so the message read is clamped into
-    # range rather than guarded: every lane it could spoil is selected away.
-    content = msg[:, fnp.clip(pos, 0, lmax - 1)]
-    active = _PAD.nblocks(length) * fnp.int32(_PAD.block_size)
-    return block_to_words(
-        padded_region(_PAD, content, length, active, _length_field(length))
-    )
+    return block_to_words(padded_message_region(_PAD, msg, length))
 
 
 def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array:
@@ -423,16 +392,7 @@ def sha256_bytes(buf: Array, length: Array) -> Array:
     [h0, k, msg, len]: a captured constant would prepend and land at operand 0,
     which is not where the recognizer reads it.
     """
-    if buf.shape[-1] < 1:
-        # The recognizer's floor, restated where it can still be a clear error.
-        # It declines a zero-width buffer, which would leave the decomposition to
-        # run — and that one indexes the message through a clamp with no byte to
-        # clamp to. The empty message is `length = 0` in a buffer of at least one
-        # byte, never a buffer of none.
-        raise ValueError(
-            f"buf must be uint8 [B, LMAX >= 1], got width {buf.shape[-1]}: an "
-            "empty message is length 0 in a non-empty buffer"
-        )
+    require_capacity_buffer(buf)
 
     def decomposition(
         h0: Array, k: Array, msg: Array, ln: Array, **_attrs: object
@@ -551,7 +511,6 @@ _STREAM = MdStream(
     deserialize=deserialize_digest,
     chain=sha256_merkle_damgard,
     make_state=Sha256State,
-    length_field=_length_field,
 )
 
 

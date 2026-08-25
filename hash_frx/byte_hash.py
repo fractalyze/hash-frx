@@ -328,6 +328,29 @@ def at_capacity(msg: ArrayLike, width: int) -> Array:
     return fnp.asarray(buf)
 
 
+def require_capacity_buffer(buf: Array) -> None:
+    """Reject a zero-width capacity buffer, before a marker is emitted from it.
+
+    `LMAX >= 1` is a term of the runtime-length ABI rather than a detail of any
+    one emitter: a recognizer declines a zero-width buffer, which leaves the
+    decomposition to run — and that one gathers the message through a clamp with
+    nowhere in bounds to land. The empty message is `length = 0` in a buffer of
+    at least one byte, never a buffer of none.
+
+    Here rather than in `padded_message_region`, which is where the clamp
+    actually is: that function only runs when the marker is DECLINED, so a guard
+    inside it would pass silently on exactly the backends that route. The check
+    belongs where the buffer is handed to the marker, which is once per family
+    and identical every time — it was already written out twice, verbatim down
+    to the error string, before this existed.
+    """
+    if buf.shape[-1] < 1:
+        raise ValueError(
+            f"buf must be uint8 [B, LMAX >= 1], got width {buf.shape[-1]}: an "
+            "empty message is length 0 in a non-empty buffer"
+        )
+
+
 def host_digest(
     hash_one: Callable[[ReadableBuffer], bytes], digest_size: int, msg: ArrayLike
 ) -> np.ndarray:
