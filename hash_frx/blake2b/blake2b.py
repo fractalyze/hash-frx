@@ -90,8 +90,8 @@ BLAKE2B_MARKER_VERSION = 1
 # Whether the pinned Fractalyze XLA plugin ships a dedicated BLAKE2b emitter,
 # and on which backends. None exists yet — the pre-emitter half of the keccak
 # arrangement (`keccak.permutation._DEDICATED_EMITTER_AVAILABLE` carries the
-# family-wide rationale), the same posture `vision`, `grostl`, `ascon` and
-# `ripemd160` hold: both flags flip together with the `frx>=` floor in
+# family-wide rationale), the posture the blake2s sibling and the other
+# emitterless digests hold: both flags flip together with the `frx>=` floor in
 # `pyproject.toml` when an emitter lands, and `fusion_path_test`'s matrix law
 # holds them to agree. The marker is emitted regardless — there is no
 # per-block routing alternative for a whole-hash digest — and unrecognized it

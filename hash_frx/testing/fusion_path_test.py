@@ -61,11 +61,11 @@ from hash_frx.vision.params import vision_mark32_params
 from hash_frx.vision.vision import Vision
 
 # The matrix rows: which backends the pinned plugin's dedicated emitters cover,
-# per family. Keccak's arms are GPU-only; the rest run wherever the
-# ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
-# Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
-# Vision, Grøstl, Ascon, RIPEMD-160, SM3 and the BLAKE2 pair, for which no
-# plugin ships an emitter at all.
+# per family. Keccak's arms are GPU-only and Grøstl's is CPU-only; the rest run
+# wherever the ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except
+# sparse Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`,
+# and Vision, Ascon, RIPEMD-160, SM3 and the BLAKE2 pair, for which no plugin
+# ships an emitter at all.
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
@@ -75,7 +75,7 @@ _MATRIX = {
     sha256_mod: ("cpu", "gpu"),
     sha512_mod: (),
     blake3_rows: ("cpu", "gpu"),
-    grostl_mod: (),
+    grostl_mod: ("cpu",),
     ascon_mod: (),
     ripemd160_mod: (),
     blake2b_mod: (),
@@ -113,10 +113,10 @@ class DeviceCellTest(absltest.TestCase):
             (Sha256(), _MATRIX[sha256_mod]),
             (Sha3_256(), _MATRIX[keccak_perm_mod]),
             (Blake3(), _MATRIX[blake3_rows]),
+            (Grostl256(), _MATRIX[grostl_mod]),
             # The empty rows: GENERIC on every leg, by the same derivation as
             # an absent backend — never HOST.
             (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
-            (Grostl256(), _MATRIX[grostl_mod]),
             (Sha512(), _MATRIX[sha512_mod]),
             # The truncated variants read the sha512 module's switch — one
             # family row serves all three (the h0-as-operand design).
@@ -142,12 +142,13 @@ class DeviceCellTest(absltest.TestCase):
         # HOST is the exact conflation the three-state enum retires. Keccak is
         # absent from the loop: its family gate test
         # (`keccak.testing.permutation_test.EmitterGateTest`) already owns the
-        # backend-veto mock; these three families have no gate test of their
-        # own.
+        # backend-veto mock, in combinations this loop cannot express; these
+        # four families have no gate test of their own.
         for module, build in (
             (poseidon2_mod, koalabear16_perm),
             (sha256_mod, Sha256),
             (blake3_rows, Blake3),
+            (grostl_mod, Grostl256),
         ):
             with self.subTest(module=module.__name__):
                 with mock.patch.object(module, "_EMITTER_BACKENDS", ("nonesuch",)):

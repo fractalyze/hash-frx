@@ -46,12 +46,31 @@ classifiers = [
 dependencies = [
     "numpy",
     "blake3",
-    # Floor = the first wheel where the runtime-length digest ABI is SAFE
-    # under the `hash_frx.digest.sha256_bytes` name it now travels as. Three
-    # things have to be in the wheel, and they landed separately: the CPU
-    # emitter (fractalyze/xla#575), acceptance of the runtime-length ABI under
-    # this name (xla#581), and the GPU emitter plus its compiler gate
-    # (xla#582, merged as PR #585).
+    # Floor = the first wheel carrying the dedicated Grøstl-256 CPU emitter
+    # (fractalyze/xla#591, merged as PR #593). Below it the marker is declined
+    # and the digest inlines its decomposition — right bytes, and a fusion
+    # count two orders of magnitude off the routed one, for the reason
+    # `grostl._DEDICATED_EMITTER_AVAILABLE` states.
+    #
+    # This floor differs from every one it subsumes in not being silent.
+    # `grostl.testing.grostl_test.Grostl256MarkerRecognizedTest` reads the
+    # COMPILED module on the cpu leg — the leg `grostl._EMITTER_BACKENDS`
+    # names — and fails below it. The floor still states the requirement; that
+    # test is what refuses to ship it unmet.
+    #
+    # Verified against the wheel rather than inferred from its version: the
+    # bump PR that produced it names the jax commit that triggered it
+    # (`jax@b964e764440e`), whose `third_party/xla/revision.bzl` pins
+    # `bbb788aecb…` — the xla commit PR #593 merged, closing #591. The version
+    # suffix cannot settle this on its own; a bump PR is opened carrying an
+    # older commit and updated in place.
+    #
+    # It subsumes the runtime-length SHA-256 digest ABI floor: the first wheel
+    # where that ABI is SAFE under the `hash_frx.digest.sha256_bytes` name it
+    # travels as. Three things had to be in the wheel, and they landed
+    # separately — the CPU emitter (fractalyze/xla#575), acceptance of the
+    # runtime-length ABI under this name (xla#581), and the GPU emitter plus
+    # its compiler gate (xla#582, merged as PR #585).
     #
     # All three are load-bearing for `digest` itself, which routes the length
     # ABI on every backend in `_BYTES_EMITTER_BACKENDS` — GPU included. On a
@@ -60,29 +79,18 @@ dependencies = [
     # speculates every block the buffer could hold, so it is slower than the
     # blocks form rather than merely un-fused. `sha256_bytes` has no routing
     # gate of its own, so a direct caller — this package's own test suite
-    # included — hits the same decline wherever it runs. A floor is the only
-    # thing that catches either, because nothing fails.
+    # included — hits the same decline wherever it runs. That floor was
+    # invisible in both directions, because nothing failed.
     #
-    # Verified against this wheel rather than inferred from its version: its
-    # bump PR names the jax commit that triggered it (`jax@17e27097c8d1`),
-    # whose `third_party/xla/revision.bzl` pins `26726b5004…` — the xla commit
-    # that PR #585 merged, closing #582. The version suffix cannot settle this
-    # on its own; the bump PR that produced this wheel was opened carrying an
-    # older one and updated in place. Safety is checked behaviorally too: two
-    # lengths through one compiled program, both digests right.
+    # Both of these buy back performance, where the ones below them bought
+    # back correctness.
     #
-    # Below this floor the marker inlines back to its decomposition. Right
-    # bytes, as ever — but the runtime-length decomposition speculates every
-    # block its buffer could need, so it is slower than the static-length path
-    # it replaced rather than merely un-fused: this floor buys back
-    # performance, where the ones it subsumes bought back correctness.
-    #
-    # This subsumes the raw-bytes digest marker
+    # They subsume, in turn, the raw-bytes digest marker
     # (`hash_frx.digest.sha256_bytes`, fractalyze/xla#561): the wheel before
     # its floor recognized that marker but lacked its kernel reuse-key arm, so
     # two different-length digests in ONE compiled program shared a kernel and
-    # the second returned wrong bytes on GPU (fractalyze/xla#562). It also
-    # subsumes the kind-namespaced marker spellings
+    # the second returned wrong bytes on GPU (fractalyze/xla#562), and with
+    # it the kind-namespaced marker spellings
     # (`hash_frx.perm.*` / `.compress.*` / `.digest.*`, fractalyze/xla#539),
     # the vmapped-sponge rank collapse (fractalyze/xla#549), the
     # Keccak-emitter SAFETY wheel (the wheel that first shipped the dedicated
@@ -97,7 +105,7 @@ dependencies = [
     # before any of this — sorts above the dev build named as the floor and
     # would otherwise satisfy it. Naming a later stable instead fails the other
     # way, since the nightly line resumes below it (`0.10.3.dev...` < `0.10.3`).
-    "frx>=0.10.2.dev20260823231429,!=0.10.2",
+    "frx>=0.10.2.dev20260824224837,!=0.10.2",
 ]
 
 [project.urls]
