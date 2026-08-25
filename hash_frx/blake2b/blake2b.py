@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""Unkeyed BLAKE2b over `(lo, hi)` uint32 half pairs, authored in frx —
+"""BLAKE2b over `(lo, hi)` uint32 half pairs, authored in frx —
 byte-identical to RFC 7693 (and any conforming implementation, e.g. Python's
 `hashlib.blake2b`). The host row `byte_hashes.HostBlake2b` shipped first;
 its docstring carries the family taxonomy (HAIFA: Merkle–Damgård plus a byte
@@ -50,10 +50,35 @@ hash asked for fewer bytes (the SHAKE/BLAKE3 rule; the param-free by-type
 equality of `Sha256`/`Ripemd160` does not apply). Requires no x64; all
 arithmetic is uint32.
 
-Keyed hashing, salting and the tree parameters are RFC 7693 / [BLAKE2]
-features this module does not yet carry — each is a value-surface addition
-riding the same marker (the key would prepend a block and flip `kk` in the
-parameter word), added when a consumer needs it rather than speculatively.
+**Keyed hashing, salting and personalization ride the SAME marker**, which is
+what the earlier deferral note predicted and this module now does. RFC 7693
+§3.3 defines a keyed hash as the unkeyed one over `key_block ‖ message` from an
+initial state whose parameter block carries `kk`, so both halves land outside
+`blake2b_bytes`: the key block is zero-padded to 128 bytes and concatenated
+onto `msg`, and `blake2_params` builds the rest of §2.8's block into `h0`. The
+operand ABI is untouched — a keyed digest is a longer message and a different
+`h0` value, which is exactly what an emitter already reads.
+
+That the key rides in `msg` rather than in a captured constant has a
+consequence worth stating: `blake2b_bytes`'s trace cache keys on avals, so two
+keys of the same length at the same message length share ONE trace, and only
+the message shape re-traces. The key is still secret material held in a plain
+`bytes` attribute on the row, and a caller who jits around `digest` puts it in
+that program's constant pool; nothing here erases it.
+
+The prepend is one concatenate OUTSIDE the marker, which the fusion contract
+admits for the same reason the digest-size truncation below it does: both are
+caller-side preparation of the marked region's operands, not work inside a
+marked body, and the digest is still exactly one marked region
+(`blake2b_test`'s composite count holds for the keyed path too). It costs
+`B * (bb + L)` bytes of movement against twelve rounds per block, and a caller
+who wants even that gone can prepend the key block itself and hash unkeyed
+from the matching `h0`.
+
+The tree parameters (fanout, depth, node offset, node depth, inner length) are
+still not carried. `blake2_params` writes them as sequential mode's constants
+and records the offsets a tree mode would need; the chaining itself has no
+consumer asking, and BLAKE3 is this package's tree hash.
 """
 
 from __future__ import annotations
@@ -67,6 +92,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.blake2_params import BLAKE2B_WORD_BYTES, param_block, param_words
 from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
@@ -178,25 +204,54 @@ _IV_PAIRS = _pairs_le(_IV64)
 
 
 @lru_cache(maxsize=None)
-def _initial_state(digest_size: int) -> np.ndarray:
-    """The initial state h for an unkeyed BLAKE2b-`digest_size` hash: the IV
-    with the parameter-block word XORed into h[0] (RFC 7693 §2.5/§3.3:
-    p[0] = 0x0101kknn — nn the hash size in bytes, kk = 0 unkeyed, bytes 2
-    and 3 set as 01), as HOST uint32 [16] in the module's little-endian pair
-    layout (`fnp.asarray`ed at use, for the reason `_IV_PAIRS` states).
-    Built on the host, where Python ints are exact (`word.split`), and
-    cached per size: there are at most 64 of them. This is where the digest
-    length enters the hash — which is why truncating a longer digest is the
-    WRONG bytes at every shorter length, and why the range check lives here
-    on the module path as well as on the row's constructor."""
+def _initial_state(
+    digest_size: int,
+    key_size: int = 0,
+    salt: bytes = b"",
+    person: bytes = b"",
+) -> np.ndarray:
+    """The initial state h for a BLAKE2b-`digest_size` hash: the §2.6 IV XORed
+    word-for-word with `blake2_params`' §2.8 parameter block (RFC 7693 §2.5),
+    as HOST uint32 [16] in the module's little-endian pair layout
+    (`fnp.asarray`ed at use, for the reason `_IV_PAIRS` states).
+
+    Built on the host, where Python ints are exact (`word.split`), and cached
+    on the whole parameter tuple — `bytes` are hashable, so salting and
+    personalizing widen the key without changing the mechanism. Unkeyed and
+    unsalted this is the `0x01010000 ^ digest_size` XOR into h[0] that the
+    module carried before, which `blake2_params_test` pins.
+
+    **This is where everything that is not the message enters the hash** —
+    the digest length, the key length, the salt and the personalization. Which
+    is why truncating a longer digest is the WRONG bytes at every shorter
+    length, why a salt cannot be applied after the fact, and why the range
+    checks live here on the module path as well as on each row's
+    constructor."""
     if not 1 <= digest_size <= MAX_DIGEST_SIZE:
         raise ValueError(
             f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
             f"{digest_size}"
         )
-    words = list(_IV64)
-    words[0] ^= 0x01010000 ^ digest_size
+    words = [
+        iv ^ p
+        for iv, p in zip(
+            _IV64,
+            param_words(BLAKE2B_WORD_BYTES, digest_size, key_size, salt, person),
+            strict=True,
+        )
+    ]
     return _pairs_le(words)
+
+
+def _key_block(key: bytes) -> np.ndarray:
+    """The key as RFC 7693 §3.3's first message block: zero-padded to a whole
+    128-byte block, whatever the key's length.
+
+    The padding is to the MESSAGE block, not to the parameter block's key
+    field — a 1-byte key and a 64-byte key both cost exactly one compression,
+    which is why `kk` has to reach the hash through `h0` rather than through
+    the block's length."""
+    return np.frombuffer(key.ljust(_BLOCK, b"\0"), dtype=np.uint8)
 
 
 # How this family pads, as the axes `extension/md.py` names.
@@ -407,24 +462,55 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
     )
 
 
-def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
-    """Unkeyed BLAKE2b of a batch of equal-length messages. msg: uint8 [B, L]
-    -> [B, digest_size] (default 64: BLAKE2b-512, the named full-length form).
+def digest(
+    msg: ArrayLike,
+    digest_size: int = MAX_DIGEST_SIZE,
+    key: bytes = b"",
+    salt: bytes = b"",
+    person: bytes = b"",
+) -> fnp.ndarray:
+    """BLAKE2b of a batch of equal-length messages. msg: uint8 [B, L] ->
+    [B, digest_size] (default 64: BLAKE2b-512, the named full-length form).
 
     Byte-identical to RFC 7693 per message; the whole digest is emitted as
     the one name-routed `hash_frx.digest.blake2b` marker (`blake2b_bytes`),
     and the digest-size truncation is the caller-side slice that docstring
     states.
 
+    **`key`, `salt` and `person` are the §2.8 parameter block**, and both of
+    the standard's mechanisms happen here rather than inside the marker: the
+    key is zero-padded to one 128-byte block and prepended to the message
+    (§3.3), and every parameter including `kk` is folded into `h0`. An empty
+    key prepends nothing and reproduces the unkeyed bytes exactly — the same
+    call, with `key_size = 0` in the block.
+
+    The order matters and is the standard's: the key block is counted by the
+    HAIFA counter as a full 128 bytes like any other interior block, which
+    falls out of prepending it before `_PAD.tail` sizes the padding. It also
+    means a keyed hash of the EMPTY message runs one compression over the key
+    block with the final-block flag set, where an unkeyed empty message runs
+    one over an all-zero block with `t = 0` — two different hashes of nothing,
+    which `blake2b_test` pins.
+
     **Traced or concrete.** `msg` may be a tracer, so a consumer can hash
     inside its own `@jit` or `vmap` without reaching past the `ByteHash`
     seam: the zero pad is built from the static length and never reads the
     message (`_PAD`), which is the same property `sha256.digest`
-    states.
+    states. The key block is a host constant of a static size, so prepending
+    it keeps that property.
     """
     msg = device_message(msg)
+    # The initial state FIRST, because building it is what validates every
+    # parameter (`_initial_state` -> `blake2_params.param_block`). Prepending
+    # the key block before that check would turn an over-long key into a
+    # broadcast shape error from `_key_block`'s no-op `ljust` rather than into
+    # the standard's own bound.
+    h0 = _initial_state(digest_size, len(key), salt, person)
+    if key:
+        block = fnp.broadcast_to(fnp.asarray(_key_block(key)), (msg.shape[0], _BLOCK))
+        msg = fnp.concatenate([block, msg], axis=-1)
     full = blake2b_bytes(
-        fnp.asarray(_initial_state(digest_size)),
+        fnp.asarray(h0),
         msg,
         fnp.asarray(_PAD.tail(msg.shape[-1])),
     )
@@ -444,28 +530,118 @@ class Blake2b(DeviceRow):
     `byte_hashes.HostBlake2b`, whose docstring is why the host row came
     first.
 
-    The output length rides the value surface: `Blake2b(digest_size=32)` is a
-    different hash from `Blake2b(64)` — RFC 7693 folds the length into the
-    initial state — so `__eq__`/`__hash__` cover it, the same rule the host
-    row states, and the param-free by-type equality of `Sha256`/`Ripemd160`
-    does not apply here."""
+    **`salt` and `person` are part of which hash this is**, not settings on
+    one. RFC 7693 folds both into the initial state through the §2.8 parameter
+    block, so `Blake2b(32, person=b"ZcashPH")` and `Blake2b(32)` disagree on
+    every input — which is exactly why Zcash reaches for personalization.
+    Both ride the value surface alongside the output length, and
+    `_parameters` covers all three.
 
-    def __init__(self, digest_size: int = MAX_DIGEST_SIZE) -> None:
+    `Blake2b(digest_size=32)` is likewise a different hash from `Blake2b(64)`
+    rather than one hash asked for fewer bytes, the same rule the host row
+    states; the param-free by-type equality of `Sha256`/`Ripemd160` does not
+    apply here. Keeping `digest_size` first and positional is what keeps this
+    row satisfying `adapter.Xof` — a caller holding the family hands it a
+    length and nothing else.
+
+    Keyed hashing is `Blake2bKeyed`, a separate row rather than a `key=`
+    keyword here, for the reason that row's docstring gives."""
+
+    def __init__(
+        self,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
         # Range-checked here rather than left to the first `digest`, where
         # the caller can no longer choose another length (the host row's
-        # rule; `_initial_state` re-checks on the module path).
+        # rule; `_initial_state` re-checks on the module path). The salt and
+        # personalization widths are checked by `blake2_params`, on the same
+        # both-doors principle.
         if not 1 <= digest_size <= MAX_DIGEST_SIZE:
             raise ValueError(
                 f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
                 f"{digest_size}"
             )
         self.digest_size = digest_size
+        self._salt = salt
+        self._person = person
+        param_block(BLAKE2B_WORD_BYTES, digest_size, 0, salt, person)  # width check
         super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._salt, self._person)
+
     def digest(self, msg: ArrayLike) -> Array:
-        return digest(msg, self.digest_size)  # the module-level marker digest
+        # the module-level marker digest
+        return digest(msg, self.digest_size, b"", self._salt, self._person)
+
+
+class Blake2bKeyed(DeviceRow):
+    """`ByteHash` for device keyed BLAKE2b — RFC 7693 §3.3's MAC mode, the
+    construction libsodium ships as `crypto_generichash` and the one a caller
+    porting from it reaches for by default.
+
+    A separate row rather than a `key=` keyword on `Blake2b`, following
+    `blake3.rows.Blake3Keyed`: a key is not a setting, and a constructor that
+    accepts one should say so at the call site. It also keeps `Blake2b`'s
+    signature `(digest_size)` alone, which is what lets that row satisfy
+    `adapter.Xof`; this row reaches the same type through a `partial`, exactly
+    as `Blake3Keyed` and `Mgf1` do.
+
+    Two consequences of the key living on the row, which a caller should
+    choose deliberately rather than discover:
+
+    - **It is secret material held in a plain attribute.** Nothing here erases
+      it, `__hash__` is over the bytes, and a caller who jits around `digest`
+      puts the key block into that program's constant pool.
+    - **A new key does NOT re-trace**, unlike `Blake3Keyed`. The key enters as
+      a prepended message block rather than as an initial-state constant, and
+      `blake2b_bytes` caches on operand avals — so two keys of the same length
+      at one message length share a trace. The key LENGTH does reach `h0`'s
+      value (§2.8's `kk`), but a value change is not a re-trace either. What
+      re-traces is the message shape, which a key shifts by one block.
+
+    `salt` and `person` compose with the key: all four parameters are one
+    §2.8 block, and `_parameters` covers all four."""
+
+    def __init__(
+        self,
+        key: bytes,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
+        if not 1 <= digest_size <= MAX_DIGEST_SIZE:
+            raise ValueError(
+                f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
+                f"{digest_size}"
+            )
+        # An empty key is rejected rather than silently demoted to `Blake2b`:
+        # the two are different hashes (`kk` reaches `h0`), so a caller who
+        # reached for this row and passed nothing has a bug, and returning the
+        # unkeyed digest would hide it.
+        if not key:
+            raise ValueError("key must be non-empty; the unkeyed hash is `Blake2b`")
+        self.digest_size = digest_size
+        self._key = key
+        self._salt = salt
+        self._person = person
+        # Validates the key, salt and personalization widths now rather than at
+        # the first `digest`, the constructor rule the sibling row states.
+        param_block(BLAKE2B_WORD_BYTES, digest_size, len(key), salt, person)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._key, self._salt, self._person)
+
+    def digest(self, msg: ArrayLike) -> Array:
+        return digest(msg, self.digest_size, self._key, self._salt, self._person)
 
 
 if TYPE_CHECKING:
-    # Seam-conformance pin (docs/reference/conventions.md).
+    # Seam-conformance pins (docs/reference/conventions.md).
     _bh_blake2b: type[ByteHash] = Blake2b
+    _bh_blake2b_keyed: type[ByteHash] = Blake2bKeyed

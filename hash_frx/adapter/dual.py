@@ -57,9 +57,14 @@ from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from frx import Array
 
-from hash_frx.blake2b.blake2b import Blake2b
-from hash_frx.blake2b.byte_hashes import HostBlake2b
-from hash_frx.blake2s.blake2s import Blake2s, HostBlake2s
+from hash_frx.blake2b.blake2b import Blake2b, Blake2bKeyed
+from hash_frx.blake2b.byte_hashes import HostBlake2b, HostBlake2bKeyed
+from hash_frx.blake2s.blake2s import (
+    Blake2s,
+    Blake2sKeyed,
+    HostBlake2s,
+    HostBlake2sKeyed,
+)
 from hash_frx.blake3.rows import (
     Blake3,
     Blake3DeriveKey,
@@ -100,7 +105,9 @@ _HOST_SIBLINGS: dict[type, type] = {
     Sha512_256: HostSha512_256,
     Sm3: HostSm3,
     Blake2s: HostBlake2s,
+    Blake2sKeyed: HostBlake2sKeyed,
     Blake2b: HostBlake2b,
+    Blake2bKeyed: HostBlake2bKeyed,
     Sha3_256: HostSha3_256,
     Sha3_512: HostSha3_512,
     Shake128: HostShake128,

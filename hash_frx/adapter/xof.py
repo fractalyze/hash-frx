@@ -24,9 +24,13 @@ free function could not fill this slot, which [`mgf1.py`](mgf1.py) records.
 
 **What does not.** A fixed-output row — `Sha256()` takes no length, so a
 consumer holding one holds the hash already and has nothing to hand a length to.
-Nor `Blake3Keyed`, whose constructor takes `(key, output_size)`: it reaches this
-type through a `partial` the same way `Mgf1` does, the key being a parameter of
-the hash rather than a length the caller chooses per call.
+Nor the keyed rows — `Blake3Keyed`, `Blake2bKeyed`, `Blake2sKeyed` — whose
+constructors take `(key, output_size)`: each reaches this type through a
+`partial` the same way `Mgf1` does, the key being a parameter of the hash
+rather than a length the caller chooses per call. That is the whole reason
+BLAKE2's keying ships as its own row instead of a `key=` keyword on `Blake2b`:
+a keyword with a default would leave the constructor satisfying this alias
+while the hash it builds depended on an argument the caller never passed.
 
 It is an alias rather than a `Protocol` because there is nothing to declare
 beyond the call itself. The rows that satisfy it are plain classes that predate

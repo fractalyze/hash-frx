@@ -355,6 +355,19 @@ py_library(
     deps = [requirement("frx")],
 )
 
+# The BLAKE2 parameter block. Host-only and substrate-free — the module under
+# test pulls no frx, so this target takes neither the frx requirement nor the
+# GPU plugin, which is itself part of what the suite asserts.
+py_test(
+    name = "blake2_params_test",
+    size = "small",
+    srcs = ["blake2_params_test.py"],
+    deps = [
+        "//hash_frx:blake2_params",
+        requirement("absl_py"),
+    ],
+)
+
 py_test(
     name = "word_test",
     size = "small",

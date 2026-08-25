@@ -65,6 +65,13 @@ _BLOCK_SIZES: dict[str, int] = {
     #
     # - the BLAKE3 rows — keyed natively (spec section 2.3), so HMAC is the
     #   wrong construction rather than an unsupported one (module docstring).
+    # - `Blake2bKeyed` / `Blake2sKeyed` — the same reason at a different
+    #   standard: RFC 7693 §3.3 keys BLAKE2 in the parameter block, so HMAC
+    #   over one would key it twice, the outer key under FIPS 198-1's schedule
+    #   and the inner under §2.8's. The UNKEYED `Blake2b` / `Blake2s` entries
+    #   above are the rows a block-keyed construction wants, and they answer
+    #   for their salted and personalized instances too — a salt moves `h0`,
+    #   not the block width.
     # - the Ascon rows — an 8-byte rate against a 32-byte digest, so FIPS
     #   198-1 §4's "replace a longer-than-block key by its digest" has nowhere
     #   to put the result. `Hmac.__init__` rejects `block_size < digest_size`
@@ -94,8 +101,9 @@ def block_size(byte_hash: ByteHash) -> int:
             "construction (HMAC, PBKDF2) needs FIPS 198-1's B, and guessing it "
             "produces well-formed bytes under the wrong key schedule rather "
             "than an error. If this hash genuinely has one, add it to "
-            "`hash_frx/adapter/block_size.py`; if it is a BLAKE3 row, its keyed "
-            "mode is native and HMAC is the wrong construction (see that "
-            "module's docstring)."
+            "`hash_frx/adapter/block_size.py`; if it is a natively keyed row "
+            "(a BLAKE3 row, `Blake2bKeyed`, `Blake2sKeyed`), its keyed "
+            "mode is native and HMAC is the wrong construction, which would "
+            "key the hash twice (see that module's docstring)."
         )
     return width

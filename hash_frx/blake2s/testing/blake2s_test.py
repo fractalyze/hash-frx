@@ -9,6 +9,15 @@ size — because the parameter block folds `digest_size` into the initial
 state, agreement at a shorter length proves the length reached the IV rather
 than a slice.
 
+**The keyed, salted and personalized forms** are held to the reference
+suite's own vectors (`blake2-kat.json`, the single 32-byte key
+`bytes(range(32))`) at the block boundaries and to `hashlib`'s
+`key=/salt=/person=` across the parameter surface — `blake2b_test` states why
+those are two different checks rather than one. The cases that are genuinely
+this family's, rather than the sibling's at half the width, are the ones the
+64-byte block moves: the key block is 64 bytes here, so a keyed digest shifts
+by one BLAKE2s block and the boundary lengths are its own.
+
 The lowering assertions are the usual half that values cannot see: the digest
 must emit exactly one composite carrying the registered name, version, and
 the four-operand ABI with no captured constants — including the zero-length
@@ -35,7 +44,13 @@ from absl.testing import absltest, parameterized
 from frx import Array
 
 from hash_frx.blake2s import blake2s
-from hash_frx.blake2s.blake2s import MAX_DIGEST_SIZE, Blake2s, HostBlake2s
+from hash_frx.blake2s.blake2s import (
+    MAX_DIGEST_SIZE,
+    Blake2s,
+    Blake2sKeyed,
+    HostBlake2s,
+    HostBlake2sKeyed,
+)
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.jit_cache import assert_single_trace
@@ -314,6 +329,193 @@ class SeamContractTest(absltest.TestCase):
     def test_a_1d_message_is_rejected_at_the_seam(self) -> None:
         with self.assertRaisesRegex(ValueError, "2-D uint8"):
             blake2s.digest(fnp.zeros(64, dtype=fnp.uint8))
+
+
+# `blake2-kat.json` from the BLAKE2 reference suite, keyed BLAKE2s-256: one
+# key throughout — `bytes(range(32))`, the 32-byte maximum — over messages
+# `bytes(range(256))[:L]`. Extracted from the published file programmatically
+# rather than typed, for the reason `blake2b_test` states.
+#
+# The lengths are this family's boundaries, not the sibling's: 0 (the key
+# block is the only block and carries the final flag), 1, 63/64/65 (the
+# one-block edge, the empty-tail case, the spill), 191 (a three-block message
+# under the key block).
+_KAT_KEY = bytes(range(32))
+_KAT_DATA = bytes(range(256))
+_KEYED_KAT = {
+    0: bytes.fromhex(
+        "48a8997da407876b3d79c0d92325ad3b89cbb754d86ab71aee047ad345fd2c49"
+    ),
+    1: bytes.fromhex(
+        "40d15fee7c328830166ac3f918650f807e7e01e177258cdc0a39b11f598066f1"
+    ),
+    63: bytes.fromhex(
+        "c65382513f07460da39833cb666c5ed82e61b9e998f4b0c4287cee56c3cc9bcd"
+    ),
+    64: bytes.fromhex(
+        "8975b0577fd35566d750b362b0897a26c399136df07bababbde6203ff2954ed4"
+    ),
+    65: bytes.fromhex(
+        "21fe0ceb0052be7fb0f004187cacd7de67fa6eb0938d927677f2398c132317a8"
+    ),
+    191: bytes.fromhex(
+        "91a25ec0ec0d9a567f89c4bfe1a65a0e432d07064b4190e27dfb81901fd3139b"
+    ),
+}
+
+# BLAKE2s' salt and personalization fields are 8 bytes each (§2.8) — half the
+# sibling's. Distinguishable values, the two fields being adjacent and equal
+# in width.
+_SALT = b"\xa1" * 8
+_PERSON = b"\xb2" * 8
+
+
+def _kat_message(length: int) -> np.ndarray:
+    return (
+        np.frombuffer(_KAT_DATA[:length], dtype=np.uint8).reshape(1, length)
+        if length
+        else np.zeros((1, 0), dtype=np.uint8)
+    )
+
+
+class Blake2sKeyedVectorTest(parameterized.TestCase):
+    @parameterized.parameters(*sorted(_KEYED_KAT))
+    def test_matches_the_reference_keyed_vectors(self, length: int) -> None:
+        got = np.asarray(blake2s.digest(_kat_message(length), 32, _KAT_KEY))[0]
+        self.assertEqual(bytes(got), _KEYED_KAT[length])
+
+    def test_a_keyed_empty_message_is_not_the_unkeyed_one(self) -> None:
+        # Unkeyed: one compression over an all-zero block at t = 0. Keyed: one
+        # over the 64-byte KEY block at t = 64 with the final flag set. An
+        # implementation that prepended the key without letting it reach the
+        # counter would agree with the wrong one.
+        empty = np.zeros((1, 0), dtype=np.uint8)
+        unkeyed = bytes(np.asarray(blake2s.digest(empty, 32))[0])
+        keyed = bytes(np.asarray(blake2s.digest(empty, 32, _KAT_KEY))[0])
+        self.assertNotEqual(keyed, unkeyed)
+        self.assertEqual(keyed, _KEYED_KAT[0])
+
+    def test_two_keys_padding_to_the_same_block_differ(self) -> None:
+        # Byte-identical key BLOCKS once zero-padded to 64 bytes; only `kk` in
+        # §2.8's block separates them.
+        rows = np.frombuffer(b"abc", dtype=np.uint8).reshape(1, 3)
+        one = bytes(np.asarray(blake2s.digest(rows, 32, b"\x01"))[0])
+        two = bytes(np.asarray(blake2s.digest(rows, 32, b"\x01\x00"))[0])
+        self.assertNotEqual(one, two)
+
+
+class Blake2sParameterBlockTest(parameterized.TestCase):
+    @parameterized.named_parameters(
+        ("salt_only", _SALT, b""),
+        ("person_only", b"", _PERSON),
+        ("both", _SALT, _PERSON),
+        ("short_salt", b"\xa1", b""),
+    )
+    def test_matches_hashlib(self, salt: bytes, person: bytes) -> None:
+        # (1, 3) is the "abc" vector's aval: the parameter sweep moves `h0`'s
+        # VALUE only and rides one trace.
+        rows = np.frombuffer(b"abc", dtype=np.uint8).reshape(1, 3)
+        got = np.asarray(blake2s.digest(rows, 32, b"", salt, person))[0]
+        self.assertEqual(
+            bytes(got),
+            hashlib.blake2s(b"abc", digest_size=32, salt=salt, person=person).digest(),
+        )
+
+    def test_salt_and_person_are_not_interchangeable(self) -> None:
+        rows = np.frombuffer(b"abc", dtype=np.uint8).reshape(1, 3)
+        forward = bytes(np.asarray(blake2s.digest(rows, 32, b"", _SALT, _PERSON))[0])
+        swapped = bytes(np.asarray(blake2s.digest(rows, 32, b"", _PERSON, _SALT))[0])
+        self.assertNotEqual(forward, swapped)
+
+    def test_the_key_composes_with_salt_and_person(self) -> None:
+        rows = np.frombuffer(b"abc", dtype=np.uint8).reshape(1, 3)
+        got = np.asarray(blake2s.digest(rows, 20, _KAT_KEY, _SALT, _PERSON))[0]
+        self.assertEqual(
+            bytes(got),
+            hashlib.blake2s(
+                b"abc", digest_size=20, key=_KAT_KEY, salt=_SALT, person=_PERSON
+            ).digest(),
+        )
+
+
+class Blake2sKeyedRowTest(absltest.TestCase):
+    def test_rows_satisfy_the_seam_and_agree(self) -> None:
+        rows = np.frombuffer(b"abc", dtype=np.uint8).reshape(1, 3)
+        device: ByteHash = Blake2sKeyed(_KAT_KEY, 32, salt=_SALT, person=_PERSON)
+        host: ByteHash = HostBlake2sKeyed(_KAT_KEY, 32, salt=_SALT, person=_PERSON)
+        self.assertIs(device.fusion_path, FusionPath.GENERIC)
+        self.assertIs(host.fusion_path, FusionPath.HOST)
+        np.testing.assert_array_equal(
+            np.asarray(device.digest(rows)), np.asarray(host.digest(rows))
+        )
+
+    def test_the_key_rides_the_value_surface(self) -> None:
+        a = Blake2sKeyed(b"one", 32)
+        self.assertEqual(a, Blake2sKeyed(b"one", 32))
+        self.assertEqual(hash(a), hash(Blake2sKeyed(b"one", 32)))
+        for other in (
+            Blake2sKeyed(b"two", 32),
+            Blake2sKeyed(b"one", 16),
+            Blake2sKeyed(b"one", 32, salt=_SALT),
+            Blake2sKeyed(b"one", 32, person=_PERSON),
+        ):
+            self.assertNotEqual(a, other)
+
+    def test_salt_and_person_ride_the_unkeyed_rows_value_surface_too(self) -> None:
+        self.assertNotEqual(Blake2s(32), Blake2s(32, person=b"WGmac1"))
+        self.assertNotEqual(HostBlake2s(32), HostBlake2s(32, person=b"WGmac1"))
+        self.assertEqual(Blake2s(32, salt=_SALT), Blake2s(32, salt=_SALT))
+
+    def test_an_empty_key_is_refused_rather_than_demoted(self) -> None:
+        for cls in (Blake2sKeyed, HostBlake2sKeyed):
+            with self.subTest(row=cls.__name__):
+                with self.assertRaisesRegex(ValueError, "key must be non-empty"):
+                    cls(b"", 32)
+
+    def test_the_module_path_rejects_an_over_long_key(self) -> None:
+        # The sibling's case at this width — `digest` must give RFC 7693's
+        # `kk` range rather than a broadcast shape error from the key block.
+        msg = np.zeros((1, 3), dtype=np.uint8)
+        with self.assertRaisesRegex(ValueError, r"key_size must be in 0\.\.32"):
+            blake2s.digest(msg, 32, b"x" * 33)
+
+    def test_widths_are_checked_in_the_constructor(self) -> None:
+        for cls in (Blake2sKeyed, HostBlake2sKeyed):
+            with self.subTest(row=cls.__name__):
+                with self.assertRaisesRegex(ValueError, "salt"):
+                    cls(b"k", 32, salt=b"x" * 9)
+                with self.assertRaisesRegex(ValueError, "person"):
+                    cls(b"k", 32, person=b"x" * 9)
+                with self.assertRaisesRegex(ValueError, "key_size"):
+                    cls(b"k" * 33, 32)
+
+
+class Blake2sKeyedMarkerTest(absltest.TestCase):
+    def test_the_operand_abi_is_unchanged_with_the_key_block_folded_in(
+        self,
+    ) -> None:
+        # One marker, four operands, the documented order — `msg` 64 bytes
+        # longer because the key block was prepended outside the marker.
+        msg = fnp.asarray(np.zeros((4, 63), dtype=np.uint8))
+        eqn = _composite(
+            functools.partial(blake2s.digest, digest_size=32, key=_KAT_KEY), msg
+        )
+        self.assertEqual(eqn.params["name"], blake2s.BLAKE2S_MARKER)
+        self.assertLen(eqn.invars, 4)
+        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        # 64 (key block) + 63 = 127, padding to two blocks with a 1-byte tail.
+        self.assertEqual(shapes, [(8,), (8,), (4, 127), (1,)])
+
+    def test_a_new_key_does_not_retrace(self) -> None:
+        # The sibling's property at this width: the key enters through the
+        # message operand, so the zone's aval-keyed cache is blind to its
+        # value and three distinct keys share one trace.
+        msgs = fnp.asarray(_message(65))
+        calls = [
+            functools.partial(Blake2sKeyed(bytes([i]) * 16, 32).digest, msgs)
+            for i in range(3)
+        ]
+        assert_single_trace(self, blake2s.blake2s_bytes, calls)
 
 
 if __name__ == "__main__":

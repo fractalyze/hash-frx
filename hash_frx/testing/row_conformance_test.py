@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Every shipped row, held to the seam's contract at once.
 
-`byte_hash.py` states the contract; thirty-four rows implement it. Each family
+`byte_hash.py` states the contract; thirty-nine rows implement it. Each family
 tested its own, so a rule could hold everywhere it was checked and still be
 missing from whichever row shipped last — which is what happened twice, when the
 seam sweeps behind #211 and #215 both had to be re-applied to SM3 and BLAKE2s

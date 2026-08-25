@@ -220,7 +220,9 @@ lives. HMAC ([`adapter/hmac.py`](../../hash_frx/adapter/hmac.py)) and HKDF over 
 ([`adapter/hkdf.py`](../../hash_frx/adapter/hkdf.py)) are constructions *over*
 `ByteHash` the way `Sponge`/`Compression` are over `Permutation`, and FIPS
 198-1's `B` is a parameter only a block-keyed construction can interpret —
-BLAKE3's keyed mode is native and has no `B` for HMAC to read. So
+BLAKE3's keyed mode is native and has no `B` for HMAC to read, and RFC 7693
+puts BLAKE2's key in the parameter block, so HMAC over a keyed BLAKE2 row would
+key the hash twice under two different schedules. So
 `Hmac(hash, block_size)` carries it, and the seam stays `digest` alone; the
 parallel is `DuplexSponge` owning its `+`-merge rather than narrowing it into
 `Permutation`.

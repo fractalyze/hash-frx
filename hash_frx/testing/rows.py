@@ -43,14 +43,18 @@ from hash_frx import (
     AsconHash256,
     AsconXof128,
     Blake2b,
+    Blake2bKeyed,
     Blake2s,
+    Blake2sKeyed,
     Blake3,
     Blake3DeriveKey,
     Blake3Keyed,
     Grostl256,
     Hmac,
     HostBlake2b,
+    HostBlake2bKeyed,
     HostBlake2s,
+    HostBlake2sKeyed,
     HostBlake3,
     HostBlake3DeriveKey,
     HostBlake3Keyed,
@@ -104,8 +108,36 @@ ALL_ROWS: tuple[RowCase, ...] = (
     RowCase("Grostl256", Grostl256),
     RowCase("AsconHash256", AsconHash256),
     RowCase("AsconXof128", lambda: AsconXof128(32), (lambda: AsconXof128(64),)),
-    RowCase("Blake2s", Blake2s, (lambda: Blake2s(20),)),
-    RowCase("Blake2b", Blake2b, (lambda: Blake2b(20),)),
+    RowCase(
+        "Blake2s", Blake2s, (lambda: Blake2s(20), lambda: Blake2s(32, person=b"p"))
+    ),
+    RowCase(
+        "Blake2b", Blake2b, (lambda: Blake2b(20), lambda: Blake2b(64, person=b"p"))
+    ),
+    # The keyed rows carry FOUR parameters, so each gets a variant per
+    # parameter: a row equal to another it should differ from is that other's
+    # jit cache key, and `person` is the half a size-only variant leaves
+    # unexercised — which is the trap the BLAKE3 keyed rows below record.
+    RowCase(
+        "Blake2sKeyed",
+        lambda: Blake2sKeyed(_KEY_A),
+        (
+            lambda: Blake2sKeyed(_KEY_B),
+            lambda: Blake2sKeyed(_KEY_A, 20),
+            lambda: Blake2sKeyed(_KEY_A, salt=b"s"),
+            lambda: Blake2sKeyed(_KEY_A, person=b"p"),
+        ),
+    ),
+    RowCase(
+        "Blake2bKeyed",
+        lambda: Blake2bKeyed(_KEY_A),
+        (
+            lambda: Blake2bKeyed(_KEY_B),
+            lambda: Blake2bKeyed(_KEY_A, 20),
+            lambda: Blake2bKeyed(_KEY_A, salt=b"s"),
+            lambda: Blake2bKeyed(_KEY_A, person=b"p"),
+        ),
+    ),
     RowCase("Sha3_256", Sha3_256),
     RowCase("Sha3_512", Sha3_512),
     RowCase("Keccak256", Keccak256),
@@ -127,8 +159,36 @@ ALL_ROWS: tuple[RowCase, ...] = (
     RowCase("HostSha384", HostSha384),
     RowCase("HostSha512_256", HostSha512_256),
     RowCase("HostSm3", HostSm3),
-    RowCase("HostBlake2s", HostBlake2s, (lambda: HostBlake2s(20),)),
-    RowCase("HostBlake2b", HostBlake2b, (lambda: HostBlake2b(20),)),
+    RowCase(
+        "HostBlake2s",
+        HostBlake2s,
+        (lambda: HostBlake2s(20), lambda: HostBlake2s(32, person=b"p")),
+    ),
+    RowCase(
+        "HostBlake2b",
+        HostBlake2b,
+        (lambda: HostBlake2b(20), lambda: HostBlake2b(64, person=b"p")),
+    ),
+    RowCase(
+        "HostBlake2sKeyed",
+        lambda: HostBlake2sKeyed(_KEY_A),
+        (
+            lambda: HostBlake2sKeyed(_KEY_B),
+            lambda: HostBlake2sKeyed(_KEY_A, 20),
+            lambda: HostBlake2sKeyed(_KEY_A, salt=b"s"),
+            lambda: HostBlake2sKeyed(_KEY_A, person=b"p"),
+        ),
+    ),
+    RowCase(
+        "HostBlake2bKeyed",
+        lambda: HostBlake2bKeyed(_KEY_A),
+        (
+            lambda: HostBlake2bKeyed(_KEY_B),
+            lambda: HostBlake2bKeyed(_KEY_A, 20),
+            lambda: HostBlake2bKeyed(_KEY_A, salt=b"s"),
+            lambda: HostBlake2bKeyed(_KEY_A, person=b"p"),
+        ),
+    ),
     RowCase("HostSha3_256", HostSha3_256),
     RowCase("HostSha3_512", HostSha3_512),
     RowCase("HostShake128", lambda: HostShake128(32), (lambda: HostShake128(64),)),
