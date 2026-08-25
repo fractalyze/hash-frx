@@ -72,9 +72,9 @@ ASCON_P_MARKER_VERSION = 1
 # Whether the pinned Fractalyze XLA plugin ships a dedicated Ascon-p emitter,
 # and on which backends. None exists yet — the pre-emitter posture the other
 # emitterless families hold, and the one `ascon.ascon_hash256_bytes` holds for
-# the digest marker: both flags flip together with the `frx>=` floor in `pyproject.toml`
-# when an emitter lands, and `fusion_path_test`'s matrix law holds them to
-# agree. Until then `permute` carries the generic region marker.
+# the digest marker: both flags flip together with the `frx>=` floor in
+# `pyproject.toml` when an emitter lands, and `fusion_path_test`'s matrix law
+# holds them to agree. Until then `permute` carries the generic region marker.
 _DEDICATED_EMITTER_AVAILABLE = False
 
 # Which backends have that emitter — a different question from the pin, asked
