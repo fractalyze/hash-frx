@@ -139,16 +139,16 @@ class DeviceCellTest(absltest.TestCase):
     def test_an_absent_backend_reads_generic_not_host(self) -> None:
         # The Metal-shaped cell: a device hash on a backend without the arm is
         # still a device hash — traceable, un-fused — and collapsing it into
-        # HOST is the exact conflation the three-state enum retires. Keccak and
-        # Grøstl are absent from the loop: each family's own gate test
-        # (`keccak.testing.permutation_test.EmitterGateTest`,
-        # `grostl.testing.grostl_test.Grostl256MarkerTest`) already owns the
-        # backend-veto mock; these three families have no gate test of their
-        # own.
+        # HOST is the exact conflation the three-state enum retires. Keccak is
+        # absent from the loop: its family gate test
+        # (`keccak.testing.permutation_test.EmitterGateTest`) already owns the
+        # backend-veto mock, in combinations this loop cannot express; these
+        # four families have no gate test of their own.
         for module, build in (
             (poseidon2_mod, koalabear16_perm),
             (sha256_mod, Sha256),
             (blake3_rows, Blake3),
+            (grostl_mod, Grostl256),
         ):
             with self.subTest(module=module.__name__):
                 with mock.patch.object(module, "_EMITTER_BACKENDS", ("nonesuch",)):

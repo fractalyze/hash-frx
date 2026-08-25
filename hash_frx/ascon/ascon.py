@@ -83,12 +83,12 @@ ASCON_XOF128_MARKER_VERSION = 1
 # Whether the pinned Fractalyze XLA plugin ships a dedicated Ascon emitter,
 # and on which backends. None exists yet — this is the pre-emitter half of the
 # keccak arrangement (`keccak.permutation._DEDICATED_EMITTER_AVAILABLE`
-# carries the family-wide rationale), the same posture `vision` and `grostl`
-# hold: both flags flip together with the `frx>=` floor in `pyproject.toml`
-# when an emitter lands, and `fusion_path_test`'s matrix law holds them to
-# agree. The marker is emitted regardless — there is no per-block routing
-# alternative for a whole-hash digest — and unrecognized it inlines its
-# decomposition: right bytes, `GENERIC` fusion path.
+# carries the family-wide rationale), the posture the other emitterless
+# digests hold: both flags flip together with the `frx>=` floor in
+# `pyproject.toml` when an emitter lands, and `fusion_path_test`'s matrix
+# law holds them to agree. The marker is emitted regardless — there is no
+# per-block routing alternative for a whole-hash digest — and unrecognized
+# it inlines its decomposition: right bytes, `GENERIC` fusion path.
 _DEDICATED_EMITTER_AVAILABLE = False
 
 # Which backends have that emitter — a different question from the pin, asked

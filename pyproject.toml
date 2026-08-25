@@ -47,13 +47,10 @@ dependencies = [
     "numpy",
     "blake3",
     # Floor = the first wheel carrying the dedicated Grøstl-256 CPU emitter
-    # (fractalyze/xla#591, merged as PR #593). `hash_frx.digest.grostl256` is
-    # emitted on every backend whether or not the wheel knows the name, so
-    # below this floor it is declined and the digest inlines its
-    # decomposition. Right bytes, as ever — and what that costs is fusion
-    # COUNT rather than op count: every boundary between the inlined rounds
-    # materializes the `[B, 8, 8]` state, which is why the declined form is
-    # two orders of magnitude off the routed one rather than merely un-fused.
+    # (fractalyze/xla#591, merged as PR #593). Below it the marker is declined
+    # and the digest inlines its decomposition — right bytes, and a fusion
+    # count two orders of magnitude off the routed one, for the reason
+    # `grostl._DEDICATED_EMITTER_AVAILABLE` states.
     #
     # This floor differs from every one it subsumes in not being silent.
     # `grostl.testing.grostl_test.Grostl256MarkerRecognizedTest` reads the

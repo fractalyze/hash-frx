@@ -12,16 +12,15 @@ every digest identically on both jit legs.
 The lowering assertions are the usual half that values cannot see: the digest
 must emit exactly one composite carrying the registered name, version, and
 the five-operand ABI with no captured constants. Recognition is a separate
-case read off the COMPILED module, because emission proves only that this repo
-wrote the string; the emitter being CPU-only, that case reads the shipped
-routing condition rather than restating it and skips where the arm is absent.
+case read off the COMPILED module (`Grostl256MarkerRecognizedTest` states
+why), which reads the shipped routing condition and skips where the CPU-only
+arm is absent.
 """
 
 from __future__ import annotations
 
 import functools
 from typing import Any
-from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -113,17 +112,8 @@ class Grostl256MarkerTest(absltest.TestCase):
         self.assertTrue(grostl._DEDICATED_EMITTER_AVAILABLE)
         self.assertEqual(grostl._EMITTER_BACKENDS, ("cpu",))
         self.assertIs(
-            Grostl256().fusion_path,
-            FusionPath.DEDICATED if _HAS_GROSTL_EMITTER else FusionPath.GENERIC,
+            Grostl256().fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER)
         )
-
-    def test_a_backend_without_the_arm_reads_generic(self) -> None:
-        # The half no value test can reach: with the pin on and the backend
-        # absent, the digest still puts its marker on the wire and still
-        # computes the right bytes — the rewriter declines it and the composite
-        # inlines. Only the fusion path names the difference.
-        with mock.patch.object(grostl, "_EMITTER_BACKENDS", ("nonesuch",)):
-            self.assertIs(Grostl256().fusion_path, FusionPath.GENERIC)
 
     def test_digest_emits_one_composite_with_the_digest_name(self) -> None:
         # The contract's unit: an absent or split marker still computes the
@@ -165,9 +155,13 @@ class Grostl256MarkerRecognizedTest(absltest.TestCase):
             self.skipTest(f"no Grøstl emitter on {frx.default_backend()}")
 
     def test_the_digest_compiles_to_a_grostl256_custom_fusion(self) -> None:
-        # (4, 65) rides an aval the traced cases already compiled.
+        # (1, 65) is the aval `Grostl256TracedTest` already drives through
+        # `frx.jit(grostl.digest)`, so the two share one compile. The batch
+        # dimension does not bear on recognition, and the shape reached
+        # through `Grostl256().digest` would not share: a bound method is a
+        # different function object, so it keys a fresh compile.
         assert_marker_recognized(
-            self, "grostl256", grostl.digest, fnp.asarray(_message(65, seed=3))
+            self, "grostl256", grostl.digest, fnp.asarray(_message(65, seed=3)[:1])
         )
 
 
@@ -228,10 +222,7 @@ class Grostl256ByteHashTest(absltest.TestCase):
         # plumbing check costs no fresh compile of the digest body.
         msg = np.zeros((1, 1), dtype=np.uint8)
         device, host = Grostl256(), HostGrostl256()
-        self.assertIs(
-            device.fusion_path,
-            FusionPath.DEDICATED if _HAS_GROSTL_EMITTER else FusionPath.GENERIC,
-        )
+        self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER))
         self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
