@@ -145,7 +145,7 @@ py_library(
     deps = [requirement("frx")],
 )
 
-# Padding-free overwrite sponge — the Merkle leaf hasher over a Permutation.
+# Overwrite sponge over a Permutation — the Merkle leaf hasher.
 py_library(
     name = "sponge",
     srcs = ["sponge.py"],

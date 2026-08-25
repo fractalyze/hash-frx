@@ -35,11 +35,11 @@ from hash_frx.duplex_sponge import DuplexSponge
 from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
-from hash_frx.sponge import Sponge, SpongeParams, SpongeType
+from hash_frx.sponge import Sponge, SpongeChaining, SpongeParams
 
 _WIDTH = 8
 _RATE = 5
-_OUT = 3  # rate + out == width, so MERKLE_DAMGARD is legal too
+_OUT = 3  # rate + out == width, so DIGEST_IN_CAPACITY is legal too
 _K = 0x9E3779B9
 _ROT = 7
 
@@ -103,7 +103,7 @@ class NonFieldPermutationTest(absltest.TestCase):
         self.assertEqual(got.dtype, fnp.uint32)
         np.testing.assert_array_equal(np.asarray(got), want)
 
-    def test_padding_free_sponge_carries_word_lanes(self) -> None:
+    def test_implicit_capacity_sponge_carries_word_lanes(self) -> None:
         # One exact rate block: overwrite the rate lanes, permute, squeeze `out`.
         s = Sponge(_WordPerm(), SpongeParams(rate=_RATE, out=_OUT))
         inp = np.arange(_RATE, dtype=np.uint32)
@@ -116,11 +116,11 @@ class NonFieldPermutationTest(absltest.TestCase):
         self.assertEqual(got.dtype, fnp.uint32)
         np.testing.assert_array_equal(np.asarray(got), want)
 
-    def test_merkle_damgard_sponge_carries_word_lanes(self) -> None:
+    def test_digest_in_capacity_sponge_carries_word_lanes(self) -> None:
         # Two blocks, so the construction's zero-fill and capacity carry both run.
         s = Sponge(_WordPerm(), SpongeParams(rate=_RATE, out=_OUT))
         inp = np.arange(2 * _RATE, dtype=np.uint32)
-        got = s.hash(fnp.asarray(inp), sponge_type=SpongeType.MERKLE_DAMGARD)
+        got = s.hash(fnp.asarray(inp), chaining=SpongeChaining.DIGEST_IN_CAPACITY)
 
         state = np.zeros(_WIDTH, dtype=np.uint32)
         for blk in range(2):

@@ -60,7 +60,7 @@ a primitive, since padding is host arithmetic on the message.
 | How a message becomes whole blocks — `PadRule` for the Merkle–Damgård families, `SpongePad` for the sponges | [`extension/pad.py`](../hash_frx/extension/pad.py) |
 | The sponge schedules themselves — the byte one over static counts, the field one over a runtime count, and why they are two | [`extension/sponge.py`](../hash_frx/extension/sponge.py) |
 | The tree schedule over a compression function — the unit ceiling, the intra-chunk chain, and why bottom-up pairing is the spec's own tree | [`extension/tree.py`](../hash_frx/extension/tree.py) |
-| One-shot sponge hash over a `Permutation` — padding-free or Merkle–Damgård, selected per call | [`sponge.py`](../hash_frx/sponge.py)                 |
+| One-shot sponge hash over a `Permutation` — either chaining rule, selected per call | [`sponge.py`](../hash_frx/sponge.py)                 |
 | Interleaved absorb/squeeze with add-mode absorb over a `Permutation`, for a classic Fiat-Shamir prover | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
 | n-to-1 truncated-permutation compression over a `Permutation`, for a hash tree | [`compression.py`](../hash_frx/compression.py)       |
 

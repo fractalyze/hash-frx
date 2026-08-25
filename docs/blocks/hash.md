@@ -458,13 +458,26 @@ and `DEDICATED`/`GENERIC` is a boolean — the shape `FusionPath` exists to
 replace. That collapse is correct bookkeeping *if* host rows genuinely go; it
 is not itself the reason they stay.
 
-## Names say the construction, not the shape
+## Names say the construction they implement
 
-An identifier names the construction it implements —
-`sha256_merkle_damgard`, `SpongeType.MERKLE_DAMGARD` — and shape words like
-"chain" stay in prose. A chain is what a Merkle–Damgård fold looks like, not what
-it is, and a name that describes the picture stops matching the moment a second
-construction has the same picture.
+An identifier names the construction it implements — `sha256_merkle_damgard` —
+and shape words like "chain" stay in prose. A chain is what a Merkle–Damgård
+fold looks like, not what it is, and a name that describes the picture stops
+matching the moment a second construction has the same picture.
+
+The rule cuts the other way too: a name may not claim a construction it does not
+implement, however well the picture fits. `SpongeChaining.DIGEST_IN_CAPACITY` was
+spelled `SpongeType.MERKLE_DAMGARD`, and what it selects is a discipline *inside*
+the sponge — whether the prior digest is written into capacity — not the
+Merkle–Damgård domain extension. The borrowed name read as though a sponge could
+be Merkle–Damgård, and it was cited on the epic
+([#1](https://github.com/fractalyze/hash-frx/issues/1)) as this rule's own
+precedent while being its clearest violation.
+
+A corrected name over a frozen value is the normal end state, not an
+inconsistency to tidy away: that member's *value* is a marker attribute, so it
+renames on the wire's schedule rather than the code's
+([`markers.py`](../../hash_frx/markers.py)).
 
 `zorch` carries its own copy of this layer alongside its dependency on this one,
 and one symbol differs across the two: `sha256_merkle_damgard` here is
