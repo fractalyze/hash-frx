@@ -1,0 +1,30 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+py_test(
+    name = "sha256_test",
+    size = "medium",
+    srcs = ["sha256_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx/sha256",
+        "//hash_frx/testing:marker_recognized",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "sha256_stream_test",
+    size = "medium",
+    srcs = ["sha256_stream_test.py"],
+    deps = [
+        "//hash_frx/sha256",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

@@ -26,7 +26,7 @@ moment. The root spelling buys insulation, not import time.
 ## Under bzlmod, the dep is the whole package
 
 A consumer that pins hash-frx with `git_override` deps
-`@hash_frx//hash_frx`, never a narrow label like `@hash_frx//hash_frx:sha256`.
+`@hash_frx//hash_frx`, never a narrow label like `@hash_frx//hash_frx/sha256`.
 
 The import form and the dep are one decision rather than two.
 `hash_frx/__init__.py` ships only in the `//hash_frx:hash_frx` target — the

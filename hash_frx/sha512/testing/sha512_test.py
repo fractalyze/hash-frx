@@ -22,11 +22,11 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx import sha512
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
-from hash_frx.sha256 import Sha256
-from hash_frx.sha512 import (
+from hash_frx.sha256.sha256 import Sha256
+from hash_frx.sha512 import sha512
+from hash_frx.sha512.sha512 import (
     HostSha384,
     HostSha512,
     HostSha512_256,

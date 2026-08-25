@@ -33,9 +33,9 @@ from absl.testing import absltest, parameterized
 from hash_frx.adapter import pbkdf2 as pbkdf2_mod
 from hash_frx.adapter.hmac import Hmac
 from hash_frx.adapter.pbkdf2 import pbkdf2
-from hash_frx.blake2s import Blake2s
-from hash_frx.sha256 import HostSha256, Sha256
-from hash_frx.sha512 import Sha512
+from hash_frx.blake2s.blake2s import Blake2s
+from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha512.sha512 import Sha512
 
 _SHA256 = Hmac(Sha256(), 64)
 _SHA512 = Hmac(Sha512(), 128)

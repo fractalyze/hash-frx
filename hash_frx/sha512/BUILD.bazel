@@ -1,0 +1,24 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Byte-oriented SHA-512 (FIPS 180-4): SHA-256's 64-bit sibling over uint32 half
+# pairs — the `digest` batch hash behind the `hash_frx.digest.sha512` marker
+# plus the `Sha512` / `HostSha512` ByteHash pair. A standalone hash, not a
+# Permutation; no zk_dtypes / x64 dependency.
+py_library(
+    name = "sha512",
+    srcs = [
+        "__init__.py",
+        "sha512.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx:word64",
+        "//hash_frx/extension:md",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)

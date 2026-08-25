@@ -177,7 +177,7 @@ if TYPE_CHECKING:
 ```
 
 A module shipping two implementations of one seam names each pin, since mypy
-rejects re-annotating `_` — [`sha256.py`](../../hash_frx/sha256.py) pins `Sha256`
+rejects re-annotating `_` — [`sha256/sha256.py`](../../hash_frx/sha256/sha256.py) pins `Sha256`
 and `HostSha256` separately.
 
 The pin bites only because the full-annotation rule is enforced

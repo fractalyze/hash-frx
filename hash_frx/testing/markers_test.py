@@ -14,10 +14,11 @@ import re
 
 from absl.testing import absltest
 
-from hash_frx import blake2s, ripemd160, sha256, sha512, sm3, sponge
+from hash_frx import sponge
 from hash_frx.ascon import ascon
 from hash_frx.ascon import permutation as ascon_permutation
 from hash_frx.blake2b import blake2b
+from hash_frx.blake2s import blake2s
 from hash_frx.blake3 import rows as blake3_rows
 from hash_frx.blake3 import streaming as blake3_streaming
 from hash_frx.grostl import grostl
@@ -32,6 +33,10 @@ from hash_frx.markers import (
 )
 from hash_frx.poseidon import poseidon, sparse
 from hash_frx.poseidon2 import poseidon2
+from hash_frx.ripemd160 import ripemd160
+from hash_frx.sha256 import sha256
+from hash_frx.sha512 import sha512
+from hash_frx.sm3 import sm3
 from hash_frx.testing.package_sweep import shipped_sources
 from hash_frx.vision import vision
 

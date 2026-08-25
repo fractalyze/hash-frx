@@ -22,16 +22,12 @@ import frx
 from absl.testing import absltest
 from zk_dtypes import binary_field_t5
 
-from hash_frx import blake2s as blake2s_mod
-from hash_frx import ripemd160 as ripemd160_mod
-from hash_frx import sha256 as sha256_mod
-from hash_frx import sha512 as sha512_mod
-from hash_frx import sm3 as sm3_mod
 from hash_frx.ascon import ascon as ascon_mod
 from hash_frx.ascon.ascon import AsconHash256, AsconXof128
 from hash_frx.blake2b import blake2b as blake2b_mod
 from hash_frx.blake2b.blake2b import Blake2b
-from hash_frx.blake2s import Blake2s
+from hash_frx.blake2s import blake2s as blake2s_mod
+from hash_frx.blake2s.blake2s import Blake2s
 from hash_frx.blake3 import rows as blake3_rows
 from hash_frx.blake3.rows import Blake3
 from hash_frx.compression import Compression, CompressionParams
@@ -46,14 +42,18 @@ from hash_frx.poseidon import poseidon as poseidon_mod
 from hash_frx.poseidon import sparse as sparse_mod
 from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
-from hash_frx.ripemd160 import Ripemd160
-from hash_frx.sha256 import Sha256
-from hash_frx.sha512 import (
+from hash_frx.ripemd160 import ripemd160 as ripemd160_mod
+from hash_frx.ripemd160.ripemd160 import Ripemd160
+from hash_frx.sha256 import sha256 as sha256_mod
+from hash_frx.sha256.sha256 import Sha256
+from hash_frx.sha512 import sha512 as sha512_mod
+from hash_frx.sha512.sha512 import (
     Sha384,
     Sha512,
     Sha512_256,
 )
-from hash_frx.sm3 import Sm3
+from hash_frx.sm3 import sm3 as sm3_mod
+from hash_frx.sm3.sm3 import Sm3
 from hash_frx.sponge import Sponge, SpongeParams
 from hash_frx.testing.rows import HOST_ROWS
 from hash_frx.vision import vision as vision_mod

@@ -34,8 +34,8 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx import blake2s
-from hash_frx.blake2s import MAX_DIGEST_SIZE, Blake2s, HostBlake2s
+from hash_frx.blake2s import blake2s
+from hash_frx.blake2s.blake2s import MAX_DIGEST_SIZE, Blake2s, HostBlake2s
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.jit_cache import assert_single_trace

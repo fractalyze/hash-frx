@@ -21,7 +21,7 @@ import hashlib
 
 from absl.testing import absltest, parameterized
 
-from hash_frx.testing.ripemd160_reference import (
+from hash_frx.ripemd160.testing.reference import (
     MILLION_A_DIGEST,
     VECTORS,
     pad,

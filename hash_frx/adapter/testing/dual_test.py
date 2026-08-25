@@ -30,7 +30,7 @@ from frx import Array
 from hash_frx.adapter.dual import _HOST_SIBLINGS, Dual
 from hash_frx.blake3.rows import Blake3Keyed, HostBlake3Keyed
 from hash_frx.keccak.byte_hashes import HostShake128, Shake128
-from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import HostSha256, Sha256
 from hash_frx.testing.rows import DEVICE_ROWS, HOST_ROWS
 
 _MSG = np.arange(3 * 40, dtype=np.uint8).reshape(3, 40)

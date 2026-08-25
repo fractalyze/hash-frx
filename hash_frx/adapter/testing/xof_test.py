@@ -28,7 +28,7 @@ from hash_frx.adapter.xof import Xof
 from hash_frx.ascon.ascon import AsconXof128
 from hash_frx.blake2b.blake2b import Blake2b
 from hash_frx.blake2b.byte_hashes import HostBlake2b
-from hash_frx.blake2s import Blake2s, HostBlake2s
+from hash_frx.blake2s.blake2s import Blake2s, HostBlake2s
 from hash_frx.blake3.rows import Blake3, Blake3Keyed, HostBlake3, HostBlake3Keyed
 from hash_frx.keccak.byte_hashes import (
     HostShake128,
@@ -36,7 +36,7 @@ from hash_frx.keccak.byte_hashes import (
     Shake128,
     Shake256,
 )
-from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import HostSha256, Sha256
 from hash_frx.testing.rows import ALL_ROWS
 
 # `_LENGTH` is inside every family's range — BLAKE2s caps at 32 and BLAKE2b at

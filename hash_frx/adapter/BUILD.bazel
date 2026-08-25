@@ -64,8 +64,8 @@ py_library(
     deps = [
         ":block_size",
         ":hmac",
-        "//hash_frx:sha256",
-        "//hash_frx:sha512",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
         requirement("frx"),
         requirement("numpy"),
     ],
@@ -113,13 +113,13 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        "//hash_frx:blake2s",
-        "//hash_frx:sha256",
-        "//hash_frx:sha512",
-        "//hash_frx:sm3",
         "//hash_frx/blake2b",
+        "//hash_frx/blake2s",
         "//hash_frx/blake3",
         "//hash_frx/keccak",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
+        "//hash_frx/sm3",
         requirement("frx"),
     ],
 )

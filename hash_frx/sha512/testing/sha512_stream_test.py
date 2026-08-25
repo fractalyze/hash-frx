@@ -17,8 +17,8 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx import sha512
-from hash_frx.sha512 import (
+from hash_frx.sha512 import sha512
+from hash_frx.sha512.sha512 import (
     Sha512State,
     sha512_stream_absorb,
     sha512_stream_finalize,

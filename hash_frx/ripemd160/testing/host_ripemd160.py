@@ -26,7 +26,7 @@ import numpy as np
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import HostRow, host_digest
-from hash_frx.testing.ripemd160_reference import ripemd160
+from hash_frx.ripemd160.testing.reference import ripemd160
 
 if TYPE_CHECKING:
     from _typeshed import ReadableBuffer
