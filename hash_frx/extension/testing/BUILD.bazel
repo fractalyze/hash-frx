@@ -37,6 +37,22 @@ py_test(
 # tested without a backend, so only the cases that genuinely need one pay for
 # it. This one does need one — it calls `frx.jit`, so it takes the plugin deps
 # too, and on the GPU leg those are what make `cuda` a known backend at all.
+# `masked_chain`'s own claim, against a fake compression rather than a family:
+# the families cover this walk only end to end, where an off-by-one mask and an
+# off-by-one padding rule look alike. Calls `frx.jit` over a traced `live`, so
+# it takes the plugin deps for the same reason `pad_traced_test` does.
+py_test(
+    name = "md_test",
+    size = "small",
+    srcs = ["md_test.py"],
+    deps = [
+        "//hash_frx/extension:md",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 py_test(
     name = "pad_traced_test",
     size = "small",

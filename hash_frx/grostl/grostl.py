@@ -450,6 +450,18 @@ def grostl256_bytes(buf: Array, length: Array) -> Array:
         # The block count is runtime data, so every block the buffer could need
         # is compressed and the ones past the message selected away. Static and
         # small, and never the routed path (`md.padded_message_region` says why).
+        #
+        # **Deliberately not `md.masked_chain`, which is this walk.** Every other
+        # family packs its blocks into words first, so its region is already
+        # `[B, nblocks, W]` and the helper indexes it; Grøstl compresses raw
+        # bytes, so its region is flat and a block is a slice. Going through the
+        # helper costs a reshape to split the block axis and one per block to
+        # drop it again — measured at +4 `stablehlo.reshape` on a three-block
+        # digest, none of which fold — and the helper emits its predicate before
+        # its block where this slices first, so the two orders cannot both ride
+        # one function (docs/reference/development.md states that constraint).
+        # A flat region is the minority spelling, so the helper holds the other
+        # six families' order and this stays inline.
         for i in range(padded.shape[-1] // _BLOCK):
             block = padded[:, i * _BLOCK : (i + 1) * _BLOCK]
             h = fnp.where(i < live, _compress(h, block, rc_p, rc_q), h)

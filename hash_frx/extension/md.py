@@ -25,6 +25,65 @@ from hash_frx.fusion import fused_region
 from hash_frx.word import unpack_be, unpack_le
 
 
+def masked_chain(
+    h0: Array,
+    blocks: Array,
+    *,
+    compress_block: Callable[[Array, Array], Array],
+    live: Array | None = None,
+) -> Array:
+    """The compression walk itself: broadcast `h0` across the batch, fold every
+    block of `blocks` (`[B, nblocks, ...]`) into it, return the final midstate.
+
+    Serialization is the caller's — Grøstl finishes with Ω rather than a
+    serialize, so a walk that ended in one would not serve it.
+
+    `live` is what separates the two walks a family can need, and it is the whole
+    reason this is one function:
+
+    - **`None`** — every block is a message block. The static walk `chain` runs,
+      where the block count came from the message's shape.
+    - **a traced block count** — the runtime-length forms, where the count is
+      data. Every block the buffer could need is compressed and the ones past
+      the message are selected away, which is unconditional work rather than a
+      branch: the count is not known at trace time, and a `while` would be a
+      control-flow boundary the marked region cannot contain
+      (`padded_message_region` says why the speculation is affordable).
+
+    In both cases the loop is a Python `for` over a static, small count, per the
+    unrolled-round-loop rule in docs/reference/conventions.md.
+
+    **`compress_block` takes `(state, block)` and closes over its family's
+    constant tables.** Threading the tables through as a parameter instead would
+    fix their arity at whatever the first family needed — SHA-256 folds one
+    table and Grøstl two — and the closure costs nothing, because a marked
+    region's constants are already explicit operands at the `fused_region` call
+    (`chain` states why they cannot be captured *there*).
+
+    **`blocks` is `[B, nblocks, ...]`, and that excludes one family.** Every MD
+    family here packs its blocks into words before compressing — SHA-256,
+    SHA-512, SM3, RIPEMD-160 and both BLAKE2s — so a region reshaped once at the
+    pack is what they all already hold. Grøstl compresses raw bytes with no pack
+    at all, so its region stays flat and a block is a slice of it; it keeps its
+    own walk, and `grostl256_bytes` says so at the loop.
+
+    **The emission order is fixed here for every caller**, because Python
+    evaluates a call's arguments before its body: the predicate above is emitted
+    before the block, and a caller that builds those two in the other order
+    lowers differently for going through this function. That is a measured
+    constraint rather than a stylistic one — the lowering gate in
+    docs/reference/development.md states it, and Grøstl is the caller it
+    excluded, at +4 non-folding `stablehlo.reshape` on a three-block digest.
+    """
+    state = fnp.broadcast_to(h0, (blocks.shape[0], h0.shape[-1]))
+    for i in range(blocks.shape[1]):  # static, small
+        if live is None:
+            state = compress_block(state, blocks[:, i])
+        else:
+            state = fnp.where(i < live, compress_block(state, blocks[:, i]), state)
+    return state
+
+
 def chain(
     h0: Array,
     blocks: Array,
@@ -69,10 +128,13 @@ def chain(
         # Width comes off the operand: `h0` is the unbatched midstate, so any
         # other value would be a broadcast error rather than a different
         # outcome — a parameter that cannot change a result is one nobody needs.
-        state = fnp.broadcast_to(h0, (blocks.shape[0], h0.shape[-1]))
-        for i in range(blocks.shape[1]):  # static, small
-            state = compress_block(state, blocks[:, i], constants)
-        return serialize(state)
+        return serialize(
+            masked_chain(
+                h0,
+                blocks,
+                compress_block=lambda s, b: compress_block(s, b, constants),
+            )
+        )
 
     return fused_region(
         decomposition, h0, constants, blocks, name=name, version=version
