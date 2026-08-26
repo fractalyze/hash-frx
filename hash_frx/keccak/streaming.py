@@ -32,6 +32,13 @@ schedule: `permute` is the marked region and stays straight-line, while the
 glue around it lowers to ordinary `gather`/`dynamic_slice` exactly as
 `sha256_stream_absorb` does.
 
+**A block-aligned caller need not pay for the offset at all.**
+`ShakeBlockSqueeze`, reached from `ShakeAbsorb.finalize_blocks`, drops the field
+rather than leaving it at zero: with no offset there is no `dynamic_slice` on
+the output and no chain-select on the carry, which at width 50 is ~98 selects a
+call. A rejection sampler is that caller, and its `lax.scan` carry is a squeezer,
+so the field is not merely unused there — it is in the carry.
+
 **The upper bound costs permutations, and that is the price of a traced
 counter.** An absorb runs the fold `ceil((rate - 1 + L) / rate)` times where a
 known pending length would need `(pending + L) // rate`, and a squeeze of `n`
@@ -153,8 +160,8 @@ class ShakeAbsorb:
         )
         return ShakeAbsorb(merged, pending, tail_len, rate, self.suffix)
 
-    def finalize(self) -> "ShakeSqueeze":
-        """Pad, absorb the final block, and hand over to the squeezing half.
+    def _padded_state(self) -> Array:
+        """The state after FIPS 202's pad10*1 and the final absorb.
 
         The pad position is traced — it is the pending length — so `suffix` is
         placed by comparison rather than by index, and the `0x80` terminator is
@@ -169,7 +176,26 @@ class ShakeAbsorb:
         block = block ^ fnp.where(
             slot == rate - 1, fnp.uint8(0x80), fnp.uint8(0)
         ).astype(fnp.uint8)
-        return ShakeSqueeze(_absorb_block(self.state, block), fnp.int32(0), rate)
+        return _absorb_block(self.state, block)
+
+    def finalize(self) -> "ShakeSqueeze":
+        """Pad, absorb the final block, and hand over to the squeezing half.
+
+        Returns the general squeezer, which takes arbitrary byte counts. A
+        caller that only ever takes whole rate blocks — a rejection sampler —
+        wants `finalize_blocks` instead: the offset this one carries is what
+        costs it a `dynamic_slice` and a select over all 50 lanes per call.
+        """
+        return ShakeSqueeze(self._padded_state(), fnp.int32(0), self.rate)
+
+    def finalize_blocks(self) -> "ShakeBlockSqueeze":
+        """`finalize`, handing back the whole-block squeezer.
+
+        The narrow type is reachable only from here, and that is the point: its
+        soundness is the offset being zero, which holds by construction after a
+        pad-and-absorb and cannot be checked once the offset is traced.
+        """
+        return ShakeBlockSqueeze(self._padded_state(), self.rate)
 
 
 @partial(
@@ -230,6 +256,83 @@ class ShakeSqueeze:
         for k in range(1, len(chain)):
             carried = fnp.where(consumed == k, chain[k], carried)
         return ShakeSqueeze(carried, end % rate, rate), out
+
+
+@partial(
+    register_dataclass,
+    data_fields=["state"],
+    meta_fields=["rate"],
+)
+@dataclass(frozen=True)
+class ShakeBlockSqueeze:
+    """The squeezing half for a caller that only takes WHOLE rate blocks.
+
+    Same schedule as `ShakeSqueeze` with the offset removed, and removing it is
+    the whole point rather than a simplification. `ShakeSqueeze` carries how much
+    of the live block a previous call consumed, and because that counter is
+    traced it costs two things per call that a block-aligned caller pays for
+    nothing:
+
+    - the emitted stream runs to the upper block count and the output is
+      `dynamic_slice`d out of it, so a whole-block squeeze extracts and
+      concatenates two rate blocks to return one;
+    - the carried state is selected out of a chain rather than being the last
+      permute.
+
+    Measured at rate 168, the schedule around the permutation shrinks from 41
+    jaxpr equations to 16 for a one-block squeeze (95 to 65 at four), and the
+    lowered module loses the `dynamic_slice` and four `select`s. It does NOT
+    change the permutation count, which #218 already made minimal, and the
+    lowered op count moves ~2% because the permutation dominates it — the win is
+    in what a caller re-traces per shape and carries per iteration, not in the
+    kernel.
+
+    A rejection sampler is exactly the block-aligned caller: FIPS 204's
+    `RejNTTPoly` takes one rate block at a time. Its `lax.scan` carry is a
+    squeezer, so the offset is not merely unused there — it is in the carry, and
+    the select is what maintains it.
+
+    **Reachable only from `ShakeAbsorb.finalize_blocks`.** The type's soundness
+    is that the offset is zero, which holds by construction after a pad-and-
+    absorb and is uncheckable once traced — so there is no narrowing conversion
+    from `ShakeSqueeze`, only `widen` in the other direction. That is the same
+    move the absorb/squeeze split makes one level up: a type that cannot express
+    the illegal call is cheaper than one that rejects it at runtime.
+    """
+
+    state: Array  # uint32[50]
+    rate: int
+
+    def squeeze_blocks(self, nblocks: int) -> tuple["ShakeBlockSqueeze", Array]:
+        """Take `nblocks` (static) whole blocks: `(next, uint8[nblocks * rate])`.
+
+        The unit is BLOCKS, unlike `ShakeSqueeze.squeeze`'s bytes, and the name
+        says so — two squeezers whose methods differed only in what the integer
+        meant would be a trap worth more than the brevity.
+
+        `nblocks` blocks cost `nblocks` permutations: the state's rate prefix is
+        block 0, and the permutation after the last block is what leaves the
+        carry pointing at the next one.
+        """
+        if nblocks < 1:
+            raise ValueError(f"nblocks ({nblocks}) must be >= 1")
+        state = self.state
+        blocks = []
+        for _ in range(nblocks):
+            blocks.append(_rate_bytes(state, self.rate))
+            state = _PERMUTE(state)
+        out = blocks[0] if nblocks == 1 else fnp.concatenate(blocks)
+        return ShakeBlockSqueeze(state, self.rate), out
+
+    def widen(self) -> ShakeSqueeze:
+        """The same position as a general squeezer, for arbitrary byte counts.
+
+        One direction only. This state is block-aligned so the offset it gains is
+        zero; the reverse needs an offset that is traced, and a narrowing that
+        cannot check its own precondition is one that pushes a silent wrong
+        answer onto the caller.
+        """
+        return ShakeSqueeze(self.state, fnp.int32(0), self.rate)
 
 
 def shake_init(rate: int, suffix: int = SHAKE_SUFFIX) -> ShakeAbsorb:
