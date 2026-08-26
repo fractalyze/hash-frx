@@ -28,7 +28,7 @@ class _ByteHashDouble:
 
     Returns zeros deliberately: this file tests the Protocol's *shape*, and the
     cases that pin a concrete hash against its standard live with that hash.
-    Computing a real digest here would duplicate `HostSha256` and imply a
+    Computing a real digest here would duplicate a concrete row and imply a
     fidelity nothing in this file checks.
     """
 

@@ -55,7 +55,6 @@ from hash_frx.sha512.sha512 import (
 from hash_frx.sm3 import sm3 as sm3_mod
 from hash_frx.sm3.sm3 import Sm3
 from hash_frx.sponge import Sponge, SpongeParams
-from hash_frx.testing.rows import HOST_ROWS
 from hash_frx.vision import vision as vision_mod
 from hash_frx.vision.params import vision_mark32_params
 from hash_frx.vision.vision import Vision
@@ -160,16 +159,6 @@ class DeviceCellTest(absltest.TestCase):
                 with mock.patch.object(module, "_EMITTER_BACKENDS", ("nonesuch",)):
                     impl = build()
                 self.assertIs(impl.fusion_path, FusionPath.GENERIC)
-
-
-class HostCellTest(absltest.TestCase):
-    def test_host_rows_are_host_on_every_leg(self) -> None:
-        # Driven off the shipped-row registry rather than a literal tuple: the
-        # literal had drifted to nine of the fourteen host rows, missing
-        # HostSha3_512, both HostShake sizes and the two keyed BLAKE3 rows.
-        for case in HOST_ROWS:
-            with self.subTest(row=case.name):
-                self.assertIs(case.make().fusion_path, FusionPath.HOST)
 
 
 class ConstructionDelegationTest(absltest.TestCase):

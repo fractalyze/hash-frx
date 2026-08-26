@@ -17,10 +17,9 @@ from hash_frx.adapter.block_size import _BLOCK_SIZES, block_size
 from hash_frx.ascon.ascon import AsconHash256
 from hash_frx.blake2b import blake2b
 from hash_frx.blake2b.blake2b import Blake2bKeyed
-from hash_frx.blake2b.byte_hashes import HostBlake2bKeyed
 from hash_frx.blake2s import blake2s
-from hash_frx.blake2s.blake2s import Blake2sKeyed, HostBlake2sKeyed
-from hash_frx.blake3.rows import Blake3, Blake3Keyed, HostBlake3
+from hash_frx.blake2s.blake2s import Blake2sKeyed
+from hash_frx.blake3.rows import Blake3, Blake3Keyed
 from hash_frx.grostl import grostl
 from hash_frx.keccak.byte_hashes import (
     KECCAK256_RATE,
@@ -36,7 +35,7 @@ from hash_frx.keccak.byte_hashes import (
 )
 from hash_frx.ripemd160 import ripemd160
 from hash_frx.sha256 import sha256 as sha256_mod
-from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sha512 import sha512 as sha512_mod
 from hash_frx.sha512.sha512 import Sha384, Sha512, Sha512_256
 from hash_frx.sm3 import sm3
@@ -80,11 +79,6 @@ class KnownWidthsTest(absltest.TestCase):
         self.assertEqual(block_size(Shake128(32)), SHAKE128_RATE)
         self.assertEqual(block_size(Shake256(32)), SHAKE256_RATE)
 
-    def test_host_and_device_rows_of_one_family_agree(self) -> None:
-        # They are the same hash; the host row differs in where it runs, not in
-        # what it computes, so a block-keyed construction must read one width.
-        self.assertEqual(block_size(HostSha256()), block_size(Sha256()))
-
     def test_output_length_does_not_change_the_block(self) -> None:
         # The width is the family's, not the instance's — which is why the
         # table is keyed by type rather than by row value.
@@ -99,7 +93,7 @@ class DeliberateAbsencesTest(absltest.TestCase):
         # the wrong construction over it rather than an unsupported one. Its
         # 64-byte compression block is not an HMAC `B` just because the number
         # exists — `hmac.py` states the rule this pins.
-        for row in (Blake3(), Blake3Keyed(bytes(32)), HostBlake3()):
+        for row in (Blake3(), Blake3Keyed(bytes(32))):
             with self.subTest(row=type(row).__name__):
                 # The message also names the file to edit, because a caller
                 # hitting this needs to know it is a registry gap rather than a
@@ -117,13 +111,11 @@ class DeliberateAbsencesTest(absltest.TestCase):
         # computes.
         #
         # The UNKEYED rows keep their entries, and the pairing is what this
-        # case is really pinning: a lookup that stripped `Keyed` the way it
-        # strips `Host` would answer 128 here and be silently wrong.
+        # case is really pinning: a lookup that stripped `Keyed` would answer
+        # 128 here and be silently wrong.
         for row in (
             Blake2bKeyed(bytes(range(32))),
             Blake2sKeyed(bytes(range(32))),
-            HostBlake2bKeyed(bytes(range(32))),
-            HostBlake2sKeyed(bytes(range(32))),
         ):
             with self.subTest(row=type(row).__name__):
                 with self.assertRaisesRegex(LookupError, "keyed mode is native"):
@@ -155,7 +147,6 @@ class TableNamesRealRowsTest(absltest.TestCase):
 
     def test_every_key_names_a_shipped_row(self) -> None:
         shipped = {type(case.make()).__name__ for case in BYTE_HASH_ROWS}
-        shipped |= {n.removeprefix("Host") for n in shipped}
         for name in _BLOCK_SIZES:
             with self.subTest(hash=name):
                 self.assertIn(
@@ -174,13 +165,6 @@ class TableShapeTest(absltest.TestCase):
             with self.subTest(hash=name):
                 self.assertGreater(width, 0)
                 self.assertEqual(width % 8, 0)
-
-    def test_no_entry_is_keyed_by_a_host_row_name(self) -> None:
-        # `block_size` strips a `Host` prefix before looking up, so an entry
-        # spelled `HostSha256` would be dead and its device row would miss.
-        for name in _BLOCK_SIZES:
-            with self.subTest(hash=name):
-                self.assertFalse(name.startswith("Host"))
 
 
 if __name__ == "__main__":

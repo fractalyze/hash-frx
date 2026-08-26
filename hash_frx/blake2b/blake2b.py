@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """BLAKE2b over `(lo, hi)` uint32 half pairs, authored in frx —
 byte-identical to RFC 7693 (and any conforming implementation, e.g. Python's
-`hashlib.blake2b`). The host row `byte_hashes.HostBlake2b` shipped first;
+`hashlib.blake2b`).
 its docstring carries the family taxonomy (HAIFA: Merkle–Damgård plus a byte
 counter and a finalization flag threaded into every compression), why the
 family is a `ByteHash` rather than a `Permutation`, and why the host row led.
@@ -93,7 +93,6 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.blake2_params import BLAKE2B_WORD_BYTES, param_block, param_words
-from hash_frx.blake2b.byte_hashes import MAX_DIGEST_SIZE
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
 from hash_frx.fusion import FusionPath, fused_region, routing
@@ -128,6 +127,10 @@ _DEDICATED_EMITTER_AVAILABLE = False
 # alongside it. Empty until one is written; a backend gaining an arm joins
 # this tuple and nothing else here moves (the keccak/poseidon2 pattern).
 _EMITTER_BACKENDS: tuple[str, ...] = ()
+
+
+# RFC 7693 §2.1: BLAKE2b digests are 1..64 bytes.
+MAX_DIGEST_SIZE = 64
 
 
 def _routes_to_dedicated_emitter() -> bool:
@@ -526,9 +529,7 @@ class Blake2b(DeviceRow):
 
     For batched hashing where the messages already live on the device — an
     EIP-152/Zcash/Filecoin proof workload verifying many compressions at
-    once. The strictly-sequential caller's fast path is the shipped
-    `byte_hashes.HostBlake2b`, whose docstring is why the host row came
-    first.
+    once. A strictly-sequential caller uses `hashlib.blake2b` directly.
 
     **`salt` and `person` are part of which hash this is**, not settings on
     one. RFC 7693 folds both into the initial state through the §2.8 parameter

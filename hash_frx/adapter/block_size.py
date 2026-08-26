@@ -90,11 +90,11 @@ def block_size(byte_hash: ByteHash) -> int:
     crash — so declining to answer is the only safe default.
 
     The host and device rows of one family share an entry: they are the same
-    hash, and `HostSha256` differs from `Sha256` in where it runs rather than in
+    hash, and a row differs from another in where it runs rather than in
     what it computes.
     """
     name = type(byte_hash).__name__
-    width = _BLOCK_SIZES.get(name.removeprefix("Host"))
+    width = _BLOCK_SIZES.get(name)
     if width is None:
         raise LookupError(
             f"no block size is registered for {name}. A block-keyed "

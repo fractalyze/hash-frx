@@ -27,7 +27,6 @@ from absl.testing import absltest, parameterized
 from frx import Array
 
 from hash_frx.byte_hash import ByteHash, DeviceRow, HostRow, Row
-from hash_frx.fusion import FusionPath
 from hash_frx.testing.package_sweep import (
     declared,
     declared_anywhere,
@@ -37,7 +36,6 @@ from hash_frx.testing.rows import (
     ALL_ROWS,
     BYTE_HASH_ROWS,
     DEVICE_ROWS,
-    HOST_ROWS,
     RowCase,
 )
 
@@ -46,15 +44,6 @@ _MSG = np.arange(3 * 40, dtype=np.uint8).reshape(3, 40)
 
 def _named(cases: tuple[RowCase, ...]) -> list[tuple[str, RowCase]]:
     return [(c.name, c) for c in cases]
-
-
-_BY_NAME = {c.name: c for c in HOST_ROWS}
-# (device, host) for every device row that ships a host sibling.
-_SIBLINGS = [
-    (d.name, d, _BY_NAME[f"Host{d.name}"])
-    for d in DEVICE_ROWS
-    if f"Host{d.name}" in _BY_NAME
-]
 
 
 class RowEqualityTest(parameterized.TestCase):
@@ -152,30 +141,6 @@ class RowSeamTest(parameterized.TestCase):
         row = case.make()
         self.assertIsInstance(row.digest(_MSG), Array)
         self.assertTrue(row.fusion_path.is_traceable)
-        self.assertIsNot(row.fusion_path, FusionPath.HOST)
-
-    @parameterized.named_parameters(*_named(HOST_ROWS))
-    def test_host_rows_return_ndarrays_and_are_not_traceable(
-        self, case: RowCase
-    ) -> None:
-        row = case.make()
-        out = row.digest(_MSG)
-        self.assertIsInstance(out, np.ndarray)
-        self.assertNotIsInstance(out, Array)
-        self.assertIs(row.fusion_path, FusionPath.HOST)
-        self.assertFalse(row.fusion_path.is_traceable)
-
-    @parameterized.named_parameters(*_SIBLINGS)
-    def test_device_and_host_agree(self, device: RowCase, host: RowCase) -> None:
-        # A device row and its host sibling are two implementations of one
-        # function; the seam is only worth coding against if the same call means
-        # the same thing through both. Only the pairs that exist are enumerated,
-        # so the case count is the number actually compared rather than a device
-        # row count padded with skips.
-        np.testing.assert_array_equal(
-            np.asarray(device.make().digest(_MSG)),
-            np.asarray(host.make().digest(_MSG)),
-        )
 
 
 class RegistryTest(absltest.TestCase):
@@ -197,7 +162,7 @@ class RegistryTest(absltest.TestCase):
                 # The bases and the seam are the contract, not rows on them.
                 if obj in (Row, DeviceRow, HostRow, ByteHash):
                     continue
-                # `Row`, not `(DeviceRow, HostRow)`. Flagging only the two
+                # `Row`, not `DeviceRow`. Flagging only the
                 # subclasses made the sweep blind to exactly the rows that
                 # subclass `Row` directly — `Mgf1` and `Hmac`, both shipped and
                 # both unregistered — while `rows.py` claimed completeness. So
@@ -217,7 +182,7 @@ class RegistryTest(absltest.TestCase):
 # a module pinning two rows must name them (mypy rejects re-annotating `_`), so
 # every pin in the tree today carries a suffix — but the bare `_` of the doc's
 # own example must count too, or a row following it reads as unpinned. Anchored
-# so `dual.py`'s `TypeVar("Family", bound="type[ByteHash]")` is not read as one.
+# so a `TypeVar` bound to `type[ByteHash]` is not read as one.
 _PIN = re.compile(r"^\s*_\w*: type\[ByteHash\] = (\w+)$", re.M)
 
 

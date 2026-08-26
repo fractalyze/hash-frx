@@ -3,19 +3,6 @@ load("@rules_python//python:defs.bzl", "py_test")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
-    name = "byte_hashes_test",
-    size = "small",
-    srcs = ["byte_hashes_test.py"],
-    deps = [
-        "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
-        "//hash_frx/blake2b",
-        requirement("absl_py"),
-        requirement("numpy"),
-    ],
-)
-
-py_test(
     name = "blake2b_test",
     # Compile-heavy relative to its arithmetic, like sha512_test: the vector
     # rows and the differential sweep each compile the 96-G unrolled digest
@@ -27,6 +14,7 @@ py_test(
         "//hash_frx:fusion",
         "//hash_frx/blake2b",
         "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:oracle",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

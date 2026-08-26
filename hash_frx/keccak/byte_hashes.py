@@ -57,21 +57,19 @@ about these hashes, and it is stated where the rule lives —
 
 from __future__ import annotations
 
-import hashlib
 from typing import TYPE_CHECKING
 
-import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, HostRow, host_digest
+from hash_frx.byte_hash import DeviceRow
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.keccak.sponge import KeccakSponge
 
 if TYPE_CHECKING:
-    from _typeshed import ReadableBuffer
-
     from hash_frx.byte_hash import ByteHash
+
+    pass
 
 # FIPS 202 section 6.1: SHA3-256(M) = KECCAK[512](M ‖ 01, 256) and
 # SHA3-512(M) = KECCAK[1024](M ‖ 01, 512), and section B.2 packs the `01` domain
@@ -185,68 +183,6 @@ class Keccak256(_KeccakHash):
         super().__init__(KECCAK256_DIGEST_SIZE)
 
 
-class _HostKeccak(HostRow):
-    """The shared body of the host siblings — `hashlib` per message.
-
-    The differential partner for the device implementations, and the right choice
-    for a strictly sequential caller that reads each digest back immediately: a
-    device dispatch per short message costs more than `hashlib` does. It can never
-    be called on a traced message, which is the return type saying so.
-
-    A subclass supplies `_hash_one`, which is the whole row: which `hashlib`
-    function, and — for the XOFs — how many bytes to read out of it. The loop it
-    runs under is [`byte_hash.host_digest`](../byte_hash.py), shared with every
-    other host row in the package.
-    """
-
-    def __init__(self, digest_size: int) -> None:
-        # The device rows refuse a zero-length output at the sponge; a host row
-        # that accepted it would make the pair disagree on what is a hash.
-        if digest_size < 1:
-            raise ValueError(f"digest_size ({digest_size}) must be >= 1")
-        self.digest_size = digest_size
-
-    def _hash_one(self, data: ReadableBuffer) -> bytes:
-        raise NotImplementedError
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(self._hash_one, self.digest_size, msg)
-
-
-class HostSha3_256(_HostKeccak):
-    """`ByteHash` for host SHA3-256 over `hashlib.sha3_256`."""
-
-    def __init__(self) -> None:
-        super().__init__(SHA3_256_DIGEST_SIZE)
-
-    def _hash_one(self, data: ReadableBuffer) -> bytes:
-        return hashlib.sha3_256(data).digest()
-
-
-class HostSha3_512(_HostKeccak):
-    """`ByteHash` for host SHA3-512 over `hashlib.sha3_512`."""
-
-    def __init__(self) -> None:
-        super().__init__(SHA3_512_DIGEST_SIZE)
-
-    def _hash_one(self, data: ReadableBuffer) -> bytes:
-        return hashlib.sha3_512(data).digest()
-
-
-class HostShake128(_HostKeccak):
-    """`ByteHash` for host SHAKE128 over `hashlib.shake_128`."""
-
-    def _hash_one(self, data: ReadableBuffer) -> bytes:
-        return hashlib.shake_128(data).digest(self.digest_size)
-
-
-class HostShake256(_HostKeccak):
-    """`ByteHash` for host SHAKE256 over `hashlib.shake_256`."""
-
-    def _hash_one(self, data: ReadableBuffer) -> bytes:
-        return hashlib.shake_256(data).digest(self.digest_size)
-
-
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md). Named individually
     # because mypy rejects re-annotating one name.
@@ -255,7 +191,3 @@ if TYPE_CHECKING:
     _bh_shake128: type[ByteHash] = Shake128
     _bh_shake256: type[ByteHash] = Shake256
     _bh_keccak256: type[ByteHash] = Keccak256
-    _bh_host_sha3_256: type[ByteHash] = HostSha3_256
-    _bh_host_sha3_512: type[ByteHash] = HostSha3_512
-    _bh_host_shake128: type[ByteHash] = HostShake128
-    _bh_host_shake256: type[ByteHash] = HostShake256

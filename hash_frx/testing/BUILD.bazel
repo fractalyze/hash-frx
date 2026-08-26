@@ -426,3 +426,11 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_library(
+    name = "oracle",
+    testonly = True,
+    srcs = ["oracle.py"],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("numpy")],
+)

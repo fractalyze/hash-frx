@@ -27,14 +27,12 @@ from hash_frx.fusion import FusionPath
 from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sha512 import sha512
 from hash_frx.sha512.sha512 import (
-    HostSha384,
-    HostSha512,
-    HostSha512_256,
     Sha384,
     Sha512,
     Sha512_256,
 )
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 111/112 (the one-block/two-block
 # cutoff — the 0x80 byte + 16-byte length need 17 bytes), 127/128 (block edge;
@@ -281,63 +279,42 @@ class Sha512ByteHashTest(parameterized.TestCase):
     `byte_hash_test.py` stays seam-only — a double, so it runs on a branch
     where no concrete hash exists — which leaves the real classes untested by
     it. This is the other half of that split: the assertions that need `Sha512`
-    and `HostSha512` themselves and are tautologies against a double.
+    itself and are tautologies against a double.
     """
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h in (Sha512(), HostSha512()):
-            with self.subTest(impl=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, 64)
-                self.assertIsInstance(h.fusion_path, FusionPath)
+        h = Sha512()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, 64)
+        self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # Device GENERIC (pre-emitter, every backend), host HOST (every
-        # backend) — and the traceability tie to the return type: the device
-        # row returns an `Array` and takes a tracer, the host row reads bytes
-        # and never can (`byte_hash.py`'s rule).
+        # GENERIC (pre-emitter, every backend), and the traceability tie to
+        # the return type: the row returns an `Array` and takes a tracer
+        # (`byte_hash.py`'s rule).
         msg = np.zeros((1, 1), dtype=np.uint8)
-        device, host = Sha512(), HostSha512()
+        device = Sha512()
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
         self.assertTrue(device.fusion_path.is_traceable)
         self.assertNotIsInstance(device.digest(msg), np.ndarray)
-        self.assertIs(host.fusion_path, FusionPath.HOST)
-        self.assertFalse(host.fusion_path.is_traceable)
-        self.assertIsInstance(host.digest(msg), np.ndarray)
 
     @parameterized.parameters(*_LENGTHS)
-    def test_host_matches_hashlib(self, length: int) -> None:
-        # HostSha512 is a separate implementation, not a wrapper over the
-        # marked path: it loops `hashlib` per row. Nothing above covers it.
-        rng = np.random.default_rng(length)
-        msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
-        got = np.asarray(HostSha512().digest(msgs))
-        self.assertEqual(got.shape, (4, 64))
-        for i in range(msgs.shape[0]):
-            self.assertEqual(bytes(got[i]), hashlib.sha512(bytes(msgs[i])).digest())
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_device_and_host_agree(self, length: int) -> None:
-        # Two implementations of identical bytes are only safe while they stay
-        # identical; this is the guard that keeps them from drifting, across
-        # every padding boundary rather than one convenient length.
+    def test_device_matches_hashlib(self, length: int) -> None:
+        # `hashlib` is the out-of-tree oracle, across every padding boundary
+        # rather than one convenient length.
         rng = np.random.default_rng(length + 1)
         msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
         np.testing.assert_array_equal(
             np.asarray(Sha512().digest(msgs)),
-            np.asarray(HostSha512().digest(msgs)),
+            oracle_digest(lambda b: hashlib.sha512(b).digest(), 64, msgs),
         )
 
     def test_value_identity_is_by_type(self) -> None:
         # Param-free, so every instance of a type is equal and hashes alike —
-        # what keeps the seam re-trace-safe as pytree aux. The two are never
-        # equal, or swapping substrate would not re-trace; and neither equals
-        # the SHA-256 sibling, or a family holding both would collide.
-        for cls in (Sha512, HostSha512):
-            with self.subTest(impl=cls.__name__):
-                self.assertEqual(cls(), cls())
-                self.assertEqual(hash(cls()), hash(cls()))
-        self.assertNotEqual(Sha512(), HostSha512())
+        # what keeps the seam re-trace-safe as pytree aux; and it does not
+        # equal the SHA-256 sibling, or a family holding both would collide.
+        self.assertEqual(Sha512(), Sha512())
+        self.assertEqual(hash(Sha512()), hash(Sha512()))
         self.assertNotEqual(Sha512(), Sha256())
 
 
@@ -465,15 +442,12 @@ class Sha2VariantTest(parameterized.TestCase):
 class Sha2VariantByteHashTest(parameterized.TestCase):
     """The four variant rows against the seam and against each other — the
     `Sha512ByteHashTest` split at the truncated tables. The device/host
-    agreement plus the module-function sweeps above close the triangle, so
-    the host rows carry no separate hashlib sweep."""
+    agreement plus the module-function sweeps above close the triangle."""
 
     def test_impls_satisfy_the_seam(self) -> None:
         for h, size in (
             (Sha384(), 48),
-            (HostSha384(), 48),
             (Sha512_256(), 32),
-            (HostSha512_256(), 32),
         ):
             with self.subTest(impl=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
@@ -482,46 +456,38 @@ class Sha2VariantByteHashTest(parameterized.TestCase):
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
         msg = np.zeros((1, 1), dtype=np.uint8)
-        for device, host in (
-            (Sha384(), HostSha384()),
-            (Sha512_256(), HostSha512_256()),
-        ):
+        for device in (Sha384(), Sha512_256()):
             with self.subTest(variant=type(device).__name__):
                 self.assertIs(device.fusion_path, FusionPath.GENERIC)
                 self.assertTrue(device.fusion_path.is_traceable)
                 self.assertNotIsInstance(device.digest(msg), np.ndarray)
-                self.assertIs(host.fusion_path, FusionPath.HOST)
-                self.assertFalse(host.fusion_path.is_traceable)
-                self.assertIsInstance(host.digest(msg), np.ndarray)
 
     @parameterized.parameters(*_LENGTHS)
-    def test_device_and_host_agree(self, length: int) -> None:
+    def test_device_matches_hashlib(self, length: int) -> None:
         rng = np.random.default_rng(length + 2)
         msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
-        for device, host in (
-            (Sha384(), HostSha384()),
-            (Sha512_256(), HostSha512_256()),
+        for device, one in (
+            (Sha384(), lambda b: hashlib.sha384(b).digest()),
+            (Sha512_256(), lambda b: hashlib.new("sha512_256", b).digest()),
         ):
             with self.subTest(variant=type(device).__name__):
                 got = np.asarray(device.digest(msgs))
                 self.assertEqual(got.shape, (4, device.digest_size))
-                np.testing.assert_array_equal(got, np.asarray(host.digest(msgs)))
+                np.testing.assert_array_equal(
+                    got, oracle_digest(one, device.digest_size, msgs)
+                )
 
     def test_value_identity_is_by_type(self) -> None:
-        for cls in (Sha384, HostSha384, Sha512_256, HostSha512_256):
+        for cls in (Sha384, Sha512_256):
             with self.subTest(impl=cls.__name__):
                 self.assertEqual(cls(), cls())
                 self.assertEqual(hash(cls()), hash(cls()))
-        # No two rows of the family are ever equal — across variants,
-        # substrates, and the parent pair — or a consumer holding several
-        # would collide (and substrate swaps would not re-trace).
+        # No two rows of the family are ever equal — across variants and the
+        # parent — or a consumer holding several would collide.
         distinct = [
             Sha512(),
-            HostSha512(),
             Sha384(),
-            HostSha384(),
             Sha512_256(),
-            HostSha512_256(),
         ]
         for i, a in enumerate(distinct):
             for b in distinct[i + 1 :]:
@@ -537,7 +503,6 @@ class EmptyBatchTest(absltest.TestCase):
             (sha512.Sha512(), 64),
             (sha512.Sha384(), 48),
             (sha512.Sha512_256(), 32),
-            (sha512.HostSha512(), 64),
         ]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))

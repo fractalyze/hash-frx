@@ -31,7 +31,6 @@ Requires no x64; all arithmetic is uint32.
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING
@@ -44,9 +43,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import (
     DeviceRow,
-    HostRow,
     device_message,
-    host_digest,
     padded_batch,
 )
 from hash_frx.extension.md import chain
@@ -57,6 +54,8 @@ from hash_frx.word import pack_be, rotl, unpack_be
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
+
+    pass
 
 U32 = fnp.uint32
 
@@ -304,7 +303,7 @@ class Sm3(DeviceRow):
 
     For batched hashing where the messages already live on the device — a
     ShangMi-ecosystem proof workload verifying many SM2-over-SM3 signatures
-    at once. The strictly-sequential caller's fast path is `HostSm3`."""
+    at once. A strictly-sequential caller has no in-package fast path."""
 
     digest_size = 32
 
@@ -315,25 +314,6 @@ class Sm3(DeviceRow):
         return digest(msg)  # the module-level marker digest
 
 
-class HostSm3(HostRow):
-    """`ByteHash` for host SM3 over `hashlib.new("sm3")`.
-
-    Not a guaranteed constructor: the name reaches `hashlib` through OpenSSL,
-    which carries SM3 in its DEFAULT provider (probed 2026-08-21 — the
-    `HostSha512_256` situation, the opposite of RIPEMD-160's legacy-provider
-    retreat that forced that family's host partner testonly), so the row
-    ships; on an OpenSSL built without ShangMi, `hashlib.new` raises its own
-    unsupported-algorithm error at the first digest."""
-
-    digest_size = 32
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(
-            lambda row: hashlib.new("sm3", row).digest(), self.digest_size, msg
-        )
-
-
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_marker: type[ByteHash] = Sm3
-    _bh_host: type[ByteHash] = HostSm3

@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Incremental BLAKE3 — byte-exact against the reference binding, and threadable.
 
-`HostBlake3` is the oracle, as it is for the `ByteHash` differential sweep: it
+The `blake3` binding is the oracle, as it is for the `ByteHash` sweep: it
 wraps the BLAKE3 team's own Rust implementation, so agreement is agreement with
 something outside this tree rather than two readings of one spec
 (`docs/reference/conventions.md`).
@@ -22,13 +22,14 @@ both.
 
 from __future__ import annotations
 
+import blake3 as blake3_py
 import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
 from hash_frx.blake3.modes import BLOCK_LEN, CHUNK_LEN, DIGEST_LEN
-from hash_frx.blake3.rows import BLAKE3_MARKER, HostBlake3
+from hash_frx.blake3.rows import BLAKE3_MARKER
 from hash_frx.blake3.streaming import (
     BLAKE3_COMPRESS_MARKER,
     Blake3Stream,
@@ -41,7 +42,7 @@ def _u8(data: bytes) -> np.ndarray:
 
 
 def _host(msg: bytes, out_len: int = DIGEST_LEN) -> bytes:
-    return bytes(np.asarray(HostBlake3(out_len).digest(_u8(msg)[None, :]))[0])
+    return blake3_py.blake3(bytes(msg)).digest(out_len)
 
 
 def _device(pieces: list[bytes], out_len: int = DIGEST_LEN) -> bytes:

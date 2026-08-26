@@ -58,7 +58,6 @@ records the offsets a tree mode would need.
 
 from __future__ import annotations
 
-import hashlib
 from functools import lru_cache, partial
 from typing import TYPE_CHECKING
 
@@ -71,9 +70,7 @@ from frx.typing import ArrayLike
 from hash_frx.blake2_params import BLAKE2S_WORD_BYTES, param_block, param_words
 from hash_frx.byte_hash import (
     DeviceRow,
-    HostRow,
     device_message,
-    host_digest,
     padded_batch,
 )
 from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
@@ -82,6 +79,8 @@ from hash_frx.word import pack_le, roll, rotr, unpack_le
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
+
+    pass
 
 U32 = fnp.uint32
 
@@ -446,7 +445,7 @@ class Blake2s(DeviceRow):
     module flags and nothing here moves.
 
     For batched hashing where the messages already live on the device. The
-    strictly-sequential caller's fast path is `HostBlake2s` below — the
+    strictly-sequential caller uses `hashlib.blake2s` directly — the
     WireGuard-style transcript caller reading each digest back immediately.
 
     The output length rides the value surface: `Blake2s(digest_size=16)` is a
@@ -525,98 +524,7 @@ class Blake2sKeyed(DeviceRow):
         return digest(msg, self.digest_size, self._key, self._salt, self._person)
 
 
-class HostBlake2s(HostRow):
-    """`ByteHash` for host unkeyed BLAKE2s over `hashlib.blake2s` — a
-    guaranteed constructor, so the row ships unconditionally: the fast path
-    for a strictly-sequential byte caller, free the way the sibling's host
-    row was. The output length rides the value surface, same as `Blake2s`."""
-
-    def __init__(
-        self,
-        digest_size: int = MAX_DIGEST_SIZE,
-        *,
-        salt: bytes = b"",
-        person: bytes = b"",
-    ) -> None:
-        if not 1 <= digest_size <= MAX_DIGEST_SIZE:
-            raise ValueError(
-                f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
-                f"{digest_size}"
-            )
-        self.digest_size = digest_size
-        self._salt = salt
-        self._person = person
-        # `hashlib` validates the widths too, but only at the first `digest` —
-        # too late for a caller who can no longer choose. Same door as the
-        # device row's.
-        param_block(BLAKE2S_WORD_BYTES, digest_size, 0, salt, person)
-
-    def _parameters(self) -> tuple[object, ...]:
-        return (self.digest_size, self._salt, self._person)
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(
-            lambda row: hashlib.blake2s(
-                row,
-                digest_size=self.digest_size,
-                salt=self._salt,
-                person=self._person,
-            ).digest(),
-            self.digest_size,
-            msg,
-        )
-
-
-class HostBlake2sKeyed(HostRow):
-    """`ByteHash` for host keyed BLAKE2s over `hashlib.blake2s(key=...)` — the
-    sequential fast path for `Blake2sKeyed`, free the way every host row in
-    this family is: `hashlib` takes the key directly, so the whole row is the
-    constructor's validation plus one `_hash_one`.
-
-    The key is secret material held in a plain attribute here too, and
-    `__hash__` is over the bytes."""
-
-    def __init__(
-        self,
-        key: bytes,
-        digest_size: int = MAX_DIGEST_SIZE,
-        *,
-        salt: bytes = b"",
-        person: bytes = b"",
-    ) -> None:
-        if not 1 <= digest_size <= MAX_DIGEST_SIZE:
-            raise ValueError(
-                f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
-                f"{digest_size}"
-            )
-        if not key:
-            raise ValueError("key must be non-empty; the unkeyed hash is `HostBlake2s`")
-        self.digest_size = digest_size
-        self._key = key
-        self._salt = salt
-        self._person = person
-        param_block(BLAKE2S_WORD_BYTES, digest_size, len(key), salt, person)
-
-    def _parameters(self) -> tuple[object, ...]:
-        return (self.digest_size, self._key, self._salt, self._person)
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(
-            lambda row: hashlib.blake2s(
-                row,
-                digest_size=self.digest_size,
-                key=self._key,
-                salt=self._salt,
-                person=self._person,
-            ).digest(),
-            self.digest_size,
-            msg,
-        )
-
-
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_blake2s: type[ByteHash] = Blake2s
     _bh_blake2s_keyed: type[ByteHash] = Blake2sKeyed
-    _bh_host_blake2s: type[ByteHash] = HostBlake2s
-    _bh_host_blake2s_keyed: type[ByteHash] = HostBlake2sKeyed

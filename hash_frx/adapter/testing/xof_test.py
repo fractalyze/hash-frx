@@ -27,16 +27,13 @@ from hash_frx.adapter.mgf1 import Mgf1
 from hash_frx.adapter.xof import Xof
 from hash_frx.ascon.ascon import AsconXof128
 from hash_frx.blake2b.blake2b import Blake2b
-from hash_frx.blake2b.byte_hashes import HostBlake2b
-from hash_frx.blake2s.blake2s import Blake2s, HostBlake2s
-from hash_frx.blake3.rows import Blake3, Blake3Keyed, HostBlake3, HostBlake3Keyed
+from hash_frx.blake2s.blake2s import Blake2s
+from hash_frx.blake3.rows import Blake3, Blake3Keyed
 from hash_frx.keccak.byte_hashes import (
-    HostShake128,
-    HostShake256,
     Shake128,
     Shake256,
 )
-from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import Sha256
 from hash_frx.testing.rows import BYTE_HASH_ROWS
 
 # `_LENGTH` is inside every family's range — BLAKE2s caps at 32 and BLAKE2b at
@@ -50,15 +47,10 @@ _LENGTH = 24
 _FAMILIES: list[tuple[str, Xof]] = [
     ("Shake128", Shake128),
     ("Shake256", Shake256),
-    ("HostShake128", HostShake128),
-    ("HostShake256", HostShake256),
     ("AsconXof128", AsconXof128),
     ("Blake2s", Blake2s),
     ("Blake2b", Blake2b),
-    ("HostBlake2s", HostBlake2s),
-    ("HostBlake2b", HostBlake2b),
     ("Blake3", Blake3),
-    ("HostBlake3", HostBlake3),
 ]
 
 
@@ -98,7 +90,7 @@ class ReachedThroughAPartialTest(absltest.TestCase):
         # The claim `mgf1.py` was designed around: a free `mgf1(h, seed, n)`
         # could not fill this slot, so the construction ships as a row and the
         # underlying hash binds ahead of the length.
-        xof: Xof = partial(Mgf1, HostSha256())
+        xof: Xof = partial(Mgf1, Sha256())
         self.assertEqual(xof(_LENGTH).digest_size, _LENGTH)
 
     def test_mgf1_stretches_a_fixed_output_hash_past_its_digest(self) -> None:
@@ -111,10 +103,8 @@ class ReachedThroughAPartialTest(absltest.TestCase):
     def test_a_keyed_family_is_an_xof_once_its_key_is_bound(self) -> None:
         # `Blake3Keyed(key, output_size)` takes the key first, the key being a
         # parameter of the hash rather than something a caller picks per call.
-        for family in (Blake3Keyed, HostBlake3Keyed):
-            with self.subTest(family=family.__name__):
-                xof: Xof = partial(family, bytes(range(32)))
-                self.assertEqual(xof(_LENGTH).digest_size, _LENGTH)
+        xof: Xof = partial(Blake3Keyed, bytes(range(32)))
+        self.assertEqual(xof(_LENGTH).digest_size, _LENGTH)
 
 
 class FixedOutputRowsTest(absltest.TestCase):

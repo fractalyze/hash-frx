@@ -34,7 +34,7 @@ from hash_frx.adapter import pbkdf2 as pbkdf2_mod
 from hash_frx.adapter.hmac import Hmac
 from hash_frx.adapter.pbkdf2 import pbkdf2
 from hash_frx.blake2s.blake2s import Blake2s
-from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sha512.sha512 import Sha512
 
 _SHA256 = Hmac(Sha256(), 64)
@@ -170,12 +170,6 @@ class Pbkdf2LoweringTest(absltest.TestCase):
 
 
 class Pbkdf2SurfaceTest(absltest.TestCase):
-    def test_host_rows_are_refused(self) -> None:
-        # A host row's eager digest cannot thread the traced carry; the
-        # error names the right tool instead.
-        with self.assertRaisesRegex(ValueError, "hashlib.pbkdf2_hmac"):
-            pbkdf2(Hmac(HostSha256(), 64), _rows(b"pw"), _rows(b"salt"), 2, 32)
-
     def test_out_of_range_parameters_are_refused(self) -> None:
         with self.assertRaises(ValueError):
             pbkdf2(_SHA256, _rows(b"pw"), _rows(b"salt"), 0, 32)

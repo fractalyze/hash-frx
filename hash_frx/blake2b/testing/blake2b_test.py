@@ -41,15 +41,11 @@ from absl.testing import absltest, parameterized
 from frx import Array
 
 from hash_frx.blake2b import blake2b
-from hash_frx.blake2b.blake2b import Blake2b, Blake2bKeyed
-from hash_frx.blake2b.byte_hashes import (
-    MAX_DIGEST_SIZE,
-    HostBlake2b,
-    HostBlake2bKeyed,
-)
+from hash_frx.blake2b.blake2b import MAX_DIGEST_SIZE, Blake2b, Blake2bKeyed
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths for the differential sweep: 0 (the dd = 1 all-zero
 # block), 1 (tiny), 127/128/129 (the single-block edge — 128 is exactly one
@@ -71,6 +67,10 @@ _KAT_EMPTY_512 = bytes.fromhex(
     "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419"
     "d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
 )
+
+
+def _oracle_at(size: int, data: bytes) -> bytes:
+    return hashlib.blake2b(data, digest_size=size).digest()
 
 
 def _message(length: int, seed: int = 0) -> np.ndarray:
@@ -236,50 +236,47 @@ class Blake2bTracedTest(absltest.TestCase):
 
 
 class Blake2bByteHashTest(absltest.TestCase):
-    """The device row against the seam, and against its host partner."""
+    """The device row against the seam, and against `hashlib`."""
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h in (Blake2b(), HostBlake2b()):
-            with self.subTest(impl=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, MAX_DIGEST_SIZE)
-                self.assertIsInstance(h.fusion_path, FusionPath)
+        h = Blake2b()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, MAX_DIGEST_SIZE)
+        self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # Device GENERIC (pre-emitter, every backend), host HOST (every
-        # backend) — and the traceability tie to the return type: the device
-        # row returns an `Array` and takes a tracer, the host row reads bytes
-        # and never can (`byte_hash.py`'s rule). The (1, 3) message rides the
-        # "abc" vector's aval, so the plumbing check costs no fresh compile.
+        # GENERIC (pre-emitter, every backend), and the traceability tie to
+        # the return type: the row returns an `Array` and takes a tracer
+        # (`byte_hash.py`'s rule). The (1, 3) message rides the "abc"
+        # vector's aval, so the plumbing check costs no fresh compile.
         msg = np.zeros((1, 3), dtype=np.uint8)
-        device, host = Blake2b(), HostBlake2b()
+        device = Blake2b()
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
         self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
-        self.assertIs(host.fusion_path, FusionPath.HOST)
-        self.assertFalse(host.fusion_path.is_traceable)
-        self.assertIsInstance(host.digest(msg), np.ndarray)
 
-    def test_device_and_host_agree_across_sizes(self) -> None:
-        # The host-vs-device differential at the seam: the two rows must be
-        # one hash per digest size. (1, 3) rides the vector aval — the size
-        # sweep costs no fresh compile, per the trace pin above.
+    def test_device_matches_hashlib_across_sizes(self) -> None:
+        # The out-of-tree differential at the seam, per digest size. (1, 3)
+        # rides the vector aval — the size sweep costs no fresh compile, per
+        # the trace pin above.
         msg = _message(3, seed=5)[:1]
         for size in _SIZES:
             with self.subTest(size=size):
                 np.testing.assert_array_equal(
                     np.asarray(Blake2b(size).digest(msg)),
-                    HostBlake2b(size).digest(msg),
+                    oracle_digest(
+                        functools.partial(_oracle_at, size),
+                        size,
+                        msg,
+                    ),
                 )
 
     def test_digest_shape_and_dtype(self) -> None:
-        for h in (Blake2b(20), HostBlake2b(20)):
-            with self.subTest(impl=type(h).__name__):
-                out = np.asarray(h.digest(np.zeros((4, 1), dtype=np.uint8)))
-                self.assertEqual(out.shape, (4, 20))
-                self.assertEqual(out.dtype, np.uint8)
+        out = np.asarray(Blake2b(20).digest(np.zeros((4, 1), dtype=np.uint8)))
+        self.assertEqual(out.shape, (4, 20))
+        self.assertEqual(out.dtype, np.uint8)
 
     def test_value_identity_rides_the_digest_size(self) -> None:
         # By value over the length, like the host row and the SHAKE/BLAKE3
@@ -290,7 +287,6 @@ class Blake2bByteHashTest(absltest.TestCase):
         self.assertEqual(Blake2b(32), Blake2b(32))
         self.assertEqual(hash(Blake2b(32)), hash(Blake2b(32)))
         self.assertNotEqual(Blake2b(32), Blake2b(64))
-        self.assertNotEqual(Blake2b(32), HostBlake2b(32))
         self.assertNotEqual(Blake2b(32), object())
 
     def test_out_of_range_length_is_refused_at_construction(self) -> None:
@@ -310,7 +306,7 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(Blake2b(), 64), (HostBlake2b(), 64)]
+        rows: list[tuple[ByteHash, int]] = [(Blake2b(), 64)]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
             self.assertEqual(got.shape, (0, size))
@@ -477,11 +473,16 @@ class Blake2bKeyedRowTest(absltest.TestCase):
     def test_rows_satisfy_the_seam_and_agree(self) -> None:
         rows = np.frombuffer(b"abc", dtype=np.uint8).reshape(1, 3)
         device: ByteHash = Blake2bKeyed(_KAT_KEY, 32, salt=_SALT, person=_PERSON)
-        host: ByteHash = HostBlake2bKeyed(_KAT_KEY, 32, salt=_SALT, person=_PERSON)
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
-        self.assertIs(host.fusion_path, FusionPath.HOST)
         np.testing.assert_array_equal(
-            np.asarray(device.digest(rows)), np.asarray(host.digest(rows))
+            np.asarray(device.digest(rows)),
+            oracle_digest(
+                lambda b: hashlib.blake2b(
+                    b, digest_size=32, key=_KAT_KEY, salt=_SALT, person=_PERSON
+                ).digest(),
+                32,
+                rows,
+            ),
         )
 
     def test_the_key_rides_the_value_surface(self) -> None:
@@ -501,17 +502,14 @@ class Blake2bKeyedRowTest(absltest.TestCase):
 
     def test_salt_and_person_ride_the_unkeyed_rows_value_surface_too(self) -> None:
         self.assertNotEqual(Blake2b(32), Blake2b(32, person=b"ZcashPH"))
-        self.assertNotEqual(HostBlake2b(32), HostBlake2b(32, person=b"ZcashPH"))
         self.assertEqual(Blake2b(32, salt=_SALT), Blake2b(32, salt=_SALT))
 
     def test_an_empty_key_is_refused_rather_than_demoted(self) -> None:
         # Returning the unkeyed digest would hide a caller's bug: `kk` reaches
         # `h0`, so the two are different hashes and the caller asked for this
         # one.
-        for cls in (Blake2bKeyed, HostBlake2bKeyed):
-            with self.subTest(row=cls.__name__):
-                with self.assertRaisesRegex(ValueError, "key must be non-empty"):
-                    cls(b"", 32)
+        with self.assertRaisesRegex(ValueError, "key must be non-empty"):
+            Blake2bKeyed(b"", 32)
 
     def test_the_module_path_rejects_an_over_long_key(self) -> None:
         # `digest` is reachable without a row, so the bound has to hold there
@@ -527,7 +525,7 @@ class Blake2bKeyedRowTest(absltest.TestCase):
         # At construction, where the caller can still choose — not at the
         # first `digest`, which is the rule the unkeyed rows already follow
         # for `digest_size`.
-        for cls in (Blake2bKeyed, HostBlake2bKeyed):
+        for cls in (Blake2bKeyed,):
             with self.subTest(row=cls.__name__):
                 with self.assertRaisesRegex(ValueError, "salt"):
                     cls(b"k", 32, salt=b"x" * 17)
