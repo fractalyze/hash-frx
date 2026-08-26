@@ -32,8 +32,7 @@ from hash_frx.byte_hash import ByteHash, capacity
 from hash_frx.fusion import FusionPath
 from hash_frx.grostl import grostl
 from hash_frx.grostl.grostl import Grostl256
-from hash_frx.grostl.testing.host_grostl256 import HostGrostl256
-from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS
+from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS, grostl256
 from hash_frx.testing.jit_cache import assert_single_trace, assert_trace_growth
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 
@@ -54,6 +53,16 @@ def _message(length: int, seed: int = 0) -> np.ndarray:
     return rng.integers(0, 256, size=(4, length), dtype=np.uint8)
 
 
+def _oracle(msgs: np.ndarray) -> np.ndarray:
+    """The reference digest of every row, in order. The device call is
+    data-parallel over the batch and this is not, so the equality below is the
+    bulk-parallel claim as much as the value one."""
+    return np.array(
+        [np.frombuffer(grostl256(bytes(row)), dtype=np.uint8) for row in msgs],
+        dtype=np.uint8,
+    ).reshape(len(msgs), 32)
+
+
 class Grostl256KatTest(parameterized.TestCase):
     @parameterized.parameters(*((len(m), m, d) for m, d in KAT_VECTORS))
     def test_matches_the_final_round_kat(
@@ -66,15 +75,11 @@ class Grostl256KatTest(parameterized.TestCase):
     @parameterized.parameters(*_LENGTHS)
     def test_device_and_host_agree(self, length: int) -> None:
         # The differential partner issue #163 asks for: the device digest
-        # against the oracle-backed host row, across every padding boundary
-        # and a batch — not one convenient length. The host row loops the
-        # oracle per row (`byte_hash.host_digest`), so the batch equality is
-        # also the bulk-parallel claim: one data-parallel device call equals
-        # the per-message digests, in order.
+        # against the reference oracle, across every padding boundary and a
+        # batch — not one convenient length.
         msgs = _message(length)
         np.testing.assert_array_equal(
-            np.asarray(Grostl256().digest(msgs)),
-            np.asarray(HostGrostl256().digest(msgs)),
+            np.asarray(Grostl256().digest(msgs)), _oracle(msgs)
         )
 
 
@@ -91,7 +96,7 @@ class Grostl256CapacityTest(parameterized.TestCase):
         # padded at `LMAX` instead of `len`, would agree on a zero fill by
         # accident on at least the block-aligned cases.
         msgs = _message(length)
-        want = np.asarray(HostGrostl256().digest(msgs))
+        want = _oracle(msgs)
         # Exact fit and one far-wider buffer. The two middle widths this swept
         # before (`length + 1`, `length + 64`) made no claim these two do not,
         # and each distinct width is a fresh compile of the unrolled body — the
@@ -271,48 +276,36 @@ class Grostl256ByteHashTest(absltest.TestCase):
     """The two `ByteHash` implementations, against the seam."""
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h in (Grostl256(), HostGrostl256()):
-            with self.subTest(impl=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, 32)
-                self.assertIsInstance(h.fusion_path, FusionPath)
+        h = Grostl256()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, 32)
+        self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # Device DEDICATED where the CPU-only emitter is reachable and GENERIC
-        # elsewhere, host HOST on every backend — and the traceability tie to
-        # the return type: the device row returns an `Array` and takes a
-        # tracer, the host row reads bytes and never can (`byte_hash.py`'s
-        # rule).
+        # DEDICATED where the emitter is reachable and GENERIC elsewhere, and
+        # the traceability tie to the return type: the row returns an `Array`
+        # and takes a tracer (`byte_hash.py`'s rule).
         # A (1, 1) message: the KAT already compiled that aval, so the
         # plumbing check costs no fresh compile of the digest body.
         msg = np.zeros((1, 1), dtype=np.uint8)
-        device, host = Grostl256(), HostGrostl256()
+        device = Grostl256()
         self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER))
         self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
-        self.assertIs(host.fusion_path, FusionPath.HOST)
-        self.assertFalse(host.fusion_path.is_traceable)
-        self.assertIsInstance(host.digest(msg), np.ndarray)
 
     def test_digest_shape_and_dtype(self) -> None:
         # (4, 1) rides the differential sweep's aval — no fresh compile.
-        for h in (Grostl256(), HostGrostl256()):
-            with self.subTest(impl=type(h).__name__):
-                out = np.asarray(h.digest(np.zeros((4, 1), dtype=np.uint8)))
-                self.assertEqual(out.shape, (4, 32))
-                self.assertEqual(out.dtype, np.uint8)
+        out = np.asarray(Grostl256().digest(np.zeros((4, 1), dtype=np.uint8)))
+        self.assertEqual(out.shape, (4, 32))
+        self.assertEqual(out.dtype, np.uint8)
 
     def test_value_identity_is_by_type(self) -> None:
         # Param-free, so every instance of a type is equal and hashes alike —
-        # what keeps the seam re-trace-safe as pytree aux. The two are never
-        # equal, or swapping substrate would not re-trace.
-        for cls in (Grostl256, HostGrostl256):
-            with self.subTest(impl=cls.__name__):
-                self.assertEqual(cls(), cls())
-                self.assertEqual(hash(cls()), hash(cls()))
-        self.assertNotEqual(Grostl256(), HostGrostl256())
+        # what keeps the seam re-trace-safe as pytree aux.
+        self.assertEqual(Grostl256(), Grostl256())
+        self.assertEqual(hash(Grostl256()), hash(Grostl256()))
 
 
 class EmptyBatchTest(absltest.TestCase):

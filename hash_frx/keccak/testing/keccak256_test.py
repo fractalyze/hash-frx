@@ -4,7 +4,7 @@
 Separate from `byte_hashes_test` because Keccak-256 is not a FIPS 202 function and
 its golden cannot be `hashlib`: the standard library implements the *changed*
 padding only. The vectors below are the published Ethereum ones, and
-`HostKeccak256` recomputes them through an independent implementation.
+the reference sponge recomputes them through an independent implementation.
 
 **The vectors are the gate; the divergence assertions are diagnostics.** Wiring
 the domain byte to SHA-3's `0x06` turns this into a correct SHA3-256, which fails
@@ -37,7 +37,7 @@ from hash_frx.keccak.byte_hashes import (
     Keccak256,
     Sha3_256,
 )
-from hash_frx.keccak.testing.host_keccak256 import HostKeccak256
+from hash_frx.keccak.testing.reference import sponge
 
 # Published Keccak-256 vectors — the values every EVM implementation agrees on.
 _VECTORS = (
@@ -61,6 +61,23 @@ def _message(length: int) -> np.ndarray:
     return (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)).reshape(1, length)
 
 
+def _oracle(msgs: np.ndarray) -> np.ndarray:
+    """Keccak-256 of every row through the plain-Python reference sponge, which
+    `reference_test` anchors against `hashlib` on SHA3-256 and SHAKE — so it
+    carries the permutation, the absorb, the multi-rate padding and the squeeze,
+    and only the domain byte rests on the published vectors above."""
+    return np.array(
+        [
+            np.frombuffer(
+                sponge(bytes(row), KECCAK256_RATE, KECCAK256_SUFFIX, 32),
+                dtype=np.uint8,
+            )
+            for row in msgs
+        ],
+        dtype=np.uint8,
+    ).reshape(len(msgs), 32)
+
+
 class Keccak256Test(parameterized.TestCase):
     @parameterized.parameters(*_VECTORS)
     def test_matches_the_published_vectors(self, msg: bytes, expected: str) -> None:
@@ -69,12 +86,12 @@ class Keccak256Test(parameterized.TestCase):
         self.assertEqual(bytes(got).hex(), expected)
 
     @parameterized.parameters(*_LENGTHS)
-    def test_host_sibling_agrees_across_absorb_boundaries(self, length: int) -> None:
+    def test_agrees_with_the_oracle_across_absorb_boundaries(self, length: int) -> None:
+        # No published vector fills a rate block (136 B), so the boundaries the
+        # padding is most likely to get wrong are covered here rather than by
+        # the vectors above.
         msg = _message(length)
-        np.testing.assert_array_equal(
-            np.asarray(Keccak256().digest(msg)),
-            np.asarray(HostKeccak256().digest(msg)),
-        )
+        np.testing.assert_array_equal(np.asarray(Keccak256().digest(msg)), _oracle(msg))
 
     def test_sha3_and_keccak_disagree(self) -> None:
         # Diagnostic: names the cause when the domain byte is wrong, where the
@@ -109,15 +126,14 @@ class Keccak256Test(parameterized.TestCase):
 
 
 class SeamConformanceTest(absltest.TestCase):
-    def test_both_implementations_satisfy_the_byte_hash_protocol(self) -> None:
-        for h in (Keccak256(), HostKeccak256()):
-            with self.subTest(hash=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, 32)
+    def test_the_implementation_satisfies_the_byte_hash_protocol(self) -> None:
+        h = Keccak256()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, 32)
         # Keccak-256 differs from SHA3-256 in one padding byte and nothing else,
         # so it rides the same sponge marker and answers whatever this leg can
         # reach, which is what the shipped condition below is read for rather
-        # than restated. The host row never lowers.
+        # than restated.
         self.assertIs(
             Keccak256().fusion_path,
             (
@@ -126,7 +142,6 @@ class SeamConformanceTest(absltest.TestCase):
                 else FusionPath.GENERIC
             ),
         )
-        self.assertIs(HostKeccak256().fusion_path, FusionPath.HOST)
 
     def test_value_identity_keeps_the_seam_re_trace_safe(self) -> None:
         self.assertEqual(Keccak256(), Keccak256())
@@ -134,7 +149,6 @@ class SeamConformanceTest(absltest.TestCase):
         # Same rate, same output, different standard: a consumer holding one in
         # pytree aux must not confuse them.
         self.assertNotEqual(Keccak256(), Sha3_256())
-        self.assertNotEqual(Keccak256(), HostKeccak256())
 
 
 if __name__ == "__main__":

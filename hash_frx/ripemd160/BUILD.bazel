@@ -6,7 +6,7 @@ load("@rules_python//python:defs.bzl", "py_library")
 # `hash_frx.digest.ripemd160` marker plus the `Ripemd160` ByteHash row. A
 # standalone hash, not a Permutation; no zk_dtypes / x64 dependency. No host
 # row ships — OpenSSL 3 moved RIPEMD-160 to the legacy provider, so the
-# differential partner is testonly (//hash_frx/ripemd160/testing:host_ripemd160).
+# differential partner is testonly (//hash_frx/ripemd160/testing:reference).
 py_library(
     name = "ripemd160",
     srcs = [

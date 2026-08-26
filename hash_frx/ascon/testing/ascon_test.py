@@ -31,12 +31,12 @@ from frx import Array
 
 from hash_frx.ascon import ascon
 from hash_frx.ascon.ascon import ASCON_HASH256_DIGEST_SIZE, AsconHash256, AsconXof128
-from hash_frx.ascon.testing.host_ascon_hash256 import HostAsconHash256
 from hash_frx.ascon.testing.reference import (
     INITIAL_STATE,
     KAT_VECTORS,
     XOF_INITIAL_STATE,
     XOF_KAT_VECTORS,
+    ascon_hash256,
     ascon_xof128,
 )
 from hash_frx.byte_hash import ByteHash
@@ -57,6 +57,16 @@ def _message(length: int, seed: int = 0) -> np.ndarray:
     return rng.integers(0, 256, size=(4, length), dtype=np.uint8)
 
 
+def _oracle(msgs: np.ndarray) -> np.ndarray:
+    """The reference digest of every row, in order. The device call is
+    data-parallel over the batch and this is not, so the equality below is the
+    bulk-parallel claim as much as the value one."""
+    return np.array(
+        [np.frombuffer(ascon_hash256(bytes(row)), dtype=np.uint8) for row in msgs],
+        dtype=np.uint8,
+    ).reshape(len(msgs), 32)
+
+
 class AsconHash256KatTest(parameterized.TestCase):
     @parameterized.parameters(*((len(m), m, d) for m, d in KAT_VECTORS))
     def test_matches_the_sp800_232_kat(
@@ -69,15 +79,11 @@ class AsconHash256KatTest(parameterized.TestCase):
     @parameterized.parameters(*_LENGTHS)
     def test_device_and_host_agree(self, length: int) -> None:
         # The differential partner issue #188 asks for: the device digest
-        # against the oracle-backed host row, across every rate boundary and
-        # a batch — not one convenient length. The host row loops the oracle
-        # per row (`byte_hash.host_digest`), so the batch equality is also
-        # the bulk-parallel claim: one data-parallel device call equals the
-        # per-message digests, in order.
+        # against the reference oracle, across every rate boundary and a
+        # batch — not one convenient length.
         msgs = _message(length)
         np.testing.assert_array_equal(
-            np.asarray(AsconHash256().digest(msgs)),
-            np.asarray(HostAsconHash256().digest(msgs)),
+            np.asarray(AsconHash256().digest(msgs)), _oracle(msgs)
         )
 
 
@@ -180,47 +186,36 @@ class AsconHash256ByteHashTest(absltest.TestCase):
     """The two `ByteHash` implementations, against the seam."""
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h in (AsconHash256(), HostAsconHash256()):
-            with self.subTest(impl=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, 32)
-                self.assertIsInstance(h.fusion_path, FusionPath)
+        h = AsconHash256()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, 32)
+        self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # Device GENERIC (pre-emitter, every backend), host HOST (every
-        # backend) — and the traceability tie to the return type: the device
-        # row returns an `Array` and takes a tracer, the host row reads bytes
-        # and never can (`byte_hash.py`'s rule).
+        # GENERIC (pre-emitter, every backend), and the traceability tie to
+        # the return type: the row returns an `Array` and takes a tracer
+        # (`byte_hash.py`'s rule).
         # A (1, 1) message: the KAT sweep covers that aval, so the plumbing
         # check adds no distinct compile of the digest body.
         msg = np.zeros((1, 1), dtype=np.uint8)
-        device, host = AsconHash256(), HostAsconHash256()
+        device = AsconHash256()
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
         self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
-        self.assertIs(host.fusion_path, FusionPath.HOST)
-        self.assertFalse(host.fusion_path.is_traceable)
-        self.assertIsInstance(host.digest(msg), np.ndarray)
 
     def test_digest_shape_and_dtype(self) -> None:
         # (4, 1) rides the differential sweep's aval — no distinct compile.
-        for h in (AsconHash256(), HostAsconHash256()):
-            with self.subTest(impl=type(h).__name__):
-                out = np.asarray(h.digest(np.zeros((4, 1), dtype=np.uint8)))
-                self.assertEqual(out.shape, (4, 32))
-                self.assertEqual(out.dtype, np.uint8)
+        out = np.asarray(AsconHash256().digest(np.zeros((4, 1), dtype=np.uint8)))
+        self.assertEqual(out.shape, (4, 32))
+        self.assertEqual(out.dtype, np.uint8)
 
     def test_value_identity_is_by_type(self) -> None:
         # Param-free, so every instance of a type is equal and hashes alike —
-        # what keeps the seam re-trace-safe as pytree aux. The two are never
-        # equal, or swapping substrate would not re-trace.
-        for cls in (AsconHash256, HostAsconHash256):
-            with self.subTest(impl=cls.__name__):
-                self.assertEqual(cls(), cls())
-                self.assertEqual(hash(cls()), hash(cls()))
-        self.assertNotEqual(AsconHash256(), HostAsconHash256())
+        # what keeps the seam re-trace-safe as pytree aux.
+        self.assertEqual(AsconHash256(), AsconHash256())
+        self.assertEqual(hash(AsconHash256()), hash(AsconHash256()))
 
 
 class EmptyBatchTest(absltest.TestCase):
@@ -230,7 +225,6 @@ class EmptyBatchTest(absltest.TestCase):
     def test_zero_rows_digest_to_zero_rows(self) -> None:
         rows: list[tuple[ByteHash, int]] = [
             (AsconHash256(), 32),
-            (HostAsconHash256(), 32),
         ]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))

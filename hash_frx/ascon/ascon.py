@@ -336,11 +336,10 @@ class AsconHash256(DeviceRow):
     marker inlines, the bytes are the standard's, and an emitter landing
     flips the module flags and nothing here moves.
 
-    For batched hashing where the messages already live on the device. The
-    strictly-sequential caller's alternative is the testonly
-    `ascon.testing.host_ascon_hash256.HostAsconHash256` — pure-Python, so
-    unlike the SHA-2/SHA-3 host rows it does not ship (`hashlib` has no
-    Ascon)."""
+    For batched hashing where the messages already live on the device. A
+    strictly-sequential caller has no in-package alternative — `hashlib` has no
+    Ascon either — so it pays this row's dispatch and its compile per distinct
+    length."""
 
     digest_size = ASCON_HASH256_DIGEST_SIZE
 

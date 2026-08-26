@@ -80,24 +80,6 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
-# Testonly, unlike the shipped FIPS 202 host siblings: the stdlib has no
-# Keccak-256, so this one is the plain-python reference rather than a C library.
-py_library(
-    name = "host_keccak256",
-    testonly = True,
-    srcs = [
-        "__init__.py",
-        "host_keccak256.py",
-    ],
-    visibility = ["//hash_frx:__subpackages__"],
-    deps = [
-        ":reference",
-        "//hash_frx/keccak",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
 py_test(
     name = "keccak256_test",
     # Compile-heavy for the same reason as its siblings: a device digest inlines
@@ -105,7 +87,7 @@ py_test(
     size = "medium",
     srcs = ["keccak256_test.py"],
     deps = [
-        ":host_keccak256",
+        ":reference",
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx/keccak",

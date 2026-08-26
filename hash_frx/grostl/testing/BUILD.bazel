@@ -27,27 +27,6 @@ py_test(
     ],
 )
 
-# Testonly, unlike the SHA-2/SHA-3 host siblings: no C library implements
-# Grøstl, so this one loops the plain-python oracle — the differential partner
-# only, never a shipped fast path (the `keccak/testing:host_keccak256`
-# asymmetry, stated in the module docstring).
-py_library(
-    name = "host_grostl256",
-    testonly = True,
-    srcs = [
-        "__init__.py",
-        "host_grostl256.py",
-    ],
-    visibility = ["//hash_frx:__subpackages__"],
-    deps = [
-        ":reference",
-        "//hash_frx:byte_hash",
-        "//hash_frx/grostl",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
 py_test(
     name = "grostl_test",
     # Compile-heavy: the digest body splices two ten-round bitsliced
@@ -56,7 +35,6 @@ py_test(
     size = "large",
     srcs = ["grostl_test.py"],
     deps = [
-        ":host_grostl256",
         ":reference",
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
