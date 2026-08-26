@@ -182,10 +182,22 @@ merge. Its block count is read at runtime through a `lax.while_loop` so a
 concrete and a symbolic `n` lower alike, where both byte sponges are
 Python-unrolled over static counts; it also has no batch axis, no padding, and a
 single truncating read instead of an iterated squeeze. A body parameterized on
-which loop it is would be two bodies behind one name, so the two schedules are
+which loop it is would be two bodies behind one name, so the schedules are
 siblings in `extension/sponge.py`. The same split holds one layer down: field
 trip counts are runtime operands where byte ones are static, so the XLA envelopes
 keep both forms too.
+
+A **third** sibling, `scanned_absorb`, walks a static count with a `lax.scan`.
+It exists because "static" and "small" are two claims: a round count is both, so
+unrolling it is right, but an absorb's count is `len(message) / rate`, which
+nothing bounds. Measured on `Sha3_256`, the jaxpr grows ~22 eqns per block while
+the compile goes 5.9 s at 16 blocks, 84.6 s at 32 and 137.0 s at 64. Which
+schedule a caller may take is decided by **where its marked region sits**, not by
+the block count alone: a caller whose region is the whole hash cannot contain a
+`while` and must unroll, while one whose region is the permutation has the loop
+outside it and loses nothing. `sponge.py` already runs both arrangements — the
+`while_loop` absorb on the generic path, the whole-hash region on the dedicated
+one.
 
 ### Tree
 
