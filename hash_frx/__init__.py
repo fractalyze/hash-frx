@@ -69,6 +69,7 @@ _EXPORTS: dict[str, str] = {
     "MarkerKind": "hash_frx.markers",
     # -- primitives: permutations ------------------------------------------
     "AsconP": "hash_frx.ascon.permutation",
+    "BabyBear16": "hash_frx.poseidon2.standard",
     "KeccakF1600": "hash_frx.keccak.permutation",
     "KoalaBear16": "hash_frx.poseidon2.standard",
     "Poseidon": "hash_frx.poseidon.poseidon",
@@ -76,6 +77,7 @@ _EXPORTS: dict[str, str] = {
     "SparsePoseidon": "hash_frx.poseidon.sparse",
     "Vision": "hash_frx.vision.vision",
     # -- primitive parameters ----------------------------------------------
+    "BABYBEAR16_PARAMS": "hash_frx.poseidon2.standard",
     "KECCAK256_RATE": "hash_frx.keccak.byte_hashes",
     "KOALABEAR16_PARAMS": "hash_frx.poseidon2.standard",
     "Poseidon2Params": "hash_frx.poseidon2.params",
@@ -274,8 +276,12 @@ if TYPE_CHECKING:
     )
     from hash_frx.poseidon2.poseidon2 import Poseidon2 as Poseidon2
     from hash_frx.poseidon2.standard import (
+        BABYBEAR16_PARAMS as BABYBEAR16_PARAMS,
+    )
+    from hash_frx.poseidon2.standard import (
         KOALABEAR16_PARAMS as KOALABEAR16_PARAMS,
     )
+    from hash_frx.poseidon2.standard import BabyBear16 as BabyBear16
     from hash_frx.poseidon2.standard import KoalaBear16 as KoalaBear16
     from hash_frx.ripemd160.ripemd160 import Ripemd160 as Ripemd160
     from hash_frx.sha256.sha256 import HostSha256 as HostSha256

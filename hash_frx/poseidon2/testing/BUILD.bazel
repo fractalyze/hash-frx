@@ -3,6 +3,22 @@ load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_library(
+    name = "babybear16",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "babybear16.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [
+        "//hash_frx/poseidon2",
+        "//hash_frx/poseidon2:standard",
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_library(
     name = "koalabear16",
     testonly = True,
     srcs = [
@@ -23,6 +39,7 @@ py_test(
     size = "medium",
     srcs = ["poseidon2_test.py"],
     deps = [
+        ":babybear16",
         ":koalabear16",
         "//hash_frx:_composite",
         "//hash_frx/testing:jit_cache",
