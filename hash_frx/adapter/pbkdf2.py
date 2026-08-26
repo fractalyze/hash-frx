@@ -40,10 +40,9 @@ body in the loop instead: identical bytes, four compressions per iteration
 (the pad blocks re-hashed each time), the §4 key processing still hoisted
 outside the trip count.
 
-**Host rows are refused.** The c-chain must trace (`fori_loop`), and a host
-row's `digest` reads bytes eagerly — it cannot thread a traced carry. A
-strictly-sequential host caller already has the right tool in
-`hashlib.pbkdf2_hmac`, which is also this module's differential oracle.
+**A strictly-sequential caller wants `hashlib.pbkdf2_hmac` instead**, which is
+also this module's differential oracle: the c-chain traces (`fori_loop`), so it
+buys nothing for a caller deriving one key from one password.
 
 Deliberately NOT here (the #202 scope line): scrypt and Argon2. Their
 memory-hardness — per-instance MB..GB tables with data-dependent indexing —

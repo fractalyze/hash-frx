@@ -75,12 +75,6 @@ class FusionPath(enum.Enum):
       region marker, or a dedicated name that inlines unrecognized. Right bytes,
       no dedicated kernel.
 
-    **It carried a third state, ``HOST``**, for rows backed by a host library
-    over ``np.ndarray``, and a second question — whether a call may sit inside a
-    traced region — which only that state could answer ``False``. Those rows are
-    gone (#324), so traceability is no longer a question a value can differ on
-    and the return type answers it for every row alike.
-
     Derived per (hash, backend) at construction — the emitter switch is a
     property of the pin and the backend, so it is never a class constant
     (`keccak.permutation._routes_to_dedicated_emitter` is the pattern).
@@ -95,7 +89,7 @@ class FusionPath(enum.Enum):
         kernel, the generic region marker is not. Deriving the path
         from the marker actually chosen is what keeps the two from drifting
         when a routing gate grows another case."""
-        return cls.DEDICATED if name != FUSED_REGION_MARKER else cls.GENERIC
+        return cls.from_routing(name != FUSED_REGION_MARKER)
 
     @classmethod
     def from_routing(cls, routed: bool) -> "FusionPath":

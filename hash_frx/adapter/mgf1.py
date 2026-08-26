@@ -87,8 +87,8 @@ def _counter_block(index: int) -> np.ndarray:
 class Mgf1(Row):
     """`ByteHash` for MGF1 over `byte_hash`, read out to `output_size` bytes.
 
-    byte_hash : the underlying hash `H`. Any `ByteHash` — a host row works
-        eagerly, a device row also inside a consumer's `@jit`.
+    byte_hash : the underlying hash `H`. Any `ByteHash`; it takes a tracer, so
+        this works inside a consumer's `@jit`.
     output_size : bytes of mask, at most `2^32 * hLen` (RFC 8017 B.2.1).
 
     `digest(seed)` takes the seam's uint8 `[B, S]` batch and returns

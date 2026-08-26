@@ -77,10 +77,9 @@ class RowCase(NamedTuple):
     variants: tuple[Callable[[], Any], ...] = ()
 
 
-# Every shipped row, in one table. Which of the buckets below a row lands in is
-# NOT restated here: each derives from the row itself, so the conformance suite
-# asserts "a `DeviceRow` returns an `Array`" — the actual law — rather than "the
-# rows I happened to label device do".
+# Every shipped row, in one table. The conformance suite asserts the law over
+# it — every row returns an `Array` — rather than over a list of rows anyone
+# labelled by hand.
 ALL_ROWS: tuple[RowCase, ...] = (
     RowCase("Sha256", Sha256),
     RowCase("Sha512", Sha512),

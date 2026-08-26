@@ -91,8 +91,8 @@ without naming one.
 | Poseidon2 — permutation, parameter surface, and its two linear layers                       | [`poseidon2/`](../hash_frx/poseidon2)                |
 | Classic Poseidon — the naive Hades schedule and the optimized-sparse refactor of it          | [`poseidon/`](../hash_frx/poseidon)                  |
 | Vision — the binary-field Marvellous permutation (Vision Mark-32 over the GF(2^32) tower)    | [`vision/`](../hash_frx/vision)                      |
-| SHA-256 — batched digest, incremental midstate, and the device / host `ByteHash` pair        | [`sha256/sha256.py`](../hash_frx/sha256/sha256.py)                 |
-| SHA-512 — the 64-bit SHA-2 sibling over uint32 half pairs: batched digest, incremental midstate, the device / host `ByteHash` pair, and the truncated variants SHA-384 and SHA-512/256 as IV rows on the same marker | [`sha512/sha512.py`](../hash_frx/sha512/sha512.py)                 |
+| SHA-256 — batched digest, incremental midstate, and the `ByteHash` row        | [`sha256/sha256.py`](../hash_frx/sha256/sha256.py)                 |
+| SHA-512 — the 64-bit SHA-2 sibling over uint32 half pairs: batched digest, incremental midstate, the `ByteHash` row, and the truncated variants SHA-384 and SHA-512/256 as IV rows on the same marker | [`sha512/sha512.py`](../hash_frx/sha512/sha512.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
 | BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/modes.py`](../hash_frx/blake3/modes.py), [`blake3/rows.py`](../hash_frx/blake3/rows.py) |
 | BLAKE2b — the HAIFA `ByteHash` over 64-bit half pairs, behind its digest marker | [`blake2b/`](../hash_frx/blake2b) |
@@ -100,8 +100,8 @@ without naming one.
 | BLAKE2s — the 32-bit RFC 7693 sibling at native uint32, on its own digest marker | [`blake2s/blake2s.py`](../hash_frx/blake2s/blake2s.py) |
 | SM3 — the GB/T 32905 ShangMi hash, SHA-256's structural cousin, on its own digest marker | [`sm3/sm3.py`](../hash_frx/sm3/sm3.py) |
 | Grøstl-256 — the AES-round Merkle–Damgård `ByteHash` over GF(2^8), with a bitsliced S-box | [`grostl/`](../hash_frx/grostl) |
-| Ascon-Hash256 and Ascon-XOF128 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` rows over uint32 word halves, plus Ascon-p[12] as a `Permutation`, with a testonly host partner | [`ascon/`](../hash_frx/ascon) |
-| RIPEMD-160 — the little-endian Merkle–Damgård `ByteHash` (Bitcoin HASH160's second half), with a testonly host partner | [`ripemd160/ripemd160.py`](../hash_frx/ripemd160/ripemd160.py) |
+| Ascon-Hash256 and Ascon-XOF128 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` rows over uint32 word halves, plus Ascon-p[12] as a `Permutation` | [`ascon/`](../hash_frx/ascon) |
+| RIPEMD-160 — the little-endian Merkle–Damgård `ByteHash` (Bitcoin HASH160's second half) | [`ripemd160/ripemd160.py`](../hash_frx/ripemd160/ripemd160.py) |
 | SHA3-256, SHA3-512, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
 
 ## Fusion machinery
@@ -212,8 +212,8 @@ values rather than only shape raises this question by construction — and getti
 it wrong there is a failed compile rather than a lost kernel.
 
 A permutation advertises which path it is on through `fusion_path`
-(`hash_frx.fusion.FusionPath`: `DEDICATED` / `GENERIC` / `HOST`, the last only
-on the byte seam), and hands out its operand layout through
+(`hash_frx.fusion.FusionPath`: `DEDICATED` or `GENERIC`), and hands out its
+operand layout through
 `fused_region_spec` — that pair is
 what lets a consumer wrap a whole computation as one region without naming the
 hash underneath it.

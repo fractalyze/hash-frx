@@ -51,8 +51,8 @@ class ByteHash(Protocol):
     # backend.
     fusion_path: FusionPath
 
-    # Supply it as a stored attribute — `DeviceRow.__init__`'s assignment or
-    # a class constant — and not as a read-only `@property`. Declared
+    # Supply it as a stored attribute — `DeviceRow.__init__`'s assignment —
+    # and not as a read-only `@property`. Declared
     # here as a mutable attribute, which a property does not satisfy, so a row
     # that delegates through one stops being a `ByteHash` at all. The seam
     # conformance pin every implementation module carries
@@ -101,7 +101,7 @@ class Row:
     """
 
     # `fusion_path` is deliberately NOT declared here: `DeviceRow`
-    # each supply their own, and leaving it off is what lets an adapter that has
+    # supplies its own, and leaving it off is what lets an adapter that has
     # no fusion path at all — `Hmac` — share the equality contract rather than
     # keep a thirty-third copy of it.
     digest_size: int

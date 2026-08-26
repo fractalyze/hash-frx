@@ -32,8 +32,8 @@ them is "copy the family next door":
    [`compression.py`](../../hash_frx/compression.py). If your family needs a
    parameter the rule does not carry, add the axis to the rule and pin it with a
    vector that fails when the axis is set wrong — do not fork the rule.
-3. **Add the rows.** A device row and, where
-   Register the marker name in [`markers.py`](../../hash_frx/markers.py),
+3. **Add the row.** Register the marker name in
+   [`markers.py`](../../hash_frx/markers.py),
    override `_parameters()`, and end the module with its
    [seam conformance pin](#seam-conformance-pins).
 

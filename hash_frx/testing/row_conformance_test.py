@@ -122,8 +122,8 @@ class RowSeamTest(parameterized.TestCase):
     @parameterized.named_parameters(*_named(BYTE_HASH_ROWS))
     def test_every_byte_hash_returns_a_device_array(self, case: RowCase) -> None:
         # The seam's own law (`byte_hash.ByteHash.digest`): every row is a
-        # device row, so every `digest` hands back an `Array`. The case below
-        # says it for rows on `DeviceRow`; this reaches the ones on no base —
+        # device row, so every `digest` hands back an `Array`. Asserted over
+        # the byte-hash registry so it reaches the rows on no base too —
         # `Mgf1` is a byte hash on neither, and is the row most able to
         # disagree, its `fusion_path` being delegated rather than its own.
         row = case.make()
