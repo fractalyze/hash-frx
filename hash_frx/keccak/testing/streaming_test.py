@@ -42,6 +42,7 @@ from hash_frx.keccak.streaming import (
     shake256_init,
     shake_init,
 )
+from hash_frx.testing.marker_recognized import emitted_composites
 
 # Long enough to span several blocks at either rate.
 _MESSAGE = bytes((i * 7 + 3) & 0xFF for i in range(400))
@@ -73,19 +74,14 @@ def _squeeze_once(init: _Init, chunks: list[bytes], nbytes: int) -> bytes:
     return bytes(np.asarray(out))
 
 
-_STATE_ELEMS = 50
-
-
-def _marked_permutes(text: str) -> int:
-    """Marked Keccak-f regions in a lowered module, whichever spelling this leg
-    routes to — `SqueezePermutationCountTest` counts the same two."""
-    return text.count('stablehlo.composite "hash_frx.perm.keccak_f"') + text.count(
-        'stablehlo.composite "zorch.fused_region"'
-    )
-
-
 def _squeeze_blocks_lowering(rate: int, nblocks: int) -> str:
-    squeezer = ShakeBlockSqueeze(fnp.zeros(_STATE_ELEMS, dtype=fnp.uint32), rate)
+    """The lowered module for a whole-block squeeze, absorb kept out of it.
+
+    The squeezer is built eagerly and lowered as an argument, so the module holds
+    the squeeze alone — the shape `SqueezePermutationCountTest` uses for the
+    general squeezer.
+    """
+    squeezer = shake_init(rate).finalize_blocks()
     return frx.jit(lambda s: s.squeeze_blocks(nblocks)).lower(squeezer).as_text()
 
 
@@ -248,19 +244,15 @@ class ShakeBlockSqueezeTest(parameterized.TestCase):
     ) -> None:
         for nblocks in (1, 2, 3):
             with self.subTest(nblocks=nblocks):
-                _, wide = (
-                    _absorb_all(init, [_MESSAGE]).finalize().squeeze(nblocks * rate)
-                )
-                _, narrow = (
+                wide = _squeeze_once(init, [_MESSAGE], nblocks * rate)
+                _, out = (
                     _absorb_all(init, [_MESSAGE])
                     .finalize_blocks()
                     .squeeze_blocks(nblocks)
                 )
-                np.testing.assert_array_equal(np.asarray(narrow), np.asarray(wide))
-                self.assertEqual(
-                    bytes(np.asarray(narrow)),
-                    reference(_MESSAGE).digest(nblocks * rate),
-                )
+                narrow = bytes(np.asarray(out))
+                self.assertEqual(narrow, wide)
+                self.assertEqual(narrow, reference(_MESSAGE).digest(nblocks * rate))
 
     @parameterized.parameters(*_CASES)
     def test_k_blocks_cost_k_permutations(
@@ -270,8 +262,11 @@ class ShakeBlockSqueezeTest(parameterized.TestCase):
         # block is the one that leaves the carry pointing at the next.
         for nblocks in (1, 2, 3):
             with self.subTest(nblocks=nblocks):
-                text = _squeeze_blocks_lowering(rate, nblocks)
-                self.assertEqual(_marked_permutes(text), nblocks)
+                squeezer = shake_init(rate).finalize_blocks()
+                emitted = emitted_composites(
+                    lambda s: s.squeeze_blocks(nblocks), squeezer
+                )
+                self.assertEqual(len(emitted), nblocks)
 
     @parameterized.parameters(*_CASES)
     def test_the_offset_costs_are_gone(
@@ -288,9 +283,7 @@ class ShakeBlockSqueezeTest(parameterized.TestCase):
         self.assertNotIn("dynamic_slice", narrow)
         self.assertNotIn("dynamic-slice", narrow)
 
-        squeezer = ShakeSqueeze(
-            fnp.zeros(_STATE_ELEMS, dtype=fnp.uint32), fnp.int32(0), rate
-        )
+        squeezer = shake_init(rate).finalize()
         wide = frx.jit(lambda s: s.squeeze(2 * rate)).lower(squeezer).as_text()
         self.assertLess(
             narrow.count("stablehlo.select"), wide.count("stablehlo.select")
@@ -303,8 +296,8 @@ class ShakeBlockSqueezeTest(parameterized.TestCase):
         # The point of a distinct type rather than a view: the sampler's scan
         # carry is the squeezer, so the offset has to leave the TREEDEF, not
         # just go unread.
-        blocks = _absorb_all(init, [_MESSAGE]).finalize_blocks()
-        wide = _absorb_all(init, [_MESSAGE]).finalize()
+        blocks = init().finalize_blocks()
+        wide = init().finalize()
         self.assertNotEqual(
             tree_util.tree_structure(blocks), tree_util.tree_structure(wide)
         )

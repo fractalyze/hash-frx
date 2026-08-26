@@ -34,10 +34,8 @@ glue around it lowers to ordinary `gather`/`dynamic_slice` exactly as
 
 **A block-aligned caller need not pay for the offset at all.**
 `ShakeBlockSqueeze`, reached from `ShakeAbsorb.finalize_blocks`, drops the field
-rather than leaving it at zero: with no offset there is no `dynamic_slice` on
-the output and no chain-select on the carry, which at width 50 is ~98 selects a
-call. A rejection sampler is that caller, and its `lax.scan` carry is a squeezer,
-so the field is not merely unused there — it is in the carry.
+rather than leaving it at zero. What that saves, and why the field cannot simply
+be pinned to zero in place, is on the class.
 
 **The upper bound costs permutations, and that is the price of a traced
 counter.** An absorb runs the fold `ceil((rate - 1 + L) / rate)` times where a
@@ -58,7 +56,7 @@ import frx.numpy as fnp
 from frx import Array, lax
 from frx.tree_util import register_dataclass
 
-from hash_frx.extension.sponge import squeeze_blocks
+from hash_frx.extension.sponge import squeeze_blocks as _blocks_for_bytes
 from hash_frx.keccak.byte_hashes import (
     SHAKE128_RATE,
     SHAKE256_RATE,
@@ -81,9 +79,14 @@ def _absorb_block(state: Array, block_bytes: Array) -> Array:
     return _PERMUTE(_xor_into_rate(state, pack_le(block_bytes)))
 
 
+def _rate_words(state: Array, rate: int) -> Array:
+    """The state's rate prefix, still packed — one squeeze block as words."""
+    return state[: rate // BYTES_PER_WORD]
+
+
 def _rate_bytes(state: Array, rate: int) -> Array:
     """The state's rate prefix as bytes — one squeeze block."""
-    return unpack_le(state[: rate // BYTES_PER_WORD])
+    return unpack_le(_rate_words(state, rate))
 
 
 @partial(
@@ -183,17 +186,16 @@ class ShakeAbsorb:
 
         Returns the general squeezer, which takes arbitrary byte counts. A
         caller that only ever takes whole rate blocks — a rejection sampler —
-        wants `finalize_blocks` instead: the offset this one carries is what
-        costs it a `dynamic_slice` and a select over all 50 lanes per call.
+        wants `finalize_blocks` instead, for the reasons on `ShakeBlockSqueeze`.
         """
-        return ShakeSqueeze(self._padded_state(), fnp.int32(0), self.rate)
+        return self.finalize_blocks().widen()
 
     def finalize_blocks(self) -> "ShakeBlockSqueeze":
         """`finalize`, handing back the whole-block squeezer.
 
-        The narrow type is reachable only from here, and that is the point: its
-        soundness is the offset being zero, which holds by construction after a
-        pad-and-absorb and cannot be checked once the offset is traced.
+        The narrow type is reachable only from here, and that is the point —
+        see `ShakeBlockSqueeze` for why that is a constraint rather than an
+        accident of the API.
         """
         return ShakeBlockSqueeze(self._padded_state(), self.rate)
 
@@ -236,7 +238,7 @@ class ShakeSqueeze:
         # unconditionally ran one dead permutation on every other length —
         # notably the whole-block squeeze a rejection sampler loops on — that
         # the traced select kept XLA from removing.
-        upper = squeeze_blocks(rate - 1 + nbytes, rate)
+        upper = _blocks_for_bytes(rate - 1 + nbytes, rate)
         nperms = (rate - 1 + nbytes) // rate
         state = self.state
         chain = [state]
@@ -280,8 +282,10 @@ class ShakeBlockSqueeze:
       permute.
 
     Measured at rate 168, the schedule around the permutation shrinks from 41
-    jaxpr equations to 16 for a one-block squeeze (95 to 65 at four), and the
-    lowered module loses the `dynamic_slice` and four `select`s. It does NOT
+    jaxpr equations to 16 for a one-block squeeze, and from 95 to 23 at four —
+    the gap widens with the block count because this collects words and unpacks
+    once where the general form unpacks per block. The lowered module also loses
+    the `dynamic_slice` and four `select`s. It does NOT
     change the permutation count, which #218 already made minimal, and the
     lowered op count moves ~2% because the permutation dominates it — the win is
     in what a caller re-traces per shape and carries per iteration, not in the
@@ -317,11 +321,15 @@ class ShakeBlockSqueeze:
         if nblocks < 1:
             raise ValueError(f"nblocks ({nblocks}) must be >= 1")
         state = self.state
-        blocks = []
+        words = []
         for _ in range(nblocks):
-            blocks.append(_rate_bytes(state, self.rate))
+            words.append(_rate_words(state, self.rate))
             state = _PERMUTE(state)
-        out = blocks[0] if nblocks == 1 else fnp.concatenate(blocks)
+        # Collected as words and unpacked once rather than per block, which is
+        # the rule `keccak.sponge._absorb_squeeze` states for the same reason:
+        # `unpack_le` is 14 equations however wide its operand, so calling it in
+        # the loop multiplies them by `nblocks` for identical bytes.
+        out = unpack_le(words[0] if nblocks == 1 else fnp.concatenate(words))
         return ShakeBlockSqueeze(state, self.rate), out
 
     def widen(self) -> ShakeSqueeze:
@@ -331,6 +339,13 @@ class ShakeBlockSqueeze:
         zero; the reverse needs an offset that is traced, and a narrowing that
         cannot check its own precondition is one that pushes a silent wrong
         answer onto the caller.
+
+        Not free: the offset it gains is zero but TRACED, so the general
+        schedule re-derives its block count from `rate - 1 + nbytes` and the
+        `dynamic_slice` and select chain come back. At rate 168 a 37-byte tail
+        through here costs one permutation the same read off a static offset
+        would not. That is the price of one escape hatch rather than a second
+        byte-taking method, and it is worth paying only for a tail.
         """
         return ShakeSqueeze(self.state, fnp.int32(0), self.rate)
 

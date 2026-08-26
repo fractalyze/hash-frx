@@ -155,6 +155,14 @@ def squeeze(
 
     Assumes the absorb's final permutation has already run, which every schedule
     here guarantees.
+
+    **This is the TERMINATING squeeze**, which is why no permutation follows the
+    last read. A RESUMABLE one ends with that permutation instead, because its
+    carry has to point at the next block rather than at the one just returned —
+    `keccak.streaming.ShakeBlockSqueeze.squeeze_blocks` is that shape, and it
+    does not route through here. Worth naming because a trailing permute reads
+    like the dead one this rule forbids, and a genuinely dead one was removed
+    from the sibling schedule once already.
     """
     out: list[R] = []
     for i in range(squeezes):
