@@ -89,13 +89,6 @@ _EXPORTS: dict[str, str] = {
     "default_external_matrix": "hash_frx.poseidon2.params",
     "vision_mark32_params": "hash_frx.vision.params",
     # -- extensions and the constructions over them ------------------------
-    # The sponge schedules a consumer outside this package cannot otherwise
-    # reach. `absorb_squeeze` and `field_absorb` stay internal until one asks:
-    # neither is reusable by a caller whose marked region is the permutation,
-    # which is the case that brought these three out (`extension/sponge.py`).
-    "scanned_absorb": "hash_frx.extension.sponge",
-    "squeeze": "hash_frx.extension.sponge",
-    "squeeze_blocks": "hash_frx.extension.sponge",
     "Compression": "hash_frx.compression",
     "CompressionParams": "hash_frx.compression",
     "DEFAULT_CONVENTION": "hash_frx.duplex_sponge",
@@ -103,6 +96,9 @@ _EXPORTS: dict[str, str] = {
     "DuplexSponge": "hash_frx.duplex_sponge",
     "RateLanes": "hash_frx.duplex_sponge",
     "SpillPermute": "hash_frx.duplex_sponge",
+    "scanned_absorb": "hash_frx.extension.sponge",
+    "squeeze": "hash_frx.extension.sponge",
+    "squeeze_blocks": "hash_frx.extension.sponge",
     "KeccakSponge": "hash_frx.keccak.sponge",
     "Sponge": "hash_frx.sponge",
     "SpongeChaining": "hash_frx.sponge",

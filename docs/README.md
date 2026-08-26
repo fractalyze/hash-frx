@@ -58,7 +58,7 @@ a primitive, since padding is host arithmetic on the message.
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | Merkle–Damgård over a compression function — the block chain the seven MD families share, the padded-region helper, and the streaming midstate over it | [`extension/md.py`](../hash_frx/extension/md.py) |
 | How a message becomes whole blocks — `PadRule` for the Merkle–Damgård families, `SpongePad` for the sponges | [`extension/pad.py`](../hash_frx/extension/pad.py) |
-| The sponge schedules themselves — the byte one over static counts, the field one over a runtime count, and why they are two | [`extension/sponge.py`](../hash_frx/extension/sponge.py) |
+| The sponge schedules themselves — a static count unrolled, a runtime count in a `while`, a large static count in a `scan`, and why the block contract is what separates them | [`extension/sponge.py`](../hash_frx/extension/sponge.py) |
 | The tree schedule over a compression function — the unit ceiling, the intra-chunk chain, and why bottom-up pairing is the spec's own tree | [`extension/tree.py`](../hash_frx/extension/tree.py) |
 | One-shot sponge hash over a `Permutation` — either chaining rule, selected per call | [`sponge.py`](../hash_frx/sponge.py)                 |
 | Interleaved absorb/squeeze with add-mode absorb over a `Permutation`, for a classic Fiat-Shamir prover | [`duplex_sponge.py`](../hash_frx/duplex_sponge.py)   |
@@ -141,7 +141,12 @@ constraint is what shapes the code — the authoring rules it forces are in
 (`hash_frx/markers.py` is the registry). Each goes to a
 dedicated emitter that owns its own operand ABI and, unlike the generic path,
 tolerates reductions and calls; the recognizers also still accept the
-pre-namespace spellings until they retire.
+pre-namespace spellings until they retire. Whether one tolerates **control
+flow** is likewise its ABI's to say rather than the contract's:
+`hash_frx.digest.field_sponge` carries a `stablehlo.while` for its runtime absorb
+length ([`sponge.py`](../hash_frx/sponge.py)), where `keccak_sponge` does not. A
+loop *around* a marked region is always fine — only a loop inside a
+*generically* marked body is the bug `CLAUDE.md` names.
 
 **Operation-named** — `hash_frx.permute`, a single segment with no kind prefix.
 It names the OPERATION and carries WHICH primitive runs as the `permutation`

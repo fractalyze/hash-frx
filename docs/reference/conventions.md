@@ -59,7 +59,13 @@ Python reviewer would prefer for a lowering that stays one kernel.
 
 - **A round loop is an unrolled Python `for`.** Round counts are static and
   small, and `lax.scan` lowers to a `stablehlo.while` — a control-flow boundary
-  the region cannot contain.
+  a generically marked region cannot contain.
+  Read "static **and** small" strictly: it is the round loop this licenses, not
+  every static count. A sponge's block count is static and *unbounded*, and
+  unrolling it grows the graph past the compile cliff, so the schedules in
+  [`extension/sponge.py`](../../hash_frx/extension/sponge.py) offer a `while` and
+  a `scan` form beside the unrolled one. Which a caller may take is its
+  emitter's question, not this bullet's — see the fusion contract.
 - **A linear layer is an unrolled sum of column-scaled lanes**
   ([`linear.py`](../../hash_frx/linear.py)), never `fnp.dot` or `fnp.sum` (a
   reduction, which is the `kInput` fusion boundary) and never a dynamic index (a

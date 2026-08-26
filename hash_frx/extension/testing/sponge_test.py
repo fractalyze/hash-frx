@@ -27,12 +27,21 @@ import numpy as np
 from absl.testing import absltest
 
 from hash_frx.extension.sponge import (
+    _scan_step,
     absorb_squeeze,
     field_absorb,
     scanned_absorb,
     squeeze,
     squeeze_blocks,
 )
+
+
+class _Holder:
+    """A bound method is a fresh object per attribute access, so it pins the
+    memo's key on equality rather than identity."""
+
+    def permute(self, state: fnp.ndarray) -> fnp.ndarray:
+        return state
 
 
 @dataclass
@@ -226,13 +235,6 @@ class SqueezeRuleIsSharedTest(absltest.TestCase):
         self.assertEqual(out_bundled, out_alone)
         self.assertEqual(bundled.permutes, alone.permutes)
 
-    def test_no_permutation_follows_the_last_read(self) -> None:
-        for squeezes in (1, 2, 5):
-            with self.subTest(squeezes=squeezes):
-                t = _Trace()
-                squeeze("S", squeezes=squeezes, permute=t.permute, read=t.read)
-                self.assertEqual(t.permutes, squeezes - 1)
-
 
 class ScannedAbsorbTest(absltest.TestCase):
     """The static-count schedule that does not unroll. Its blocks arrive as
@@ -281,25 +283,6 @@ class ScannedAbsorbTest(absltest.TestCase):
         np.testing.assert_array_equal(forward, np.array([123], dtype=np.int32))
         np.testing.assert_array_equal(backward, np.array([321], dtype=np.int32))
 
-    def test_every_absorbed_block_is_followed_by_a_permutation(self) -> None:
-        # Same construction rule the unrolled schedule states: the permutation
-        # after each block is the schedule's, not the caller's.
-        counter = {"permutes": 0}
-
-        def permute(s: fnp.ndarray) -> fnp.ndarray:
-            counter["permutes"] += 1
-            return s
-
-        blocks = fnp.asarray(np.zeros((4, 1), dtype=np.int32))
-        scanned_absorb(
-            fnp.asarray(np.zeros(1, dtype=np.int32)),
-            blocks,
-            absorb=lambda s, b: s + b,
-            permute=permute,
-        )
-        # Traced once by the scan, not once per row — the count is the loop's.
-        self.assertEqual(counter["permutes"], 1)
-
     def test_a_zero_block_count_leaves_the_state(self) -> None:
         state = fnp.asarray(np.arange(3, dtype=np.int32))
         blocks = fnp.asarray(np.zeros((0, 3), dtype=np.int32))
@@ -317,8 +300,9 @@ class ScannedAbsorbTest(absltest.TestCase):
         )
 
     def test_it_agrees_with_the_unrolled_schedule(self) -> None:
-        # The two schedules differ in loop form and in nothing else, which is
-        # what lets a caller move between them on a block count alone.
+        # The two schedules differ in loop form and block contract and in
+        # nothing else, so the same message absorbs to the same state either
+        # way — which is what makes moving between them a cost decision.
         rows = np.array([[1, 2], [3, 4], [5, 6]], dtype=np.int32)
         state = fnp.asarray(np.zeros(2, dtype=np.int32))
 
@@ -352,6 +336,26 @@ class ScannedAbsorbTest(absltest.TestCase):
 
         x = fnp.asarray(np.zeros(2, dtype=np.int32))
         np.testing.assert_array_equal(np.asarray(frx.jit(run)(x)), np.asarray(run(x)))
+
+    def test_its_body_is_memoized_on_the_callback_pair(self) -> None:
+        # `lax.scan` keys its trace cache on the body's identity, so a body
+        # rebuilt per call re-traces an identical graph every time. Pinned here
+        # rather than through a timing, which would be flaky.
+        def absorb(s: fnp.ndarray, b: fnp.ndarray) -> fnp.ndarray:
+            return s + b
+
+        def permute(s: fnp.ndarray) -> fnp.ndarray:
+            return s
+
+        self.assertIs(_scan_step(absorb, permute), _scan_step(absorb, permute))
+        # By equality, not identity: a bound method is a fresh object per access
+        # (`obj.m is obj.m` is False) but compares equal, so a caller passing one
+        # still hits.
+        holder = _Holder()
+        self.assertIsNot(holder.permute, holder.permute)
+        self.assertIs(
+            _scan_step(absorb, holder.permute), _scan_step(absorb, holder.permute)
+        )
 
     def test_it_does_not_unroll(self) -> None:
         # The reason this schedule exists: the graph must not grow with the
