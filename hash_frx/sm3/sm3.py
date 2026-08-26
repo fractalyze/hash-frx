@@ -52,6 +52,7 @@ from hash_frx.byte_hash import (
 from hash_frx.extension.md import chain
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, routing
+from hash_frx.markers import words_in_digest_marker
 from hash_frx.word import pack_be, rotl, unpack_be
 
 if TYPE_CHECKING:
@@ -273,7 +274,8 @@ def sm3_merkle_damgard(h0: Array, blocks: Array) -> Array:
         constants=_Td,
         compress_block=_compress,
         serialize=unpack_be,
-        marker=(SM3_MARKER, SM3_MARKER_VERSION),
+        marker=words_in_digest_marker(SM3_MARKER, SM3_MARKER_VERSION),
+        primitive="sm3",
     )
 
 

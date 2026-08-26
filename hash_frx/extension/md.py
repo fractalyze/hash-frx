@@ -84,6 +84,7 @@ def chain(
     compress_block: Callable[[Array, Array, Array], Array],
     serialize: Callable[[Array], Array],
     marker: tuple[str, int],
+    primitive: str,
 ) -> Array:
     """The compression chain from midstate `h0` over `blocks`, as one marked
     region: `[B, nblocks, ...]` -> the serialized final state.
@@ -106,6 +107,14 @@ def chain(
     emitter a different message (`hash_frx.fusion` states the rule). That is why
     `constants` is threaded through untouched — the chain never reads the table,
     it only has to put it in the right place.
+
+    `primitive` is the compression's key in the plugin's primitive registry —
+    the same string the entry is registered under, which is what an
+    operation-named marker resolves through instead of a name suffix. It rides
+    as the `primitive` composite attribute and is emitted under BOTH spellings:
+    inert while the family still carries its own name, already in place when
+    `markers.words_in_digest_marker` flips to the operation name, so the flip is
+    a rename and nothing else.
 
     `marker` is the (name, version) pair the region carries. A whole-hash MD
     marker is exempt from the generic single-kernel rule the way a permutation's
@@ -131,7 +140,13 @@ def chain(
         )
 
     return fused_region(
-        decomposition, h0, constants, blocks, name=name, version=version
+        decomposition,
+        h0,
+        constants,
+        blocks,
+        name=name,
+        version=version,
+        primitive=primitive,
     )
 
 
