@@ -61,10 +61,10 @@ _DEDICATED_EMITTER_AVAILABLE = True
 # Which backends have those emitters — a different question from the pin, asked
 # alongside it. The `ZorchFusedRegionRewriter` runs in both the CPU and the GPU
 # compiler and both route the poseidon2 arm (`allow_extension_field_poseidon2`
-# covers the extension-field states on both), so unlike Keccak's GPU-only tuple
-# this one carries both legs. A backend absent here — Metal today — is on the
-# generic path until an emitter is written for it, and then it joins this tuple
-# and nothing else here moves.
+# covers the extension-field states on both), so this one carries both legs,
+# unlike `poseidon.sparse`'s GPU-only tuple. A backend absent here — Metal
+# today — is on the generic path until an emitter is written for it, and then it
+# joins this tuple and nothing else here moves.
 _EMITTER_BACKENDS = ("cpu", "gpu")
 
 
