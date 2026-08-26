@@ -360,6 +360,7 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
         compress_block=_compress,
         serialize=serialize_digest,
         marker=(SHA256_MARKER, SHA256_MARKER_VERSION),
+        primitive="sha256",
     )
 
 

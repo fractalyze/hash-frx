@@ -94,6 +94,41 @@ PERMUTE_MARKER_VERSION = 1
 # permutation routes, only what the region it already routes to is called.
 _OPERATION_NAMED_PERMUTE = False
 
+# The operation-named words-in Merkle-Damgard digest marker: one name for every
+# family whose message arrives already padded and packed into words, with the
+# primitive carried in the `primitive` composite attribute.
+#
+# Note what the name means, because it is a namespace as well: `DIGEST_NAMESPACE`
+# is `hash_frx.digest.` WITH the dot, and this is the bare stem. The trailing dot
+# is what keeps the two from colliding — nearly every whole-hash marker here is
+# spelled `hash_frx.digest.<something>`, and most of them are NOT this schema
+# (the raw-bytes forms pad in-kernel, the sponges are not Merkle-Damgard).
+MD_DIGEST_MARKER = "hash_frx.digest"
+
+# One name, one wire ABI, so one version — it tracks the words-in SCHEMA
+# (`[h0, constants, blocks] -> digest bytes`), not any family's parameters.
+MD_DIGEST_MARKER_VERSION = 1
+
+# Emitted only where the pinned plugin recognizes it. The recognizer landed in
+# fractalyze/xla#625, together with the SHA-512 (#626) and SM3 (#627) entries it
+# routes; this stays False until the `frx>=` floor moves to a wheel carrying
+# them.
+#
+# **The reason differs from `_OPERATION_NAMED_PERMUTE`'s, and copying that
+# rationale here would be wrong.** Flipping the permute name early loses fusion,
+# because the per-primitive permute spellings route TODAY. These do not: xla#625
+# resolves a words-in digest through `IsSha256Marker` or the operation name, and
+# `hash_frx.digest.sha512` / `…sm3` match neither — they reach no recognizer on
+# any pin, so there is no fusion for an early flip to lose.
+#
+# What the gate buys instead is that the wire spelling and `fusion_path` move in
+# ONE commit, together with each family's `_DEDICATED_EMITTER_AVAILABLE`. Flip
+# the name alone and a later pin bump would start routing these to real kernels
+# while `fusion_path` still reported `GENERIC` — metadata lying about a
+# lowering that changed underneath it, which is exactly what `fusion_path_test`'s
+# matrix law exists to prevent.
+_OPERATION_NAMED_MD_DIGEST = False
+
 
 def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:
     """The `(name, version)` a DEDICATED permute marker rides today.
@@ -107,6 +142,24 @@ def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:
     """
     if _OPERATION_NAMED_PERMUTE:
         return PERMUTE_MARKER, PERMUTE_MARKER_VERSION
+    return name, version
+
+
+def words_in_digest_marker(name: str, version: int) -> tuple[str, int]:
+    """The `(name, version)` a words-in Merkle-Damgard digest rides today.
+
+    `dedicated_permute_marker`'s sibling, at the digest kind: takes the family's
+    own spelling and returns either it or the operation-named one, so the choice
+    is made in one place rather than once per family.
+
+    Only the words-in schema belongs here. A raw-bytes digest is a DIFFERENT
+    wire ABI — its message operand is unpadded and the padding happens inside
+    the region — so it keeps its own name rather than joining this one behind a
+    flag, and `hash_frx.digest.sha256_bytes` states why that is a new name and
+    not a version bump.
+    """
+    if _OPERATION_NAMED_MD_DIGEST:
+        return MD_DIGEST_MARKER, MD_DIGEST_MARKER_VERSION
     return name, version
 
 
@@ -153,6 +206,14 @@ MARKERS: tuple[Marker, ...] = (
     # the bare family name; the namespace already says "compression").
     Marker("hash_frx.compress.blake3_parent", 1, MarkerKind.COMPRESS),
     Marker("hash_frx.compress.blake3", 1, MarkerKind.COMPRESS),
+    # The operation-named words-in Merkle-Damgard digest; the per-family
+    # spellings below it are retiring and stay recognized for one pin cycle.
+    Marker(
+        MD_DIGEST_MARKER,
+        MD_DIGEST_MARKER_VERSION,
+        MarkerKind.DIGEST,
+        MarkerNaming.OPERATION,
+    ),
     # Whole hashes — the construction's entire chain behind one call.
     Marker("hash_frx.digest.sha256", 1, MarkerKind.DIGEST),
     # The raw-bytes whole-message form: same digest, different wire ABI (the

@@ -62,6 +62,7 @@ from hash_frx.byte_hash import (
 from hash_frx.extension.md import MdStream, chain
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, routing
+from hash_frx.markers import words_in_digest_marker
 from hash_frx.word import pack_be, split, unpack_be
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -435,7 +436,8 @@ def sha512_merkle_damgard(h0: Array, blocks: Array) -> Array:
         constants=_Kd,
         compress_block=_compress,
         serialize=serialize_digest,
-        marker=(SHA512_MARKER, SHA512_MARKER_VERSION),
+        marker=words_in_digest_marker(SHA512_MARKER, SHA512_MARKER_VERSION),
+        primitive="sha512",
     )
 
 

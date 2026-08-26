@@ -74,6 +74,10 @@ _MODULE_CONSTANTS = {
     # itself: six permutations emit it, so no one of them owns it, and the
     # constant lives where the choice between spellings is made.
     markers.PERMUTE_MARKER: markers.PERMUTE_MARKER_VERSION,
+    # Same arrangement one kind over: the words-in digest marker is emitted by
+    # every Merkle-Damgard family whose message arrives already packed, so its
+    # constant lives with the choice rather than with any one of them.
+    markers.MD_DIGEST_MARKER: markers.MD_DIGEST_MARKER_VERSION,
 }
 
 
@@ -123,6 +127,44 @@ class MarkerRegistryTest(absltest.TestCase):
                     self.assertNotStartsWith(marker.name, namespace_of[marker.kind])
                 else:
                     self.assertStartsWith(marker.name, namespace_of[marker.kind])
+
+
+class OperationNamedMdDigestTest(absltest.TestCase):
+    """The digest-side flip, unexercised while the flag is off.
+
+    `OperationNamedPermuteTest`'s sibling. Worth its own class because the two
+    flags flip for different reasons — the permute one to avoid losing fusion
+    the old spellings already have, this one to keep the wire spelling and
+    `fusion_path` moving together — so neither is a proxy for the other.
+    """
+
+    def test_off_reports_the_familys_own_spelling(self) -> None:
+        self.assertEqual(
+            markers.words_in_digest_marker("hash_frx.digest.sha512", 1),
+            ("hash_frx.digest.sha512", 1),
+        )
+
+    def test_on_reports_the_operation_name_for_every_family(self) -> None:
+        # One name and one version whatever the family was; the primitive
+        # reaches the plugin as the `primitive` attribute instead. Only the
+        # WORDS-IN families migrate, so the list is explicit rather than every
+        # DIGEST row — the raw-bytes forms and the sponges are different wire
+        # ABIs that keep their own names.
+        words_in = ["hash_frx.digest.sha512", "hash_frx.digest.sm3"]
+        with mock.patch.object(markers, "_OPERATION_NAMED_MD_DIGEST", True):
+            for name in words_in:
+                with self.subTest(marker=name):
+                    self.assertEqual(
+                        markers.words_in_digest_marker(name, 1),
+                        (markers.MD_DIGEST_MARKER, markers.MD_DIGEST_MARKER_VERSION),
+                    )
+
+    def test_the_operation_name_is_not_inside_the_digest_namespace(self) -> None:
+        # The bare stem and the namespace differ by one trailing dot, and a
+        # `startswith` written against the wrong one would silently make every
+        # `hash_frx.digest.*` row look operation-named.
+        self.assertEqual(markers.MD_DIGEST_MARKER, DIGEST_NAMESPACE.rstrip("."))
+        self.assertNotStartsWith(markers.MD_DIGEST_MARKER, DIGEST_NAMESPACE)
 
 
 class OperationNamedPermuteTest(absltest.TestCase):
