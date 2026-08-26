@@ -116,7 +116,8 @@ class SeamConformanceTest(absltest.TestCase):
                 self.assertEqual(h.digest_size, 32)
         # Keccak-256 differs from SHA3-256 in one padding byte and nothing else,
         # so it rides the same sponge marker and answers whatever this leg can
-        # reach — the emitters are GPU-only. The host row never lowers.
+        # reach, which is what the shipped condition below is read for rather
+        # than restated. The host row never lowers.
         self.assertIs(
             Keccak256().fusion_path,
             (

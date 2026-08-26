@@ -178,10 +178,13 @@ def _routing(dedicated: bool) -> Iterator[None]:
     """Pin which marker `KeccakF1600` picks, whatever this leg would pick.
 
     Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`,
-    because the pin is only half of it — the emitters are GPU-only, so on the CPU
-    leg patching the pin alone leaves both arms on the generic marker and the
-    dedicated assertions below become vacuous. These cases are all read off the
-    jaxpr or the lowered module, so neither arm needs the emitter to exist.
+    because the pin is only half of it: on a leg absent from
+    `_EMITTER_BACKENDS`, patching the pin alone leaves both arms on the generic
+    marker and the dedicated assertions below become vacuous. Both legs carry the
+    Keccak arms today, so that is currently unreachable here — but the patch
+    holds whatever the tuple says, which is the point of patching the decision
+    rather than one of its inputs. These cases are all read off the jaxpr or the
+    lowered module, so neither arm needs the emitter to exist.
 
     The decision is read in `__init__`, so this has to wrap construction rather
     than just the call.
@@ -306,7 +309,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         self.assertNotEqual(generic, dedicated)
         self.assertNotEqual(hash(generic), hash(dedicated))
         # Which of the two an unpatched construction equals is this leg's
-        # question, not a constant — the emitters are GPU-only.
+        # question, not a constant — the pin and the tuple both move.
         expected = dedicated if _HAS_KECCAK_EMITTER else generic
         self.assertEqual(expected, KeccakF1600())
 

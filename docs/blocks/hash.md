@@ -340,9 +340,10 @@ pin.** `FusionPath` separates "lowers to one dedicated kernel" (`DEDICATED`)
 from "device and traceable, marker un-routed" (`GENERIC`) from "host loop over
 a native library" (`HOST`), because a consumer that cannot tell the middle
 state from the last will size a nonce window for the host path against a
-device hash. Keccak's byte rows are the standing `GENERIC` case on the CPU leg
-(the Keccak arms are GPU-only) and Grøstl-256 is that case inverted, its
-emitter being CPU-only; BLAKE3's rows were `GENERIC` everywhere until the
+device hash. Sparse Poseidon is the standing `GENERIC` case on the CPU leg,
+its arm being GPU-only, and Grøstl-256 is that case inverted, its emitter being
+CPU-only; Keccak's byte rows were the first example and now read `DEDICATED` on
+both legs, which is the point — the gap moves with the pin; BLAKE3's rows were `GENERIC` everywhere until the
 emitter shipped and now read `DEDICATED` on cpu and gpu, with Metal keeping
 `GENERIC` alive. The gap is a property of the pin and the backend, not of the
 design — so the seam names it as a value, and the return type of `digest`

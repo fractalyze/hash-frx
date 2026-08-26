@@ -242,8 +242,9 @@ class SeamConformanceTest(absltest.TestCase):
         # all.
         #
         # The device side is compared against the shipped condition rather than
-        # against True because the emitters are GPU-only, so False is the correct
-        # answer on the CPU leg. What that costs is the case's old ability to
+        # against True so the case follows the pin and the backend rather than
+        # restating them — it was written when the answer was False on the CPU
+        # leg. What that costs is the case's old ability to
         # catch a pin that dropped below the `frx>=` floor — right bytes, no
         # kernel, nothing else in the suite noticing. That half now lives in
         # `permutation_test.EmitterGateTest`, which asserts the pin as its

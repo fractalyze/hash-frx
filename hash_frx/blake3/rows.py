@@ -391,8 +391,8 @@ def derive_key(
 
 # Whether the pinned Fractalyze XLA plugin ships the BLAKE3 emitter, and on
 # which backends. fractalyze/xla#499 registers the recognizer and rewriter on
-# the GPU compiler and #507 on the CPU one, so unlike Keccak's GPU-only tuple
-# this carries both legs; the pin floor in `pyproject.toml` is already above
+# the GPU compiler and #507 on the CPU one, so this carries both legs, unlike
+# `poseidon.sparse`'s GPU-only tuple; the pin floor in `pyproject.toml` is already above
 # the wheel that first shipped them. Family-wide rationale for the two-flag
 # shape in `keccak.permutation`; a backend absent from the tuple — Metal today
 # — still emits the marker (an unrecognized name inlines byte-neutrally, and

@@ -113,6 +113,25 @@ def absorb_squeeze(
     a control-flow boundary (`docs/reference/conventions.md`) — see
     `scanned_absorb` for when that stops being the right trade. The squeeze is
     `squeeze`'s.
+
+    **What the unrolling costs a marked caller, since the paragraph above says
+    only why it is done.** This body is what `lax.composite` traces to build a
+    whole-hash region, so a caller inside one has an O(1) top-level graph — three
+    equations, whatever the block count — and a compile that is nonetheless
+    LINEAR in it, about 0.2 s per absorb block, paid again per distinct shape.
+    The region's emitter then discards this body and rolls the block loop itself
+    (one `scf.for`), so that cost buys nothing at run time; the body is here to
+    be traced, and to be correct on a backend that declines the marker.
+
+    **The mitigation is not a different route.** Declining the whole-hash marker
+    to get the per-permutation path instead is worse on both axes, because that
+    path unrolls too and its graph grows with the block count rather than staying
+    at three equations: measured on `Sha3_256` at rate 136, 64 absorb blocks, the
+    marked arm compiles in 13.0 s against 104.3 s and runs a batch of 128 in
+    1.5 ms against 19.2 ms. The generic path shares a *kernel* across message
+    lengths, which is the tempting part, but not a *module compile*. A caller
+    that minds the per-shape cost wants a `jit` zone or bucketed lengths, not a
+    marker it declines.
     """
     for i in range(blocks):
         state = permute(absorb(state, i))

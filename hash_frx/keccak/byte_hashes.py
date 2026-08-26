@@ -41,8 +41,9 @@ whole padded absorb and squeeze lowers to one `hash_frx.digest.keccak_sponge` ke
 only where that emitter exists. The switch is
 `keccak.permutation._routes_to_dedicated_emitter`, which the device rows read
 through `KeccakF1600`; it asks both whether the pinned plugin carries the
-emitters and whether this backend has them, the Keccak arms being GPU-only —
-so the device rows are the standing `GENERIC` case on the CPU leg.
+emitters and whether this backend has them. Both legs carry them from the wheel
+that first shipped the CPU sponge emitter, so the device rows read `DEDICATED`
+on cpu and gpu; a backend without an arm — Metal today — is still `GENERIC`.
 
 `is_one_kernel` is nonetheless the wrong thing to separate substrate by, here
 as elsewhere: it answers "does this lower to a dedicated kernel", which a pin

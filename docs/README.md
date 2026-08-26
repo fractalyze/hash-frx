@@ -177,8 +177,10 @@ whether or not the pinned plugin recognizes the name: an
 unrecognized *name* only inlines, so being early costs the fusion and nothing
 else, and the hash reports `fusion_path = GENERIC` while carrying its marker.
 `hash_frx.perm.keccak_f` is emitted only where the plugin ships its emitter — off
-the pin *and* the backend, the Keccak arms being GPU-only — and the `frx>=`
-floor in `pyproject.toml` is what holds the pin half true. That switch has to
+the pin *and* the backend — and the `frx>=` floor in `pyproject.toml` is what
+holds the pin half true. Both legs carry the Keccak arms from the wheel that
+first shipped the CPU sponge emitter; `hash_frx.perm.poseidon_sparse` is the
+family still on one leg. That switch has to
 track the pin rather than be left optimistic, because a permutation's marker
 also decides whether a `Sponge` over it wraps its whole hash as
 `hash_frx.digest.field_sponge` — and that marker carries a `permutation` discriminator
