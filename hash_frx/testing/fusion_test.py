@@ -4,6 +4,7 @@ and `fused_region_over` does the same for a whole computation over a permutation
 
 from collections.abc import Callable
 from typing import Any
+from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -11,11 +12,13 @@ from absl.testing import absltest
 from frx import Array
 from zk_dtypes import koalabear_mont as F
 
+from hash_frx import markers
 from hash_frx.fusion import (
     FUSED_REGION_MARKER,
     FusionPath,
     fused_region,
     fused_region_over,
+    permute_marker,
 )
 from hash_frx.testing.random_field import rand_field
 
@@ -48,6 +51,40 @@ class FusedRegionTest(absltest.TestCase):
         # The recognizer matches by name, so the string is an ABI, not a label,
         # and an unrecognized name loses fusion silently rather than erroring.
         self.assertEqual(FUSED_REGION_MARKER, "zorch.fused_region")
+
+
+class PermuteMarkerTest(absltest.TestCase):
+    """The pair a permutation puts on the wire, decided in one place for all six.
+
+    `markers.dedicated_permute_marker` owns only the routed spelling (it cannot
+    see `FUSED_REGION_MARKER` and stay dependency-free); this composes it with
+    the generic-region convention, which is the whole answer a caller needs.
+    """
+
+    def test_a_generic_region_carries_no_version(self) -> None:
+        # A version would claim a contract the generic marker does not have:
+        # the recognizer reads only the name there.
+        self.assertEqual(
+            permute_marker(FUSED_REGION_MARKER, 7), (FUSED_REGION_MARKER, 0)
+        )
+
+    def test_a_routed_permutation_keeps_its_own_spelling_and_version(self) -> None:
+        self.assertEqual(
+            permute_marker("hash_frx.perm.poseidon2", 2), ("hash_frx.perm.poseidon2", 2)
+        )
+
+    def test_flipping_re_spells_only_the_routed_case(self) -> None:
+        # The flip is a rename of a region already routed on this backend, so
+        # the generic arm must not move with it — otherwise an undedicated
+        # permutation would start claiming a marker it cannot lower to.
+        with mock.patch.object(markers, "_OPERATION_NAMED_PERMUTE", True):
+            self.assertEqual(
+                permute_marker("hash_frx.perm.poseidon2", 2),
+                (markers.PERMUTE_MARKER, markers.PERMUTE_MARKER_VERSION),
+            )
+            self.assertEqual(
+                permute_marker(FUSED_REGION_MARKER, 7), (FUSED_REGION_MARKER, 0)
+            )
 
 
 class _StubPerm:

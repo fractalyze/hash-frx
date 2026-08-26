@@ -54,6 +54,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    permute_marker,
     routing,
 )
 from hash_frx.linear import apply_matrix
@@ -124,12 +125,7 @@ class SparsePoseidon:
             params.partial_col_rows,
         )
         name = self._select_fused_region_name(rows)
-        # A generic region carries no version: the recognizer reads only the name
-        # there, so a version would claim a contract the marker does not have.
-        self.fused_region_marker = (
-            name,
-            POSEIDON_SPARSE_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, POSEIDON_SPARSE_MARKER_VERSION)
         self.fusion_path = FusionPath.from_marker(name)
         if self.fusion_path.is_one_kernel:
             (

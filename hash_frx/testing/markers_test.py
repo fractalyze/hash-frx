@@ -11,10 +11,11 @@ fails here rather than drifting silently.
 from __future__ import annotations
 
 import re
+from unittest import mock
 
 from absl.testing import absltest
 
-from hash_frx import sponge
+from hash_frx import markers, sponge
 from hash_frx.ascon import ascon
 from hash_frx.ascon import permutation as ascon_permutation
 from hash_frx.blake2b import blake2b
@@ -30,6 +31,7 @@ from hash_frx.markers import (
     MARKERS,
     PERM_NAMESPACE,
     MarkerKind,
+    MarkerNaming,
 )
 from hash_frx.poseidon import poseidon, sparse
 from hash_frx.poseidon2 import poseidon2
@@ -68,6 +70,10 @@ _MODULE_CONSTANTS = {
     blake2b.BLAKE2B_MARKER: blake2b.BLAKE2B_MARKER_VERSION,
     blake2s.BLAKE2S_MARKER: blake2s.BLAKE2S_MARKER_VERSION,
     sm3.SM3_MARKER: sm3.SM3_MARKER_VERSION,
+    # The operation-named permute marker's "emitting module" is `markers`
+    # itself: six permutations emit it, so no one of them owns it, and the
+    # constant lives where the choice between spellings is made.
+    markers.PERMUTE_MARKER: markers.PERMUTE_MARKER_VERSION,
 }
 
 
@@ -105,7 +111,68 @@ class MarkerRegistryTest(absltest.TestCase):
             MarkerKind.DIGEST: DIGEST_NAMESPACE,
         }
         for marker in MARKERS:
-            self.assertStartsWith(marker.name, namespace_of[marker.kind])
+            with self.subTest(marker=marker.name):
+                if marker.naming is MarkerNaming.OPERATION:
+                    # An operation name IS the kind, so it has no primitive to
+                    # nest behind — it must be a bare `hash_frx.<operation>`
+                    # and must NOT sit inside its kind's namespace. Checked
+                    # rather than skipped: `hash_frx.digest` would otherwise
+                    # pass for the wrong reason, and every operation name the
+                    # relayering adds is held to the same spelling.
+                    self.assertRegex(marker.name, r"^hash_frx\.[a-z0-9_]+$")
+                    self.assertNotStartsWith(marker.name, namespace_of[marker.kind])
+                else:
+                    self.assertStartsWith(marker.name, namespace_of[marker.kind])
+
+
+class OperationNamedPermuteTest(absltest.TestCase):
+    """The flip itself, which is otherwise unexercised while the flag is off.
+
+    The constant is false until the pinned plugin recognizes the name, so
+    without these the operation-named path ships never having run.
+    """
+
+    def test_off_reports_the_primitives_own_spelling(self) -> None:
+        self.assertEqual(
+            markers.dedicated_permute_marker("hash_frx.perm.poseidon2", 2),
+            ("hash_frx.perm.poseidon2", 2),
+        )
+
+    def test_on_reports_the_operation_name_for_every_primitive(self) -> None:
+        # One name and one version whatever the primitive was: that IS the
+        # change, and it is why the primitive has to reach the plugin as an
+        # attribute instead. Walked off the registry rather than a hand-listed
+        # table, so a version bump or a seventh permutation cannot strand a
+        # stale row here.
+        retiring = [
+            m
+            for m in MARKERS
+            if m.kind is MarkerKind.PERM and m.naming is MarkerNaming.PRIMITIVE
+        ]
+        self.assertLen(retiring, 6)
+        with mock.patch.object(markers, "_OPERATION_NAMED_PERMUTE", True):
+            for m in retiring:
+                with self.subTest(marker=m.name):
+                    self.assertEqual(
+                        markers.dedicated_permute_marker(m.name, m.version),
+                        (markers.PERMUTE_MARKER, markers.PERMUTE_MARKER_VERSION),
+                    )
+
+    def test_flipping_keeps_the_permutation_attribute_on_the_wire(self) -> None:
+        # The plugin reads the primitive from `permutation` once the name stops
+        # carrying it, so the attribute every permute marker already emits is
+        # what makes the rename safe. If a primitive ever stopped emitting it,
+        # flipping would silently decline that permutation into its
+        # decomposition rather than fail. One primitive is enough to pin the
+        # precondition HERE, where a reader of the rename looks; each family's
+        # own test pins its full attribute set off the traced equation.
+        self.assertEqual(keccak_permutation._marker_attrs()["permutation"], "keccak_f")
+
+    def test_the_flag_is_off_until_the_pin_carries_the_recognizer(self) -> None:
+        # Guards the ordering the whole dual-spelling cycle exists for: emitting
+        # a name the pinned plugin does not know loses fusion silently rather
+        # than failing. Flip this together with the `frx>=` floor.
+        self.assertFalse(markers._OPERATION_NAMED_PERMUTE)
 
 
 if __name__ == "__main__":

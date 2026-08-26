@@ -143,6 +143,17 @@ dedicated emitter that owns its own operand ABI and, unlike the generic path,
 tolerates reductions and calls; the recognizers also still accept the
 pre-namespace spellings until they retire.
 
+**Operation-named** — `hash_frx.permute`, a single segment with no kind prefix.
+It names the OPERATION and carries WHICH primitive runs as the `permutation`
+composite attribute, so a new permutation routes by registering a primitive
+rather than by minting a marker name on both sides of the seam. All six
+`hash_frx.perm.*` spellings above are retiring into it: the recognizer accepts
+both (fractalyze/xla#616), and hash-frx keeps emitting the old ones until the
+`frx>=` floor carries that recognizer — emitting a name the pinned plugin does
+not know costs the fusion silently rather than failing, so the flip follows the
+pin instead of leading it. The other operation names the relayering adds
+(`digest`, `stream.*`, `duplex`) arrive with the envelopes that consume them.
+
 Two of them wrap a whole hash rather than one primitive — `hash_frx.digest.field_sponge`
 over the field sponge, `hash_frx.digest.keccak_sponge` over the byte one — and both are
 assembled by `fused_region_over`, which rebuilds the permute from the operand

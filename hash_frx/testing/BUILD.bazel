@@ -228,6 +228,7 @@ py_test(
     deps = [
         ":random_field",
         "//hash_frx:fusion",
+        "//hash_frx:markers",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
