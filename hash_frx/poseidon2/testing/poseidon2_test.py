@@ -8,6 +8,7 @@ import functools
 import frx
 import frx.numpy as fnp
 from absl.testing import absltest
+from zk_dtypes import babybear_mont as BB
 from zk_dtypes import koalabear_mont as F
 
 from hash_frx.poseidon2.poseidon2 import (
@@ -15,6 +16,10 @@ from hash_frx.poseidon2.poseidon2 import (
     POSEIDON2_MARKER_VERSION,
     Poseidon2,
     _permute_body,
+)
+from hash_frx.poseidon2.testing.babybear16 import (
+    BABYBEAR16_EXPECTED,
+    babybear16_perm,
 )
 from hash_frx.poseidon2.testing.koalabear16 import (
     KOALABEAR16_EXPECTED,
@@ -26,6 +31,30 @@ from hash_frx.poseidon2.testing.koalabear16 import (
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
+
+
+class Poseidon2Babybear16Test(absltest.TestCase):
+    """The second shipped set. Held to plonky3 the same way the first is, at a
+    different field, a different S-box (x^7 against x^3) and a different round
+    count — which is what makes it a second reading of the engine rather than
+    the same numbers under another name."""
+
+    def test_permute_byte_matches_plonky3(self) -> None:
+        # Runs the shipped `BABYBEAR16_PARAMS`, so this is what holds the
+        # published constants to the revision `standard.py` names. The expected
+        # vector is openvm-zorch's own golden array, dumped from plonky3 v0.4.3
+        # by its fixture generator — an oracle written before this set shipped
+        # here, not a restatement of it.
+        p = babybear16_perm()
+        out = p.permute(fnp.arange(16, dtype=BB))
+        self.assertTrue(bool(fnp.array_equal(out, BABYBEAR16_EXPECTED)))
+
+    def test_vmap_batch_matches(self) -> None:
+        p = babybear16_perm()
+        x = fnp.arange(16, dtype=BB)
+        batch = frx.vmap(p.permute)(fnp.stack([x, x]))
+        self.assertTrue(bool(fnp.array_equal(batch[0], BABYBEAR16_EXPECTED)))
+        self.assertTrue(bool(fnp.array_equal(batch[1], BABYBEAR16_EXPECTED)))
 
 
 class Poseidon2Koalabear16Test(absltest.TestCase):

@@ -36,16 +36,27 @@ class LazyConstructionTest(absltest.TestCase):
         splitting it in two would make the halves order-dependent, which is how
         the first version of this test failed.
         """
-        self.assertFalse(_built("KOALABEAR16_PARAMS"), "params built at import")
-        self.assertFalse(_built("KoalaBear16"), "permutation built at import")
+        for name in (
+            "KOALABEAR16_PARAMS",
+            "KoalaBear16",
+            "BABYBEAR16_PARAMS",
+            "BabyBear16",
+        ):
+            self.assertFalse(_built(name), f"{name} built at import")
 
-        # Reading the citation is a plain module-level string; it must not drag
-        # the constant tables or a backend in behind it.
+        # Reading a citation is a plain module-level string; it must not drag
+        # the constant tables or a backend in behind it. Both are checked,
+        # because each set answers for its own `__getattr__` arm.
         self.assertEqual(
             standard.KOALABEAR16_PLONKY3_COMMIT,
             "4318eba062fd1cbca3dbe98904ad18ad950f3b49",
         )
+        self.assertEqual(
+            standard.BABYBEAR16_PLONKY3_COMMIT,
+            "90008383a99bdcbf725c91c91efbdf6775da7054",
+        )
         self.assertFalse(_built("KoalaBear16"), "reading the citation built it")
+        self.assertFalse(_built("BabyBear16"), "reading the citation built it")
 
         perm = standard.KoalaBear16
         self.assertTrue(_built("KoalaBear16"))
@@ -54,6 +65,24 @@ class LazyConstructionTest(absltest.TestCase):
         # second equal-but-distinct bundle.
         self.assertTrue(_built("KOALABEAR16_PARAMS"))
         self.assertIs(standard.KOALABEAR16_PARAMS, standard.KOALABEAR16_PARAMS)
+
+        # Building one set must not build the other: the two arms are separate,
+        # and a shared `_params()` would make a KoalaBear consumer pay for
+        # BabyBear's tables and its `zk_dtypes` field.
+        self.assertFalse(_built("BabyBear16"), "KoalaBear16 built its sibling")
+        self.assertFalse(_built("BABYBEAR16_PARAMS"), "KoalaBear16 built its sibling")
+
+        bb = standard.BabyBear16
+        self.assertTrue(_built("BabyBear16"))
+        self.assertIs(standard.BabyBear16, bb, "not cached — rebuilt per access")
+        self.assertTrue(_built("BABYBEAR16_PARAMS"))
+        self.assertIs(standard.BABYBEAR16_PARAMS, standard.BABYBEAR16_PARAMS)
+        # And the two sets are genuinely different parameterizations, not one
+        # object handed out twice under two names.
+        self.assertIsNot(standard.BABYBEAR16_PARAMS, standard.KOALABEAR16_PARAMS)
+        self.assertNotEqual(
+            standard.BABYBEAR16_PARAMS.alpha, standard.KOALABEAR16_PARAMS.alpha
+        )
 
     def test_unknown_attribute_still_raises(self) -> None:
         """`__getattr__` must decline names it does not own rather than invent

@@ -27,12 +27,28 @@ these parameters, so the constants and the assertion that pins them to Plonky3
 now live in one repo instead of two.
 
 **Which sets belong here.** The test is "is this set one scheme's?".
-KoalaBear-16 below is a general Plonky3 parameterization, so it passes. A set
-that is a particular prover's vendored instance does not, and stays with that
-prover — the repo's application-agnosticism rule (README, "Two non-negotiables")
-is not suspended for a constant table. Concretely: SP1's vendored KoalaBear-16,
-which shares these round constants but carries a powers-of-two internal diagonal
-and folds a Montgomery R^-1 into `internal_j_scale`, is *not* here.
+KoalaBear-16 and BabyBear-16 below are general Plonky3 parameterizations, so
+they pass. A set that is a particular prover's vendored instance does not, and
+stays with that prover — the repo's application-agnosticism rule (README, "Two
+non-negotiables") is not suspended for a constant table. Concretely: SP1's
+vendored KoalaBear-16, which shares these round constants but carries a
+powers-of-two internal diagonal and folds a Montgomery R^-1 into
+`internal_j_scale`, is *not* here.
+
+That test also draws the line *inside* a consumer's file rather than around it.
+openvm-zorch's `poseidon2/babybear16.py` held both kinds: the round constants
+below, which are Plonky3's and belong here, and a rate-8 / digest-8 / arity-2
+sponge and compression, which are OpenVM's Merkle shape and stay there. Moving
+a set out of a consumer is not the same as emptying its file.
+
+**The two sets are spelled differently on purpose.** KoalaBear-16's constants
+are decimal and BabyBear-16's are hex, because each matches the literal form its
+own Plonky3 source uses — hex for `baby-bear/src/poseidon2.rs`. A table of 141
+constants is verifiable by a reviewer only if it diffs cleanly against the file
+it was taken from, and re-basing one of them to match the other would trade that
+away for a consistency nothing reads. `poseidon2_test` holds both to their
+revisions regardless, which is what makes the spelling a review aid rather than
+the guarantee.
 """
 
 from __future__ import annotations
@@ -40,6 +56,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
+from zk_dtypes import babybear_mont as _BB
 from zk_dtypes import koalabear_mont as _F
 
 from hash_frx.poseidon2.params import Poseidon2Params
@@ -245,6 +262,247 @@ _INTERNAL_DIAG = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# BabyBear-16 — plonky3's `default_babybear_poseidon2_16`.
+#
+# The instance openvm-stark-backend hashes every proof byte with, and the set
+# openvm-zorch carried in its own tree until this module took it. Its round
+# constants are the HorizenLabs BabyBear instance
+# (`BABYBEAR_RC16_EXTERNAL_INITIAL` / `_FINAL`, `BABYBEAR_RC16_INTERNAL`),
+# written in the same hex as the plonky3 source so the arrays diff cleanly
+# against it — the module docstring states why that is worth an inconsistency
+# with KoalaBear-16's decimals.
+#
+# S-box x^7: the least D with gcd(p - 1, D) = 1 for p = 15 * 2^27 + 1, where
+# KoalaBear takes x^3. The internal layer is plonky3's `1 + Diag(V)` family
+# with the optimized vector
+#   [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8,
+#    -1/16, -1/2^27]
+# reduced to canonical form in `_BABYBEAR16_INTERNAL_DIAG` below. Unlike SP1's
+# vendored KoalaBear kernel there is no Montgomery factor folded into the
+# layer, so `internal_j_scale` stays at its default 1 — which is also what
+# makes this set general rather than one prover's.
+# ---------------------------------------------------------------------------
+
+# The revision these constants were generated from, as a value rather than a
+# comment, the same way `KOALABEAR16_PLONKY3_COMMIT` above is. This is tag
+# v0.4.3 — the pin openvm-stark-backend v2.0.0's reference carries.
+BABYBEAR16_PLONKY3_COMMIT = "90008383a99bdcbf725c91c91efbdf6775da7054"
+
+_BB_WIDTH, _BB_ER, _BB_IR, _BB_ALPHA = 16, 4, 13, 7
+
+_BABYBEAR16_EXTERNAL_INITIAL = [
+    [
+        0x69CBB6AF,
+        0x46AD93F9,
+        0x60A00F4E,
+        0x6B1297CD,
+        0x23189AFE,
+        0x732E7BEF,
+        0x72C246DE,
+        0x2C941900,
+        0x0557EEDE,
+        0x1580496F,
+        0x3A3EA77B,
+        0x54F3F271,
+        0x0F49B029,
+        0x47872FE1,
+        0x221E2E36,
+        0x1AB7202E,
+    ],
+    [
+        0x487779A6,
+        0x3851C9D8,
+        0x38DC17C0,
+        0x209F8849,
+        0x268DCEE8,
+        0x350C48DA,
+        0x5B9AD32E,
+        0x0523272B,
+        0x3F89055B,
+        0x01E894B2,
+        0x13DDEDDE,
+        0x1B2EF334,
+        0x7507D8B4,
+        0x6CEEB94E,
+        0x52EB6BA2,
+        0x50642905,
+    ],
+    [
+        0x05453F3F,
+        0x06349EFC,
+        0x6922787C,
+        0x04BFFF9C,
+        0x768C714A,
+        0x3E9FF21A,
+        0x15737C9C,
+        0x2229C807,
+        0x0D47F88C,
+        0x097E0ECC,
+        0x27EADBA0,
+        0x2D7D29E4,
+        0x3502AAA0,
+        0x0F475FD7,
+        0x29FBDA49,
+        0x018AFFFD,
+    ],
+    [
+        0x0315B618,
+        0x6D4497D1,
+        0x1B171D9E,
+        0x52861ABD,
+        0x2E5D0501,
+        0x3EC8646C,
+        0x6E5F250A,
+        0x148AE8E6,
+        0x17F5FA4A,
+        0x3E66D284,
+        0x0051AA3B,
+        0x483F7913,
+        0x2CFE5F15,
+        0x023427CA,
+        0x2CC78315,
+        0x1E36EA47,
+    ],
+]
+
+_BABYBEAR16_EXTERNAL_TERMINAL = [
+    [
+        0x7290A80D,
+        0x6F7E5329,
+        0x598EC8A8,
+        0x76A859A0,
+        0x6559E868,
+        0x657B83AF,
+        0x13271D3F,
+        0x1F876063,
+        0x0AEEAE37,
+        0x706E9CA6,
+        0x46400CEE,
+        0x72A05C26,
+        0x2C589C9E,
+        0x20BD37A7,
+        0x6A2D3D10,
+        0x20523767,
+    ],
+    [
+        0x5B8FE9C4,
+        0x2AA501D6,
+        0x1E01AC3E,
+        0x1448BC54,
+        0x5CE5AD1C,
+        0x4918A14D,
+        0x2C46A83F,
+        0x4FCF6876,
+        0x61D8D5C8,
+        0x6DDF4FF9,
+        0x11FDA4D3,
+        0x02933A8F,
+        0x170EAF81,
+        0x5A9C314F,
+        0x49A12590,
+        0x35EC52A1,
+    ],
+    [
+        0x58EB1611,
+        0x5E481E65,
+        0x367125C9,
+        0x0EBA33BA,
+        0x1FC28DED,
+        0x066399AD,
+        0x0CBEC0EA,
+        0x75FD1AF0,
+        0x50F5BF4E,
+        0x643D5F41,
+        0x6F4FE718,
+        0x5B3CBBDE,
+        0x1E3AFB3E,
+        0x296FB027,
+        0x45E1547B,
+        0x4A8DB2AB,
+    ],
+    [
+        0x59986D19,
+        0x30BCDFA3,
+        0x1DB63932,
+        0x1D7C2824,
+        0x53B33681,
+        0x0673B747,
+        0x038A98A3,
+        0x2C5BCE60,
+        0x351979CD,
+        0x5008FB73,
+        0x547BCA78,
+        0x711AF481,
+        0x3F93BF64,
+        0x644D987B,
+        0x3C8BCD87,
+        0x608758B8,
+    ],
+]
+
+_BABYBEAR16_INTERNAL_RC = [
+    0x5A8053C0,
+    0x693BE639,
+    0x3858867D,
+    0x19334F6B,
+    0x128F0FD8,
+    0x4E2B1CCB,
+    0x61210CE0,
+    0x3C318939,
+    0x0B5B2F22,
+    0x2EDB11D5,
+    0x213EFFDF,
+    0x0CAC4606,
+    0x241AF16D,
+]
+
+_BABYBEAR16_INTERNAL_DIAG = [
+    0x77FFFFFF,
+    0x00000001,
+    0x00000002,
+    0x3C000001,
+    0x00000003,
+    0x00000004,
+    0x3C000000,
+    0x77FFFFFE,
+    0x77FFFFFD,
+    0x77880001,
+    0x5A000001,
+    0x69000001,
+    0x77FFFFF2,
+    0x00780000,
+    0x07800000,
+    0x0000000F,
+]
+
+
+def _babybear16_params() -> Poseidon2Params:
+    """The BabyBear-16 bundle, built once and cached into `globals()` so that
+    `BabyBear16` and the `BABYBEAR16_PARAMS` export share one object — the
+    arrangement `_params` above states."""
+    cached = globals().get("BABYBEAR16_PARAMS")
+    if cached is not None:
+        return cached
+    params = Poseidon2Params(
+        width=_BB_WIDTH,
+        dtype=_BB,
+        alpha=_BB_ALPHA,
+        external_rounds=_BB_ER,
+        internal_rounds=_BB_IR,
+        external_constants_initial=fnp.array(_BABYBEAR16_EXTERNAL_INITIAL, dtype=_BB),
+        external_constants_terminal=fnp.array(_BABYBEAR16_EXTERNAL_TERMINAL, dtype=_BB),
+        # One constant per round, lane 0 (`params.py`'s contract). The set
+        # arrived here from a consumer that expanded these thirteen into a
+        # (13, 16) matrix with fifteen structurally-zero columns per row; that
+        # shape predates the contract and is not reproduced.
+        internal_constants=fnp.array(_BABYBEAR16_INTERNAL_RC, dtype=_BB),
+        internal_diag=fnp.array(_BABYBEAR16_INTERNAL_DIAG, dtype=_BB),
+    )
+    globals()["BABYBEAR16_PARAMS"] = params
+    return params
+
+
 def _params() -> Poseidon2Params:
     """The parameter bundle, built once and cached into `globals()` so that
     `KoalaBear16` and the `KOALABEAR16_PARAMS` export share one object."""
@@ -289,9 +547,17 @@ def __getattr__(name: str) -> Any:
         perm = Poseidon2(_params())
         globals()["KoalaBear16"] = perm
         return perm
+    if name == "BABYBEAR16_PARAMS":
+        return _babybear16_params()
+    if name == "BabyBear16":
+        perm = Poseidon2(_babybear16_params())
+        globals()["BabyBear16"] = perm
+        return perm
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if TYPE_CHECKING:  # mypy cannot see through the runtime `__getattr__`
     KOALABEAR16_PARAMS: Poseidon2Params
     KoalaBear16: Poseidon2
+    BABYBEAR16_PARAMS: Poseidon2Params
+    BabyBear16: Poseidon2
