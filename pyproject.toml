@@ -45,7 +45,6 @@ classifiers = [
 # for every platform this package supports, so it costs a consumer no toolchain.
 dependencies = [
     "numpy",
-    "blake3",
     # Floor = the first wheel whose Grøstl-256 emitter accepts the RUNTIME-LENGTH
     # operand form (fractalyze/xla#599, merged as PR #600), which
     # `grostl.grostl256_bytes` now emits and has no static-tail form to fall

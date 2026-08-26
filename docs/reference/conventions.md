@@ -33,11 +33,9 @@ them is "copy the family next door":
    parameter the rule does not carry, add the axis to the rule and pin it with a
    vector that fails when the axis is set wrong — do not fork the rule.
 3. **Add the rows.** A device row and, where
-   [both conditions hold](../blocks/hash.md#which-hashes-get-a-host-row), a host
-   row: a row is a `_hash_one` callable plus its `digest_size` over
-   [`byte_hash.host_digest`](../../hash_frx/byte_hash.py). Register the marker
-   name in [`markers.py`](../../hash_frx/markers.py), override `_parameters()`,
-   and end the module with its [seam conformance pin](#seam-conformance-pins).
+   Register the marker name in [`markers.py`](../../hash_frx/markers.py),
+   override `_parameters()`, and end the module with its
+   [seam conformance pin](#seam-conformance-pins).
 
 **There is no routing step**, and nothing in the list writes a padding rule, a
 length field or a block loop. Those were transcribed nine times before the
@@ -181,9 +179,9 @@ if TYPE_CHECKING:
     _: type[Permutation] = Poseidon2
 ```
 
-A module shipping two implementations of one seam names each pin, since mypy
-rejects re-annotating `_` — [`sha256/sha256.py`](../../hash_frx/sha256/sha256.py) pins `Sha256`
-and `HostSha256` separately.
+A module shipping more than one row of one seam names each pin, since mypy
+rejects re-annotating `_` — [`sha512/sha512.py`](../../hash_frx/sha512/sha512.py) pins
+`Sha512`, `Sha384` and `Sha512_256` separately.
 
 **On the `ByteHash` side the rule is checked.** `row_conformance_test`'s
 `PinTest` holds the pins and the byte-hash registry to each other in both

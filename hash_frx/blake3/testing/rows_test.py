@@ -346,7 +346,7 @@ class SeamConformanceTest(parameterized.TestCase):
         self, cls: Callable[..., ByteHash], args: tuple[object, ...]
     ) -> None:
         # The return type is what says a consumer may hash inside its own jit —
-        # `fusion_path.is_traceable` merely restates it, so the property is
+        # the return type is the authority, so the property is
         # asserted rather than read off the attribute. The body is compiled
         # here, so the length is kept to what the property needs: two blocks,
         # the smallest input that pads and still chains.

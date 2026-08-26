@@ -290,7 +290,6 @@ class Grostl256ByteHashTest(absltest.TestCase):
         msg = np.zeros((1, 1), dtype=np.uint8)
         device = Grostl256()
         self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER))
-        self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)

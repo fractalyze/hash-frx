@@ -49,7 +49,7 @@ on cpu and gpu; a backend without an arm — Metal today — is still `GENERIC`.
 as elsewhere: it answers "does this lower to a dedicated kernel", which a pin
 or a backend can change, and the return type is what actually divides device
 from host — a device hash returns an `Array` and accepts a tracer, a host one
-returns `np.ndarray` and never can (`fusion_path.is_traceable` restates it; the
+returns `np.ndarray` and never can (the
 return type stays the authority). That is a seam question rather than a fact
 about these hashes, and it is stated where the rule lives —
 [`byte_hash.py`](../byte_hash.py) and `docs/blocks/hash.md`.

@@ -252,7 +252,6 @@ class Blake2bByteHashTest(absltest.TestCase):
         msg = np.zeros((1, 3), dtype=np.uint8)
         device = Blake2b()
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
-        self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)

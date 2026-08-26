@@ -138,12 +138,6 @@ def pbkdf2(
         raise ValueError(f"iterations must be >= 1, got {iterations}")
     if not 1 <= dk_len <= (2**32 - 1) * mac.digest_size:
         raise ValueError(f"dk_len must be in [1, (2^32-1)*hLen], got {dk_len}")
-    if not mac.byte_hash.fusion_path.is_traceable:
-        raise ValueError(
-            "PBKDF2's iteration chain is a traced loop, which a host row's "
-            "eager digest cannot thread; for host derivation use "
-            "hashlib.pbkdf2_hmac (also this module's differential oracle)"
-        )
     password = fnp.asarray(password, dtype=fnp.uint8)
     salt = fnp.asarray(salt, dtype=fnp.uint8)
     if password.ndim == 1:

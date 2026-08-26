@@ -200,7 +200,6 @@ class AsconHash256ByteHashTest(absltest.TestCase):
         msg = np.zeros((1, 1), dtype=np.uint8)
         device = AsconHash256()
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
-        self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)

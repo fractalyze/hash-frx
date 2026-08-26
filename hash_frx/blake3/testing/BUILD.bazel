@@ -72,6 +72,7 @@ py_test(
     size = "medium",
     srcs = ["rows_test.py"],
     deps = [
+        requirement("blake3"),
         ":emitter",
         ":vectors",
         "//hash_frx:byte_hash",
@@ -96,6 +97,7 @@ py_test(
     size = "medium",
     srcs = ["streaming_test.py"],
     deps = [
+        requirement("blake3"),
         "//hash_frx/blake3",
         requirement("absl_py"),
         requirement("frx"),

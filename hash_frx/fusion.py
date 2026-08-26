@@ -64,40 +64,35 @@ FUSED_REGION_MARKER = "zorch.fused_region"
 class FusionPath(enum.Enum):
     """How a hash's one-call unit lowers on the backend it was built for.
 
-    Three states, because two different questions used to share one bool and
-    came apart: "does this lower to one dedicated kernel?" (routing / perf) and
-    "may this be called inside a traced region?" (traceability). A device hash
-    whose marker nothing on this backend recognizes — BLAKE3 on Metal — is
-    traceable without being one kernel, and a host hash is neither; a single
-    flag collapses the two into one `False`.
+    Every row is a device row — it takes a tracer and returns an ``Array`` — so
+    the only question left is routing:
 
     - ``DEDICATED``: the pinned plugin *and* the backend carry the dedicated
       emitter, so the marked call lowers to one device unit. Only this state
       lets a consumer route a whole-region composite (a sponge hash, a Merkle
       commit) through the hash's marker.
-    - ``GENERIC``: a device function — traceable, takes a tracer — whose marker
-      the backend does not route: either the generic region marker, or a
-      dedicated name that inlines unrecognized. Right bytes, no dedicated
-      kernel.
-    - ``HOST``: a host-library path over ``np.ndarray``. Never traceable — it
-      has to read the message bytes.
+    - ``GENERIC``: the backend does not route the marker — either the generic
+      region marker, or a dedicated name that inlines unrecognized. Right bytes,
+      no dedicated kernel.
+
+    **It carried a third state, ``HOST``**, for rows backed by a host library
+    over ``np.ndarray``, and a second question — whether a call may sit inside a
+    traced region — which only that state could answer ``False``. Those rows are
+    gone (#324), so traceability is no longer a question a value can differ on
+    and the return type answers it for every row alike.
 
     Derived per (hash, backend) at construction — the emitter switch is a
-    property of the pin and the backend, so it is never a class constant on a
-    device hash (`keccak.permutation._routes_to_dedicated_emitter` is the
-    pattern). Host rows are the one legitimate constant: a host path is
-    ``HOST`` on every backend.
+    property of the pin and the backend, so it is never a class constant
+    (`keccak.permutation._routes_to_dedicated_emitter` is the pattern).
     """
 
     DEDICATED = "dedicated"
     GENERIC = "generic"
-    HOST = "host"
 
     @classmethod
     def from_marker(cls, name: str) -> "FusionPath":
         """The device path a marker choice implies: a hash-named marker is one
-        kernel, the generic region marker is not. Never `HOST` — a marker
-        emitter is a device function by construction — and deriving the path
+        kernel, the generic region marker is not. Deriving the path
         from the marker actually chosen is what keeps the two from drifting
         when a routing gate grows another case."""
         return cls.DEDICATED if name != FUSED_REGION_MARKER else cls.GENERIC
@@ -106,7 +101,7 @@ class FusionPath(enum.Enum):
     def from_routing(cls, routed: bool) -> "FusionPath":
         """The device path an emitter switch implies, for a hash whose marker
         name never varies (`routed` = the pin *and* the backend carry the
-        dedicated emitter). Never `HOST`, as `from_marker` states."""
+        dedicated emitter)."""
         return cls.DEDICATED if routed else cls.GENERIC
 
     @property
@@ -115,14 +110,6 @@ class FusionPath(enum.Enum):
         whole region over this hash in an expandable composite. The question
         `has_dedicated_fusion` used to answer."""
         return self is FusionPath.DEDICATED
-
-    @property
-    def is_traceable(self) -> bool:
-        """Whether a call may sit inside a traced region (`jit` / `vmap`). For a
-        `ByteHash` this agrees with the return type by construction — a device
-        row returns `Array`, a host row `np.ndarray` — and the return type
-        remains the authority (`byte_hash.py`)."""
-        return self is not FusionPath.HOST
 
 
 def routing(available: bool, backends: tuple[str, ...]) -> bool:

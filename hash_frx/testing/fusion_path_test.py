@@ -109,10 +109,10 @@ class MatrixFactsTest(absltest.TestCase):
 
     def test_the_enum_property_table(self) -> None:
         # Pinned once; the per-impl cases below assert only the member, since
-        # `is_one_kernel` / `is_traceable` are functions of the enum alone.
+        # `is_one_kernel` is a function of the enum alone.
         self.assertEqual(
-            [(p.is_one_kernel, p.is_traceable) for p in FusionPath],
-            [(True, True), (False, True), (False, False)],
+            [p.is_one_kernel for p in FusionPath],
+            [True, False],
         )
 
 

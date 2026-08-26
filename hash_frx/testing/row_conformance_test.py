@@ -26,7 +26,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx.byte_hash import ByteHash, DeviceRow, HostRow, Row
+from hash_frx.byte_hash import ByteHash, DeviceRow, Row
 from hash_frx.testing.package_sweep import (
     declared,
     declared_anywhere,
@@ -121,18 +121,14 @@ class RowSeamTest(parameterized.TestCase):
         self.assertEqual(out.shape, (0, row.digest_size))
 
     @parameterized.named_parameters(*_named(BYTE_HASH_ROWS))
-    def test_fusion_path_agrees_with_the_return_type(self, case: RowCase) -> None:
-        # The seam's own law (`byte_hash.ByteHash.digest`): the return type is
-        # the authority on traceability, and `fusion_path` is held to agree with
-        # it. The two cases below say it per base and say more, but they reach
-        # only the rows ON a base — `Mgf1` is a byte hash on neither, so without
-        # this the law would hold for every row except the one whose `fusion_path`
-        # is delegated rather than its own, which is the row most able to
-        # disagree. Stated over the seam, it cannot be filed away from again.
+    def test_every_byte_hash_returns_a_device_array(self, case: RowCase) -> None:
+        # The seam's own law (`byte_hash.ByteHash.digest`): every row is a
+        # device row, so every `digest` hands back an `Array`. The case below
+        # says it for rows on `DeviceRow`; this reaches the ones on no base —
+        # `Mgf1` is a byte hash on neither, and is the row most able to
+        # disagree, its `fusion_path` being delegated rather than its own.
         row = case.make()
-        self.assertEqual(
-            isinstance(row.digest(_MSG), Array), row.fusion_path.is_traceable
-        )
+        self.assertIsInstance(row.digest(_MSG), Array)
 
     @parameterized.named_parameters(*_named(DEVICE_ROWS))
     def test_device_rows_return_arrays_and_are_traceable(self, case: RowCase) -> None:
@@ -140,7 +136,6 @@ class RowSeamTest(parameterized.TestCase):
         # is held to agree with it.
         row = case.make()
         self.assertIsInstance(row.digest(_MSG), Array)
-        self.assertTrue(row.fusion_path.is_traceable)
 
 
 class RegistryTest(absltest.TestCase):
@@ -160,7 +155,7 @@ class RegistryTest(absltest.TestCase):
                 if obj.__module__ != name or obj in registered:
                     continue
                 # The bases and the seam are the contract, not rows on them.
-                if obj in (Row, DeviceRow, HostRow, ByteHash):
+                if obj in (Row, DeviceRow, ByteHash):
                     continue
                 # `Row`, not `DeviceRow`. Flagging only the
                 # subclasses made the sweep blind to exactly the rows that

@@ -37,7 +37,7 @@ directory, and that mismatch is bookkeeping rather than a design boundary.
 | Question                                                                                   | Where                                             |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
 | The rules a hash primitive is written to — fusion authoring, the seam and pin requirements, byte-exactness, and the assertions that must bite | [`reference/conventions.md`](reference/conventions.md) |
-| Why the layer is shaped this way — the three layers, why each schedule is written once, what may live here at all, the SHA-256 pair, which hashes get a host row, fusion as a design property | [`blocks/hash.md`](blocks/hash.md)                 |
+| Why the layer is shaped this way — the three layers, why each schedule is written once, what may live here at all, why every row is a device row and what that costs, fusion as a design property | [`blocks/hash.md`](blocks/hash.md)                 |
 | Getting a dev loop — backend selection, the two test legs, the lowering gate, the CUDA version trap, an unreleased XLA, the compile cache | [`reference/development.md`](reference/development.md) |
 | Depending on this package from another repo — the import form, the Bazel dep that goes with it, and what to do about a name the root does not export | [`reference/consuming.md`](reference/consuming.md) |
 
@@ -78,7 +78,6 @@ without naming one.
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | HMAC — the FIPS 198-1 keyed MAC, one class parameterized by hash and block size             | [`adapter/hmac.py`](../hash_frx/adapter/hmac.py)                     |
 | Which hashes have an HMAC block size, and why BLAKE3, keyed BLAKE2 and Ascon deliberately do not | [`adapter/block_size.py`](../hash_frx/adapter/block_size.py) |
-| Which device row pairs with which host row, and picking one per call off where the values live | [`adapter/dual.py`](../hash_frx/adapter/dual.py) |
 | Holding a variable-output family before an output length is chosen, and what fills that slot | [`adapter/xof.py`](../hash_frx/adapter/xof.py) |
 | HKDF — RFC 5869 extract-then-expand, the KDF the composition standards name                  | [`adapter/hkdf.py`](../hash_frx/adapter/hkdf.py)                     |
 | MGF1 — RFC 8017's mask generation, a hash stretched to any length by a counter suffix (RSA-OAEP / PSS) | [`adapter/mgf1.py`](../hash_frx/adapter/mgf1.py) |
@@ -96,11 +95,11 @@ without naming one.
 | SHA-512 — the 64-bit SHA-2 sibling over uint32 half pairs: batched digest, incremental midstate, the device / host `ByteHash` pair, and the truncated variants SHA-384 and SHA-512/256 as IV rows on the same marker | [`sha512/sha512.py`](../hash_frx/sha512/sha512.py)                 |
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
 | BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/modes.py`](../hash_frx/blake3/modes.py), [`blake3/rows.py`](../hash_frx/blake3/rows.py) |
-| BLAKE2b — the HAIFA `ByteHash` pair: the device row over 64-bit half pairs behind its digest marker, and the host row over `hashlib` (why the host row came first) | [`blake2b/`](../hash_frx/blake2b) |
+| BLAKE2b — the HAIFA `ByteHash` over 64-bit half pairs, behind its digest marker | [`blake2b/`](../hash_frx/blake2b) |
 | BLAKE2 keyed, salted and personalized hashing — RFC 7693 §2.8's parameter block, and why keying rides the existing marker rather than a new one | [`blake2_params.py`](../hash_frx/blake2_params.py), [`blake2b/blake2b.py`](../hash_frx/blake2b/blake2b.py) |
-| BLAKE2s — the 32-bit RFC 7693 sibling at native uint32: device and host rows on its own digest marker | [`blake2s/blake2s.py`](../hash_frx/blake2s/blake2s.py) |
-| SM3 — the GB/T 32905 ShangMi hash, SHA-256's structural cousin: device and host rows on its own digest marker | [`sm3/sm3.py`](../hash_frx/sm3/sm3.py) |
-| Grøstl-256 — the AES-round Merkle–Damgård `ByteHash` over GF(2^8), with a bitsliced S-box and a testonly host partner | [`grostl/`](../hash_frx/grostl) |
+| BLAKE2s — the 32-bit RFC 7693 sibling at native uint32, on its own digest marker | [`blake2s/blake2s.py`](../hash_frx/blake2s/blake2s.py) |
+| SM3 — the GB/T 32905 ShangMi hash, SHA-256's structural cousin, on its own digest marker | [`sm3/sm3.py`](../hash_frx/sm3/sm3.py) |
+| Grøstl-256 — the AES-round Merkle–Damgård `ByteHash` over GF(2^8), with a bitsliced S-box | [`grostl/`](../hash_frx/grostl) |
 | Ascon-Hash256 and Ascon-XOF128 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` rows over uint32 word halves, plus Ascon-p[12] as a `Permutation`, with a testonly host partner | [`ascon/`](../hash_frx/ascon) |
 | RIPEMD-160 — the little-endian Merkle–Damgård `ByteHash` (Bitcoin HASH160's second half), with a testonly host partner | [`ripemd160/ripemd160.py`](../hash_frx/ripemd160/ripemd160.py) |
 | SHA3-256, SHA3-512, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |

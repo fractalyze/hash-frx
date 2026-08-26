@@ -327,40 +327,35 @@ offset still traced. So the structural half is smaller than it looked, and the
 lesson stands in a different form: measure the schedule before crediting the
 marker, and check that the schedule is the one you think it is.
 
-## Two implementations of one standard
+## One implementation of one standard
 
-`Sha256` and `HostSha256` ([`sha256/sha256.py`](../../hash_frx/sha256/sha256.py)) produce the
-same FIPS 180-4 bytes and differ only in substrate: one lowers to the device
-marker, the other loops `hashlib` on the host. `fusion_path` is what a consumer
-branches on, exactly as on the permutation side — the substrate is a value the
-hash carries, never a class name a caller has to test.
+Every row is a device row: `digest` takes a tracer, returns an `Array`, and
+hashes a `[B, L]` batch where a single message is `B = 1`. `fusion_path` says
+whether the marker is routed on this backend — `DEDICATED` or `GENERIC` — and
+nothing else. There is no substrate to branch on.
 
-**The three states are all live, and which hash sits where moves with the
-pin.** `FusionPath` separates "lowers to one dedicated kernel" (`DEDICATED`)
-from "device and traceable, marker un-routed" (`GENERIC`) from "host loop over
-a native library" (`HOST`), because a consumer that cannot tell the middle
-state from the last will size a nonce window for the host path against a
-device hash. Sparse Poseidon is the standing `GENERIC` case on the CPU leg,
-its arm being GPU-only, and Grøstl-256 is that case inverted, its emitter being
-CPU-only; Keccak's byte rows were the first example and now read `DEDICATED` on
-both legs, which is the point — the gap moves with the pin; BLAKE3's rows were `GENERIC` everywhere until the
-emitter shipped and now read `DEDICATED` on cpu and gpu, with Metal keeping
-`GENERIC` alive. The gap is a property of the pin and the backend, not of the
-design — so the seam names it as a value, and the return type of `digest`
-(`Array` against `np.ndarray`) remains the authority `is_traceable` answers
-to.
+**Which hash sits in which state moves with the pin**, which is why the seam
+names it as a value rather than leaving a caller to test a class name. Sparse
+Poseidon is the standing `GENERIC` case on the CPU leg, its arm being GPU-only;
+Keccak's byte rows were the first example and now read `DEDICATED` on both legs,
+which is the point — the gap moves with the pin. BLAKE3's rows were `GENERIC`
+everywhere until the emitter shipped and now read `DEDICATED` on cpu and gpu,
+with Metal keeping `GENERIC` alive.
 
-Both stay, and the reason is not only speed. A byte transcript is host-shaped by
-construction — a `bytes` buffer with host framing — so a device hash forces a
-device-to-host sync on every squeeze; and a proof-of-work grind sizes its nonce
-window off `fusion_path`, testing a wide window on a device hash and one nonce
-at a time on a host hash. The host implementation is what makes that branch
-reachable at all.
+**It used to ship twice.** `Sha256` had a `HostSha256` beside it looping
+`hashlib`, and every family had the pair; `FusionPath` carried a third state,
+`HOST`, and a second question, whether a call may sit inside a traced region.
+Those rows are gone
+([#324](https://github.com/fractalyze/hash-frx/issues/324)), so that question
+has one answer for every row and the return type gives it.
 
-The choice between them is **by batch shape, not by machine** — measured on the
-CPU backend, `[B, 64]` messages:
+### What the removal costs, measured
 
-| B | `Sha256` | `HostSha256` | winner |
+Kept because it is a real cost and the numbers are the reason anyone would
+argue the other way. Measured on the CPU backend, `[B, 64]` messages, when both
+rows existed:
+
+| B | `Sha256` | the `hashlib` loop | winner |
 |---:|---:|---:|---|
 | 1 | 32.5 us | 1.5 us | host, 22x |
 | 32 | 35.4 us | 24.4 us | host |
@@ -368,140 +363,39 @@ CPU backend, `[B, 64]` messages:
 | 1024 | 138 us | 754 us | device, 5.5x |
 
 Crossover is around B=48. Device latency is flat out to B=64 because it is
-dispatch-bound rather than compute-bound, and these are CPU-backend numbers — so
-a sequential caller pays the gap on every machine, not just a machine without a
-GPU.
+dispatch-bound rather than compute-bound, and these are CPU-backend numbers, so
+a sequential caller pays the gap on every machine rather than only on one
+without a GPU. On top of it a caller whose messages are not all one length pays
+a **compilation per length** — the block count and the pad are static in `[B, L]`
+— which at `B = 1` on CPU is four to five orders of magnitude above the warm
+call it enables.
 
-**Every family has host rows, and one body runs them all.** `host_digest`
-([`byte_hash.py`](../../hash_frx/byte_hash.py)) is that body — `hash_one` per
-message, over the batch row's own buffer rather than a `bytes` copy of it — so a
-row is that callable plus its `digest_size`, and a new one is a two-line
-`_hash_one` instead of a fourth transcription of the same loop.
+**A caller in that shape uses `hashlib` directly.** That is what
+[`adapter/pbkdf2.py`](../../hash_frx/adapter/pbkdf2.py) already told callers
+wanting host derivation, and what sig-frx's ECDSA does through
+`MessageHash.host_constructor` — RFC 6979 requires the message hash and the
+HMAC to be one `H`, and the signing path takes that face.
 
-**A host row may cost a dependency, and BLAKE3's does.** SHA-256 and the FIPS 202
-rows ride `hashlib`; the standard library has no BLAKE3 and will not grow one, so
-`HostBlake3` and its keyed and derive-key siblings are built on `blake3`, the
-BLAKE3 team's own Rust binding, and it is a declared runtime dependency of this
-package. What clears that bar is the property the row exists for: native speed is
-the whole reason to choose a host row, and a plain-Python implementation is two
-orders of magnitude off what a `Host*` name promises.
+BLAKE3 is the one family with no standard-library fallback, so the `blake3`
+binding it used to ship a row over is now a TEST dependency: the suites hash
+against it as an out-of-tree oracle, and `pyproject.toml` no longer requires it
+at runtime.
 
-Keccak-256 is where that bar bites, because its plain-Python sponge is not
-simply slow: at `B = 1` on a leg without the emitters it beats the device row
-several times over, and by two further orders of magnitude the first time a
-length is met. Both halves of that win are the substrate rather than the sponge:
-the first is the un-routed marker, which an emitter for this leg would close,
-and the second is the compilation term, which a marker ABI would. Neither is a
-reason to ship a plain-Python row — which is why Keccak-256 has no shipped host
-row, and why paying a dependency to make one genuinely native was judged not
-worth it either.
+### The differential partner survived the rows
 
-The dependency buys a second thing the published vectors cannot: a differential
-partner that is not this tree. The binding wraps the reference implementation the
-vectors are generated from, so device-against-host agreement at lengths nobody
-published is evidence about the implementation rather than about one reading of
-the spec applied twice — which is what
-[the byte-exactness rule](../reference/conventions.md) asks for when it refuses a
-pin against another implementation in this tree.
+The strongest evidence in this package is agreement with an implementation that
+is not this tree ([byte-exactness](../reference/conventions.md)), and the host
+rows were where it lived. Removing them did not remove it: every sweep they
+carried now calls the oracle directly through
+[`testing/oracle.py`](../../hash_frx/testing/oracle.py)'s `oracle_digest`, which
+is the per-row loop those rows contributed as a side effect of being rows. It
+sits under `testing/` because nothing but a test wants a Python loop over a
+batch.
 
-It also narrows one row. The binding takes a derive-key context as a `str`, so
-`HostBlake3DeriveKey` refuses a context that is not valid UTF-8 where
-`Blake3DeriveKey` hashes it. The standard names that context UTF-8, so a caller
-following it never meets the narrowing.
-
-## Which hashes get a host row
-
-A `Host*` row ships when two conditions hold together:
-
-1. the host path is faster than the device path **at the batch shape the
-   consumer lives at**, and
-2. a **host-shaped consumer** exists — one that is not tracing, and needs the
-   result bytes for ordinary Python control flow.
-
-Both are load-bearing, and the set they carve out is the whole reason the
-`Host*` names look the way they do: the `hashlib` families and BLAKE3 ship
-because both hold, and Keccak-256, RIPEMD-160, Grøstl-256 and Ascon-Hash256
-have no shipped host row because the first fails.
-
-Condition 1 reads as a claim about kernel speed, and that is its smaller half
-wherever the message length is part of the *input shape*. `digest` takes
-`uint8[B, L]`, so for most families it is, and the block count and the pad are
-static by construction —
-[`keccak/sponge.py`](../../hash_frx/keccak/sponge.py) states the trade in one
-line ("every loop bound here is static … that is what lets `digest` take a
-tracer"), and `extension/pad.py`'s `PadRule` builds the pad as a host constant
-*from* the static length. So an eager caller whose messages are not all one
-length pays a **compilation per length**, not a kernel per call — and on the CPU
-backend at `B = 1` that compilation is four to five orders of magnitude above the
-warm call it enables, which is itself an order above the `hashlib` row. The host
-row's real saving is the compile, and it dwarfs the dispatch saving that the
-batch-shape table above measures.
-
-**A dedicated emitter does not shrink that term; it grows it.** A routed marker
-compiles a fresh length roughly an order of magnitude slower than an un-routed
-one, because the emitter's own MLIR and LLVM codegen is the cost — and it buys
-back roughly two orders on the warm call. That is the trade a dedicated kernel
-makes, and it is a good one for a traced caller and a bad one for a caller that
-meets each length once. So "ship the emitter and the host row stops paying for
-itself" is wrong twice: the emitter does not touch this term, and it raises it.
-
-The figures move with the pin — a wheel that gains or loses an emitter moves
-them by an order of magnitude, which is why they are stated as ratios here and
-measured fresh when they matter.
-
-Naming the causes is what keeps the condition honest, because it also says what
-retires it: a marker ABI taking the length as an operand, with the block loop
-inside the emitter, compiles once per buffer width rather than once per length.
-SHA-256 has one on **both** cpu and gpu — its runtime-length digest ABI
-([`sha256/sha256.py`](../../hash_frx/sha256/sha256.py), `_BYTES_EMITTER_BACKENDS`) — so a
-message widened to a shared buffer width is hashed at its own length by a kernel
-every other length reuses. That ABI is now the only whole-message form: the
-static-tail arm it once shared the marker name with was retired once the operand
-form reached every backend that has an emitter at all.
-
-Grøstl-256 is the second family on it, cpu only
-([`grostl/grostl.py`](../../hash_frx/grostl/grostl.py), `_EMITTER_BACKENDS`), and it
-carries the form under its EXISTING marker name rather than a sibling: the two
-operand forms are told apart by operand 4 being disjoint in element type and
-rank, so no second name and no `composite.version` bump were needed.
-Where that holds, condition 1's larger half is gone and the host row rests on
-dispatch alone, which is a far weaker justification than the paragraphs above
-describe.
-
-Everywhere else the compile-per-length term stands as stated: the five
-remaining tail-operand families, and either of the two above on a backend whose
-plugin carries no emitter for that ABI. So condition 1 is a question about a (hash, backend) pair rather than about
-the package, and a host row retired on the strength of one cell would be a
-regression in the others.
-
-`Permutation` has **no host category at all**, and that is a different
-statement from a byte hash having no shipped host row. A permutation fails both
-conditions rather than one: there is no native standard to wrap, and it runs
-inside a circuit, where a tracer's bytes cannot be read. `HostPoseidon` is not
-missing, it is categorically absent — so the absence needs no per-hash
-justification the way Keccak-256's does.
-
-**Why not emit a host-side composite from XLA instead.** A `ByteHash` is a
-finished product, so the question recurs: why keep `hashlib` at all rather than
-mark a host-side region and delete the device/host split? It is a category
-error. A composite exists only inside HLO, and reaching HLO means tracing —
-while the moment a host row is wanted is exactly the moment there is no HLO,
-because the caller is not tracing and needs concrete bytes (a KAT comparison, a
-sequential byte transcript, assembling a Merkle tree). Handing `np.ndarray` to
-a marked region leaves nothing to wrap. Running the *device* row on the CPU
-backend is possible and gives the right bytes; it is condition 1 restated, at
-the two costs measured above.
-
-**Dropping host rows wholesale is a seam change, not a third option.** It is
-worth naming because it keeps being re-proposed as though it were cheap. The
-measurements above are what rule it out — every sequential caller pays the two
-costs, and the host-shaped consumers of condition 2 exist today. What it would
-*entail* is recorded separately, because a consequence is not an argument:
-`FusionPath.HOST` goes dead, `is_traceable` becomes trivially true for every
-value so [`adapter/pbkdf2.py`](../../hash_frx/adapter/pbkdf2.py)'s guard becomes unreachable,
-and `DEDICATED`/`GENERIC` is a boolean — the shape `FusionPath` exists to
-replace. That collapse is correct bookkeeping *if* host rows genuinely go; it
-is not itself the reason they stay.
+The claim got stronger in the move: a device row was compared against a host row
+either of which could drift, and is now compared against `hashlib` — or, for
+BLAKE3, against the binding wrapping the reference the published vectors are
+generated from.
 
 ## Names say the construction they implement
 

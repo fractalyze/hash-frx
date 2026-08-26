@@ -17,7 +17,6 @@ from frx.typing import ArrayLike
 from hash_frx.byte_hash import (
     ByteHash,
     device_message,
-    host_digest,
     message_length,
 )
 from hash_frx.fusion import FusionPath
@@ -33,7 +32,7 @@ class _ByteHashDouble:
     """
 
     digest_size = 32
-    fusion_path = FusionPath.HOST
+    fusion_path = FusionPath.GENERIC
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return np.zeros((np.asarray(msg).shape[0], self.digest_size), dtype=np.uint8)
@@ -93,11 +92,6 @@ class DeviceMessageTest(absltest.TestCase):
             with self.subTest(ndim=np.ndim(bad)):
                 with self.assertRaisesRegex(ValueError, "2-D uint8"):
                     device_message(bad)
-                # The host door has to answer the same call the same way (#235),
-                # and this is the cheap backend-free target to say so in — the
-                # all-rows suite covers it too, at `size = "large"`.
-                with self.assertRaisesRegex(ValueError, "2-D uint8"):
-                    host_digest(lambda b: b"", 1, bad)
 
 
 class MessageLengthTest(absltest.TestCase):
