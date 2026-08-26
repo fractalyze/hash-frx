@@ -31,8 +31,9 @@ from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sm3 import sm3
-from hash_frx.sm3.sm3 import HostSm3, Sm3
+from hash_frx.sm3.sm3 import Sm3
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block
 # cutoff — the 0x80 byte + 8-byte length need 9 bytes), 63/64 (block edge; 64
@@ -203,65 +204,44 @@ class Sm3TracedTest(absltest.TestCase):
 
 
 class Sm3ByteHashTest(parameterized.TestCase):
-    """The two `ByteHash` implementations, against the seam and against each
-    other — the `Sha512ByteHashTest` split at the ShangMi table."""
+    """The `ByteHash` implementation, against the seam and against the
+    oracle — the `Sha512ByteHashTest` split at the ShangMi table."""
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h in (Sm3(), HostSm3()):
-            with self.subTest(impl=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, 32)
-                self.assertIsInstance(h.fusion_path, FusionPath)
+        h = Sm3()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, 32)
+        self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # Device GENERIC (pre-emitter, every backend), host HOST (every
-        # backend) — and the traceability tie to the return type: the device
-        # row returns an `Array` and takes a tracer, the host row reads bytes
-        # and never can (`byte_hash.py`'s rule).
+        # GENERIC (pre-emitter, every backend), and the traceability tie to
+        # the return type: the row returns an `Array` and takes a tracer
+        # (`byte_hash.py`'s rule).
         msg = np.zeros((1, 1), dtype=np.uint8)
-        device, host = Sm3(), HostSm3()
+        device = Sm3()
         self.assertIs(device.fusion_path, FusionPath.GENERIC)
         self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
-        self.assertIs(host.fusion_path, FusionPath.HOST)
-        self.assertFalse(host.fusion_path.is_traceable)
-        self.assertIsInstance(host.digest(msg), np.ndarray)
 
     @parameterized.parameters(*_LENGTHS)
-    def test_host_matches_hashlib(self, length: int) -> None:
-        # HostSm3 is a separate implementation, not a wrapper over the marked
-        # path: it loops `hashlib` per row. Nothing above covers it.
-        rng = np.random.default_rng(length)
-        msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
-        got = np.asarray(HostSm3().digest(msgs))
-        self.assertEqual(got.shape, (4, 32))
-        for i in range(msgs.shape[0]):
-            self.assertEqual(bytes(got[i]), _sm3_oracle(bytes(msgs[i])))
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_device_and_host_agree(self, length: int) -> None:
-        # Two implementations of identical bytes are only safe while they
-        # stay identical; the guard that keeps them from drifting, across
-        # every padding boundary rather than one convenient length.
+    def test_device_matches_the_oracle(self, length: int) -> None:
+        # The guard that keeps the kernel from drifting off the standard,
+        # across every padding boundary rather than one convenient length.
         rng = np.random.default_rng(length + 1)
         msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
         np.testing.assert_array_equal(
             np.asarray(Sm3().digest(msgs)),
-            np.asarray(HostSm3().digest(msgs)),
+            oracle_digest(_sm3_oracle, 32, msgs),
         )
 
     def test_value_identity_is_by_type(self) -> None:
         # Param-free, so every instance of a type is equal and hashes alike —
-        # what keeps the seam re-trace-safe as pytree aux. The two are never
-        # equal, or swapping substrate would not re-trace; and neither equals
-        # the structural cousin, or a family holding both would collide.
-        for cls in (Sm3, HostSm3):
-            with self.subTest(impl=cls.__name__):
-                self.assertEqual(cls(), cls())
-                self.assertEqual(hash(cls()), hash(cls()))
-        self.assertNotEqual(Sm3(), HostSm3())
+        # what keeps the seam re-trace-safe as pytree aux; and it does not
+        # equal the structural cousin, or a family holding both would collide.
+        self.assertEqual(Sm3(), Sm3())
+        self.assertEqual(hash(Sm3()), hash(Sm3()))
         self.assertNotEqual(Sm3(), Sha256())
 
 
@@ -276,7 +256,7 @@ class SeamContractTest(absltest.TestCase):
     """
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(sm3.Sm3(), 32), (sm3.HostSm3(), 32)]
+        rows: list[tuple[ByteHash, int]] = [(sm3.Sm3(), 32)]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
             self.assertEqual(got.shape, (0, size))

@@ -47,6 +47,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import cache
 
+import blake3 as blake3_py
 import frx
 import frx.numpy as fnp
 import numpy as np
@@ -57,9 +58,6 @@ from hash_frx.blake3.rows import (
     Blake3,
     Blake3DeriveKey,
     Blake3Keyed,
-    HostBlake3,
-    HostBlake3DeriveKey,
-    HostBlake3Keyed,
 )
 from hash_frx.blake3.testing.emitter import HAS_BLAKE3_EMITTER
 from hash_frx.blake3.testing.vectors import (
@@ -77,6 +75,7 @@ from hash_frx.blake3.testing.vectors import (
 )
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
+from hash_frx.testing.oracle import oracle_digest
 
 # The published extended column is 131 bytes and its head is the digest, so one
 # table anchors both output lengths (`vectors._digests` takes the head rather
@@ -103,33 +102,44 @@ def _official_batch(length: int) -> np.ndarray:
 # columns it reproduces. Everything below is parameterized over this, because the
 # modes are one body with different parameters and a case that ran for only one of
 # them would stop covering the family the moment a fourth row lands.
+# `oracle` is the BLAKE3 team's own binding for that mode, taking a message and
+# an output length. It is what the deleted host rows wrapped, and keeping it
+# here is what keeps the differential sweep below a claim about the
+# implementation rather than about this tree agreeing with itself.
 _ROWS = (
-    ("hash", Blake3, HostBlake3, (), ALL_LENGTHS, EXTENDED),
-    ("keyed", Blake3Keyed, HostBlake3Keyed, (KEY,), KEYED, EXTENDED_KEYED),
+    (
+        "hash",
+        Blake3,
+        (),
+        ALL_LENGTHS,
+        EXTENDED,
+        lambda m, n: blake3_py.blake3(m).digest(n),
+    ),
+    (
+        "keyed",
+        Blake3Keyed,
+        (KEY,),
+        KEYED,
+        EXTENDED_KEYED,
+        lambda m, n: blake3_py.blake3(m, key=KEY).digest(n),
+    ),
     (
         "derive_key",
         Blake3DeriveKey,
-        HostBlake3DeriveKey,
         (CONTEXT,),
         DERIVE_KEY,
         EXTENDED_DERIVE_KEY,
+        lambda m, n: blake3_py.blake3(m, derive_key_context=CONTEXT).digest(n),
     ),
 )
 
-_SUBSTRATES = ("device", "host")
+# Every row — what the seam sweeps run over.
+_EVERY_ROW = tuple((name, cls, args) for name, cls, args, _, _, _ in _ROWS)
 
-# Every row on both substrates — what the seam sweeps run over.
-_EVERY_ROW = tuple(
-    (f"{substrate}_{name}", cls, args)
-    for name, device, host, args, _, _ in _ROWS
-    for substrate, cls in zip(_SUBSTRATES, (device, host))
-)
+_DEVICE_ROWS = _EVERY_ROW
 
-_DEVICE_ROWS = tuple((name, device, args) for name, device, _, args, _, _ in _ROWS)
-_HOST_ROWS = tuple((name, host, args) for name, _, host, args, _, _ in _ROWS)
-
-# The two rows of one mode, for the cases that compare them against each other.
-_PAIRS = tuple((name, device, host, args) for name, device, host, args, _, _ in _ROWS)
+# One mode's row beside its oracle, for the cases that compare them.
+_PAIRS = tuple((name, cls, args, oracle) for name, cls, args, _, _, oracle in _ROWS)
 
 # How far the device rows reach, which is a question about compile cost rather
 # than about the seam. Where the BLAKE3 emitter is present a marked digest is one
@@ -148,18 +158,16 @@ _DEVICE_LAYER_LENGTHS = tuple(
 )
 
 _PER_LAYER = tuple(
-    (f"{substrate}_{name}_{length}", cls, args, length, expected)
-    for name, device, host, args, table, _ in _ROWS
-    for substrate, cls, lengths in zip(
-        _SUBSTRATES, (device, host), (_DEVICE_LAYER_LENGTHS, PER_LAYER_LENGTHS)
-    )
-    for length, expected in rows(table, lengths)
+    (f"{name}_{length}", cls, args, length, expected)
+    for name, cls, args, table, _, _ in _ROWS
+    for length, expected in rows(table, _DEVICE_LAYER_LENGTHS)
 )
 
-# Every published length in every mode, for the host rows alone.
+# Every published length in every mode, for the oracle alone — affordable
+# because a native hash costs no compile.
 _HOST_TABLE = tuple(
-    (f"{name}_{length}", host, args, length, expected)
-    for name, _, host, args, _, extended in _ROWS
+    (f"{name}_{length}", oracle, length, expected)
+    for name, _, _, _, extended, oracle in _ROWS
     for length, expected in extended
 )
 
@@ -203,32 +211,29 @@ class ForwardedVectorTest(parameterized.TestCase):
         self.assertEqual(bytes(got[0]).hex(), expected)
 
 
-class HostVectorTest(parameterized.TestCase):
-    """The host rows against the whole published table, at both output lengths.
+class OracleVectorTest(parameterized.TestCase):
+    """The oracle against the whole published table, at both output lengths.
 
     Affordable here and not on the device rows: a native hash costs no compile,
-    so the thin-wrapper claim gets thirty-five lengths instead of three. It is
-    also what makes the differential sweep below meaningful — a host row anchored
-    to the standard is a partner worth disagreeing with.
+    so this gets thirty-five lengths instead of three. It is what makes the
+    differential sweep below meaningful — an oracle anchored to the standard is
+    a partner worth disagreeing with.
     """
 
     @parameterized.named_parameters(*_HOST_TABLE)
     def test_official_vector_at_both_output_lengths(
         self,
-        cls: Callable[..., ByteHash],
-        args: tuple[object, ...],
+        oracle: Callable[[bytes, int], bytes],
         length: int,
         expected: str,
     ) -> None:
-        msg = _official_batch(length)
+        msg = bytes(np.asarray(_official_batch(length))[0])
         with self.subTest(output_size=32):
-            got = np.asarray(cls(*args).digest(msg))
-            self.assertEqual(bytes(got[0]).hex(), expected[: 2 * 32])
+            self.assertEqual(oracle(msg, 32).hex(), expected[: 2 * 32])
         with self.subTest(output_size=_EXTENDED_LEN):
             # 131 bytes is three output blocks and a 3-byte remainder, so the
             # stream running past one block and the partial tail are both here.
-            got = np.asarray(cls(*args, _EXTENDED_LEN).digest(msg))
-            self.assertEqual(bytes(got[0]).hex(), expected)
+            self.assertEqual(oracle(msg, _EXTENDED_LEN).hex(), expected)
 
 
 class DifferentialTest(parameterized.TestCase):
@@ -241,22 +246,21 @@ class DifferentialTest(parameterized.TestCase):
     """
 
     @parameterized.named_parameters(*_PAIRS)
-    def test_the_two_substrates_agree_at_unpublished_lengths(
+    def test_the_row_agrees_with_the_oracle_at_unpublished_lengths(
         self,
-        device: Callable[..., ByteHash],
-        host: Callable[..., ByteHash],
+        cls: Callable[..., ByteHash],
         args: tuple[object, ...],
+        oracle: Callable[[bytes, int], bytes],
     ) -> None:
         rng = np.random.default_rng(7)
         for length in _RANDOM_LENGTHS:
-            # Two rows, so a length that packed the batch axis wrongly on one
-            # substrate and not the other fails here rather than passing on a
-            # batch of one.
+            # Two rows, so a length that packed the batch axis wrongly fails
+            # here rather than passing on a batch of one.
             msg = rng.integers(0, 256, size=(2, length), dtype=np.uint8)
             with self.subTest(length=length):
                 np.testing.assert_array_equal(
-                    np.asarray(device(*args).digest(msg)),
-                    np.asarray(host(*args).digest(msg)),
+                    np.asarray(cls(*args).digest(msg)),
+                    oracle_digest(lambda b: oracle(b, 32), 32, msg),
                 )
 
 
@@ -278,13 +282,6 @@ class SeamConformanceTest(parameterized.TestCase):
         expected = FusionPath.from_routing(HAS_BLAKE3_EMITTER)
         h = cls(*args)
         self.assertIs(h.fusion_path, expected)
-
-    @parameterized.named_parameters(*_HOST_ROWS)
-    def test_a_host_row_is_host_on_every_backend(
-        self, cls: Callable[..., ByteHash], args: tuple[object, ...]
-    ) -> None:
-        h = cls(*args)
-        self.assertIs(h.fusion_path, FusionPath.HOST)
 
     @parameterized.named_parameters(*_EVERY_ROW)
     def test_digest_size_matches_what_digest_returns(
@@ -365,22 +362,12 @@ class SeamConformanceTest(parameterized.TestCase):
             np.asarray(cls(*args).digest(message)),
         )
 
-    @parameterized.named_parameters(*_HOST_ROWS)
-    def test_a_host_row_returns_a_host_array(
-        self, cls: Callable[..., ByteHash], args: tuple[object, ...]
-    ) -> None:
-        # The mirror of the case above: what tells a consumer it may not hash
-        # inside its own jit is that this row hands back an `np.ndarray` — the
-        # return type stays the authority `fusion_path.is_traceable` answers to.
-        self.assertIsInstance(cls(*args).digest(_rows(official_input(65))), np.ndarray)
-
 
 class ModeIdentityTest(parameterized.TestCase):
     """What each row adds to the value surface, and that the rows are distinct."""
 
     @parameterized.named_parameters(
         ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
-        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
     )
     def test_the_key_is_part_of_the_value(
         self,
@@ -397,7 +384,6 @@ class ModeIdentityTest(parameterized.TestCase):
 
     @parameterized.named_parameters(
         ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
-        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
     )
     def test_the_context_is_part_of_the_value(
         self,
@@ -409,7 +395,6 @@ class ModeIdentityTest(parameterized.TestCase):
 
     @parameterized.named_parameters(
         ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
-        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
     )
     def test_a_str_context_and_its_utf8_bytes_are_one_hash(
         self,
@@ -424,7 +409,6 @@ class ModeIdentityTest(parameterized.TestCase):
 
     @parameterized.named_parameters(
         ("device", Blake3, Blake3Keyed, Blake3DeriveKey),
-        ("host", HostBlake3, HostBlake3Keyed, HostBlake3DeriveKey),
     )
     def test_the_rows_are_three_hashes_and_not_one(
         self,
@@ -439,20 +423,7 @@ class ModeIdentityTest(parameterized.TestCase):
         self.assertNotEqual(plain(), derive(CONTEXT))
         self.assertNotEqual(keyed(KEY), derive(CONTEXT))
 
-    @parameterized.named_parameters(*_PAIRS)
-    def test_a_row_and_its_host_sibling_are_two_hashes(
-        self,
-        device: Callable[..., ByteHash],
-        host: Callable[..., ByteHash],
-        args: tuple[object, ...],
-    ) -> None:
-        # Same bytes, different substrate — and a consumer choosing between them
-        # is choosing between a kernel and a host loop. Equal as pytree aux, they
-        # would share a jit cache entry across that choice.
-        self.assertNotEqual(device(*args), host(*args))
-        self.assertNotEqual(host(*args), device(*args))
-
-    @parameterized.named_parameters(("device", Blake3Keyed), ("host", HostBlake3Keyed))
+    @parameterized.named_parameters(("device", Blake3Keyed))
     def test_rejects_a_key_that_is_not_32_bytes(
         self, keyed: Callable[..., ByteHash]
     ) -> None:
@@ -463,21 +434,17 @@ class ModeIdentityTest(parameterized.TestCase):
                 keyed(bytes(size))
 
 
-class HostDeriveKeyContextTest(absltest.TestCase):
-    """The one place the host row is narrower than the device row it mirrors."""
+class DeriveKeyContextTest(absltest.TestCase):
+    """The row takes a context the oracle binding cannot."""
 
-    def test_rejects_a_context_that_is_not_utf8(self) -> None:
-        # `blake3.blake3(..., derive_key_context=...)` takes a `str`, so a
-        # context the device row would happily hash as bytes has no host path.
-        # Refused at construction rather than at the first `digest`, and with the
-        # reason, since a caller hitting this has to choose another context.
-        with self.assertRaises(ValueError):
-            HostBlake3DeriveKey(b"\xff\xfe not utf-8")
-
-    def test_the_device_row_takes_the_context_the_host_row_refuses(self) -> None:
-        # The narrowing is the binding's and not the standard's, so it is pinned
-        # from both sides: were the device row to start refusing these too, this
-        # fails and the docstring stops being true.
+    def test_the_row_takes_a_context_the_binding_refuses(self) -> None:
+        # `blake3.blake3(..., derive_key_context=...)` takes a `str`, so the
+        # binding cannot express a non-UTF-8 context while the row hashes it as
+        # bytes. Pinned from both sides, because the narrowing is the binding's
+        # and not the standard's — and it is why the differential sweep above
+        # runs on UTF-8 contexts only.
+        with self.assertRaises((UnicodeDecodeError, TypeError, ValueError)):
+            blake3_py.blake3(b"", derive_key_context=b"\xff\xfe not utf-8")  # type: ignore[arg-type]
         self.assertEqual(Blake3DeriveKey(b"\xff\xfe").digest_size, 32)
 
 
@@ -486,7 +453,7 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(Blake3(), 32), (HostBlake3(), 32)]
+        rows: list[tuple[ByteHash, int]] = [(Blake3(), 32)]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
             self.assertEqual(got.shape, (0, size))

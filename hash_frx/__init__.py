@@ -128,22 +128,6 @@ _EXPORTS: dict[str, str] = {
     "Shake256": "hash_frx.keccak.byte_hashes",
     "Sm3": "hash_frx.sm3.sm3",
     # -- rows: host (never traceable, return `np.ndarray`) -----------------
-    "HostBlake2b": "hash_frx.blake2b.byte_hashes",
-    "HostBlake2bKeyed": "hash_frx.blake2b.byte_hashes",
-    "HostBlake2s": "hash_frx.blake2s.blake2s",
-    "HostBlake2sKeyed": "hash_frx.blake2s.blake2s",
-    "HostBlake3": "hash_frx.blake3.rows",
-    "HostBlake3DeriveKey": "hash_frx.blake3.rows",
-    "HostBlake3Keyed": "hash_frx.blake3.rows",
-    "HostSha256": "hash_frx.sha256.sha256",
-    "HostSha384": "hash_frx.sha512.sha512",
-    "HostSha3_256": "hash_frx.keccak.byte_hashes",
-    "HostSha3_512": "hash_frx.keccak.byte_hashes",
-    "HostSha512": "hash_frx.sha512.sha512",
-    "HostSha512_256": "hash_frx.sha512.sha512",
-    "HostShake128": "hash_frx.keccak.byte_hashes",
-    "HostShake256": "hash_frx.keccak.byte_hashes",
-    "HostSm3": "hash_frx.sm3.sm3",
     # -- streaming state (the midstate is per-construction, so are these) --
     "Blake3Stream": "hash_frx.blake3.streaming",
     "Sha256State": "hash_frx.sha256.sha256",
@@ -163,13 +147,6 @@ _EXPORTS: dict[str, str] = {
     # -- adapters ----------------------------------------------------------
     "ARK_0_3": "hash_frx.adapter.duplex",
     "ARK_0_5": "hash_frx.adapter.duplex",
-    # `Dual` names every paired row type, so importing it imports eight row
-    # modules and starts a backend: measured cold, 570 ms and 886 modules
-    # against 5.5 ms and 65 for `Xof` and `block_size` beside it. That buys a
-    # rename failing at import rather than at a consumer's call site
-    # (`adapter/dual.py`); it is called out here because nothing about this
-    # group hints at the spread.
-    "Dual": "hash_frx.adapter.dual",
     "Hmac": "hash_frx.adapter.hmac",
     "Mgf1": "hash_frx.adapter.mgf1",
     "Xof": "hash_frx.adapter.xof",
@@ -210,7 +187,6 @@ def __dir__() -> list[str]:
 # it equal to `_EXPORTS`.
 if TYPE_CHECKING:
     from hash_frx.adapter.block_size import block_size as block_size
-    from hash_frx.adapter.dual import Dual as Dual
     from hash_frx.adapter.duplex import ARK_0_3 as ARK_0_3
     from hash_frx.adapter.duplex import ARK_0_5 as ARK_0_5
     from hash_frx.adapter.hkdf import hkdf_expand as hkdf_expand
@@ -224,18 +200,11 @@ if TYPE_CHECKING:
     from hash_frx.ascon.permutation import AsconP as AsconP
     from hash_frx.blake2b.blake2b import Blake2b as Blake2b
     from hash_frx.blake2b.blake2b import Blake2bKeyed as Blake2bKeyed
-    from hash_frx.blake2b.byte_hashes import HostBlake2b as HostBlake2b
-    from hash_frx.blake2b.byte_hashes import HostBlake2bKeyed as HostBlake2bKeyed
     from hash_frx.blake2s.blake2s import Blake2s as Blake2s
     from hash_frx.blake2s.blake2s import Blake2sKeyed as Blake2sKeyed
-    from hash_frx.blake2s.blake2s import HostBlake2s as HostBlake2s
-    from hash_frx.blake2s.blake2s import HostBlake2sKeyed as HostBlake2sKeyed
     from hash_frx.blake3.rows import Blake3 as Blake3
     from hash_frx.blake3.rows import Blake3DeriveKey as Blake3DeriveKey
     from hash_frx.blake3.rows import Blake3Keyed as Blake3Keyed
-    from hash_frx.blake3.rows import HostBlake3 as HostBlake3
-    from hash_frx.blake3.rows import HostBlake3DeriveKey as HostBlake3DeriveKey
-    from hash_frx.blake3.rows import HostBlake3Keyed as HostBlake3Keyed
     from hash_frx.blake3.streaming import Blake3Stream as Blake3Stream
     from hash_frx.blake3.streaming import blake3_stream_init as blake3_stream_init
     from hash_frx.byte_hash import ByteHash as ByteHash
@@ -260,10 +229,6 @@ if TYPE_CHECKING:
     from hash_frx.keccak.byte_hashes import SHA3_512_RATE as SHA3_512_RATE
     from hash_frx.keccak.byte_hashes import SHAKE128_RATE as SHAKE128_RATE
     from hash_frx.keccak.byte_hashes import SHAKE256_RATE as SHAKE256_RATE
-    from hash_frx.keccak.byte_hashes import HostSha3_256 as HostSha3_256
-    from hash_frx.keccak.byte_hashes import HostSha3_512 as HostSha3_512
-    from hash_frx.keccak.byte_hashes import HostShake128 as HostShake128
-    from hash_frx.keccak.byte_hashes import HostShake256 as HostShake256
     from hash_frx.keccak.byte_hashes import Keccak256 as Keccak256
     from hash_frx.keccak.byte_hashes import Sha3_256 as Sha3_256
     from hash_frx.keccak.byte_hashes import Sha3_512 as Sha3_512
@@ -298,15 +263,11 @@ if TYPE_CHECKING:
     from hash_frx.poseidon2.standard import BabyBear16 as BabyBear16
     from hash_frx.poseidon2.standard import KoalaBear16 as KoalaBear16
     from hash_frx.ripemd160.ripemd160 import Ripemd160 as Ripemd160
-    from hash_frx.sha256.sha256 import HostSha256 as HostSha256
     from hash_frx.sha256.sha256 import Sha256 as Sha256
     from hash_frx.sha256.sha256 import Sha256State as Sha256State
     from hash_frx.sha256.sha256 import sha256_stream_absorb as sha256_stream_absorb
     from hash_frx.sha256.sha256 import sha256_stream_finalize as sha256_stream_finalize
     from hash_frx.sha256.sha256 import sha256_stream_init as sha256_stream_init
-    from hash_frx.sha512.sha512 import HostSha384 as HostSha384
-    from hash_frx.sha512.sha512 import HostSha512 as HostSha512
-    from hash_frx.sha512.sha512 import HostSha512_256 as HostSha512_256
     from hash_frx.sha512.sha512 import Sha384 as Sha384
     from hash_frx.sha512.sha512 import Sha512 as Sha512
     from hash_frx.sha512.sha512 import Sha512_256 as Sha512_256
@@ -314,7 +275,6 @@ if TYPE_CHECKING:
     from hash_frx.sha512.sha512 import sha512_stream_absorb as sha512_stream_absorb
     from hash_frx.sha512.sha512 import sha512_stream_finalize as sha512_stream_finalize
     from hash_frx.sha512.sha512 import sha512_stream_init as sha512_stream_init
-    from hash_frx.sm3.sm3 import HostSm3 as HostSm3
     from hash_frx.sm3.sm3 import Sm3 as Sm3
     from hash_frx.sponge import Sponge as Sponge
     from hash_frx.sponge import SpongeChaining as SpongeChaining

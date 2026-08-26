@@ -40,7 +40,6 @@ new wire name exists and a recognizer serving SHA-512 serves both for free.
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
@@ -54,9 +53,7 @@ from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import (
     DeviceRow,
-    HostRow,
     device_message,
-    host_digest,
     padded_batch,
 )
 from hash_frx.extension.md import MdStream, chain
@@ -68,6 +65,8 @@ from hash_frx.word64 import Pair, add64, rotr64, xor64
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
+
+    pass
 
 SHA512_MARKER = "hash_frx.digest.sha512"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI in
@@ -613,33 +612,6 @@ class Sha512(DeviceRow):
         return digest(msg)  # the module-level marker digest above
 
 
-class HostSha512(HostRow):
-    """`ByteHash` for host SHA-512 — `digest` loops `hashlib` per message on the
-    host (eager, no device kernel), so `fusion_path = HOST`. The fast path for a
-    strictly-sequential byte challenger, and the signing-path row issue #66
-    anticipates: `PRF_msg` carries no performance claim, and `hashlib` on a
-    small buffer beats a device dispatch per call.
-
-    Shipped rather than testonly, like `HostSha256` and unlike the grostl
-    partner: `hashlib` implements SHA-512, so the host row is a real fast path
-    and not merely the differential oracle."""
-
-    digest_size = 64
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(
-            lambda row: hashlib.sha512(row).digest(), self.digest_size, msg
-        )
-
-
-# ---------------------------------------------------------------------------
-# The truncated variants' rows (§6.5 SHA-384, §6.7 SHA-512/256) — the same
-# four-way split as above, one device + one host row per variant. Each class is
-# param-free (the output length is the VARIANT, fixed by its IV table, not a
-# parameter a caller picks — the SHAKE contrast), so value identity is by type
-# like `Sha512`'s, and the distinct types are what keep a family holding
-# several rows from colliding.
-# ---------------------------------------------------------------------------
 class Sha384(DeviceRow):
     """`ByteHash` for device SHA-384 — `sha384_digest`, i.e. the
     `hash_frx.digest.sha512` marker from the §5.3.4 initial state with the
@@ -670,45 +642,8 @@ class Sha512_256(DeviceRow):
         return sha512_256_digest(msg)
 
 
-class HostSha384(HostRow):
-    """`ByteHash` for host SHA-384 over `hashlib.sha384` — a guaranteed
-    `hashlib` constructor, so the row ships unconditionally like
-    `HostSha512`: the fast path for a strictly-sequential byte caller (TLS
-    transcripts, JWT PS384/ES384 verification one signature at a time)."""
-
-    digest_size = 48
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(
-            lambda row: hashlib.sha384(row).digest(), self.digest_size, msg
-        )
-
-
-class HostSha512_256(HostRow):
-    """`ByteHash` for host SHA-512/256 over `hashlib.new("sha512_256")`.
-
-    Not a guaranteed constructor: the name reaches `hashlib` through OpenSSL,
-    which carries SHA-512/256 in its DEFAULT provider (probed 2026-08-21 —
-    the opposite of RIPEMD-160's legacy-provider retreat that forced that
-    family's host partner testonly), so the row ships; on an OpenSSL built
-    without it, `hashlib.new` raises its own unsupported-algorithm error at
-    the first digest."""
-
-    digest_size = 32
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(
-            lambda row: hashlib.new("sha512_256", row).digest(),
-            self.digest_size,
-            msg,
-        )
-
-
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_marker: type[ByteHash] = Sha512
-    _bh_host: type[ByteHash] = HostSha512
     _bh_384: type[ByteHash] = Sha384
-    _bh_host_384: type[ByteHash] = HostSha384
     _bh_512_256: type[ByteHash] = Sha512_256
-    _bh_host_512_256: type[ByteHash] = HostSha512_256

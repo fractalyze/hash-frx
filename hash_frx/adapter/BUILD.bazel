@@ -101,29 +101,6 @@ py_library(
     visibility = ["//visibility:public"],
 )
 
-# `Dual` — the device/host pairing table, and the per-call selection over it.
-# Deps every row module that ships a host sibling, unavoidably: the table names
-# the row TYPES because it has to hand one back, which is also why it cannot
-# live on the seam every one of them imports (`dual.py` docstring).
-py_library(
-    name = "dual",
-    srcs = [
-        "__init__.py",
-        "dual.py",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//hash_frx/blake2b",
-        "//hash_frx/blake2s",
-        "//hash_frx/blake3",
-        "//hash_frx/keccak",
-        "//hash_frx/sha256",
-        "//hash_frx/sha512",
-        "//hash_frx/sm3",
-        requirement("frx"),
-    ],
-)
-
 # Named duplex conventions — which released implementation a sponge reproduces.
 # The axes live on the construction (`//hash_frx:duplex_sponge`); only the
 # members that pair them with ark-sponge 0.3 / ark-crypto-primitives 0.5 are

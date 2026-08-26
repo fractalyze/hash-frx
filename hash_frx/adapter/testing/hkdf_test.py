@@ -19,7 +19,7 @@ from absl.testing import absltest, parameterized
 
 from hash_frx.adapter.hkdf import hkdf_expand, hkdf_extract
 from hash_frx.adapter.hmac import Hmac
-from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import Sha256
 
 # RFC 5869 Appendix A, the HMAC-SHA-256 cases: (ikm, salt, info, L, PRK, OKM).
 _RFC5869 = (
@@ -56,11 +56,9 @@ _RFC5869 = (
     ),
 )
 
-_ROWS = (("device", Sha256), ("host", HostSha256))
 
-
-def _hmac_sha256(row: type) -> Hmac:
-    return Hmac(row(), block_size=64)
+def _hmac_sha256() -> Hmac:
+    return Hmac(Sha256(), block_size=64)
 
 
 def _reference_okm(prk: bytes, info: bytes, length: int) -> bytes:
@@ -78,17 +76,10 @@ def _bytes_arr(data: bytes) -> np.ndarray:
 
 
 class HkdfTest(parameterized.TestCase):
-    @parameterized.parameters(
-        *(
-            (f"{r}_{c}", row, ikm, salt, info, length, prk_hex, okm_hex)
-            for (r, row) in _ROWS
-            for (c, ikm, salt, info, length, prk_hex, okm_hex) in _RFC5869
-        )
-    )
+    @parameterized.parameters(*_RFC5869)
     def test_rfc5869_vectors(
         self,
         _name: str,
-        row: type,
         ikm: bytes,
         salt: bytes,
         info: bytes,
@@ -96,14 +87,14 @@ class HkdfTest(parameterized.TestCase):
         prk_hex: str,
         okm_hex: str,
     ) -> None:
-        mac = _hmac_sha256(row)
+        mac = _hmac_sha256()
         prk = hkdf_extract(mac, _bytes_arr(salt), _bytes_arr(ikm)[None, :])
         self.assertEqual(bytes(np.asarray(prk)[0]).hex(), prk_hex)
         okm = hkdf_expand(mac, prk, _bytes_arr(info), length)
         self.assertEqual(bytes(np.asarray(okm)[0]).hex(), okm_hex)
 
     def test_none_salt_is_the_zero_salt(self) -> None:
-        mac = _hmac_sha256(Sha256)
+        mac = _hmac_sha256()
         ikm = np.arange(22, dtype=np.uint8)[None, :]
         explicit = np.asarray(hkdf_extract(mac, np.zeros(32, np.uint8), ikm))
         defaulted = np.asarray(hkdf_extract(mac, None, ikm))
@@ -117,7 +108,7 @@ class HkdfTest(parameterized.TestCase):
         salt = rng.integers(0, 256, size=13, dtype=np.uint8)
         info = rng.integers(0, 256, size=(4, 10), dtype=np.uint8)
         length = 42
-        mac = _hmac_sha256(Sha256)
+        mac = _hmac_sha256()
         prk = hkdf_extract(mac, salt, ikm)
         okm = np.asarray(hkdf_expand(mac, prk, info, length))
         for i in range(4):
@@ -133,7 +124,7 @@ class HkdfTest(parameterized.TestCase):
         rng = np.random.default_rng(1)
         prk = rng.integers(0, 256, size=32, dtype=np.uint8)
         info = rng.integers(0, 256, size=(3, 7), dtype=np.uint8)
-        okm = np.asarray(hkdf_expand(_hmac_sha256(Sha256), prk, info, 16))
+        okm = np.asarray(hkdf_expand(_hmac_sha256(), prk, info, 16))
         for i in range(3):
             self.assertEqual(
                 bytes(okm[i]), _reference_okm(bytes(prk), bytes(info[i]), 16)
@@ -141,20 +132,20 @@ class HkdfTest(parameterized.TestCase):
 
     def test_single_block_length(self) -> None:
         prk = np.arange(32, dtype=np.uint8)
-        okm = np.asarray(hkdf_expand(_hmac_sha256(Sha256), prk, None, 16))
+        okm = np.asarray(hkdf_expand(_hmac_sha256(), prk, None, 16))
         self.assertEqual(bytes(okm[0]), _reference_okm(bytes(prk), b"", 16))
 
     @parameterized.parameters(0, 255 * 32 + 1)
     def test_length_bounds_rejected(self, length: int) -> None:
         with self.assertRaises(ValueError):
-            hkdf_expand(_hmac_sha256(Sha256), np.zeros(32, np.uint8), None, length)
+            hkdf_expand(_hmac_sha256(), np.zeros(32, np.uint8), None, length)
 
     def test_traced_matches_eager(self) -> None:
         rng = np.random.default_rng(2)
         ikm = rng.integers(0, 256, size=(3, 22), dtype=np.uint8)
         salt = rng.integers(0, 256, size=13, dtype=np.uint8)
         info = rng.integers(0, 256, size=10, dtype=np.uint8)
-        mac = _hmac_sha256(Sha256)
+        mac = _hmac_sha256()
 
         def kdf(salt_: np.ndarray, ikm_: np.ndarray, info_: np.ndarray) -> object:
             return hkdf_expand(mac, hkdf_extract(mac, salt_, ikm_), info_, 42)

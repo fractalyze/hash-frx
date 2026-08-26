@@ -51,22 +51,6 @@ from hash_frx import (
     Blake3Keyed,
     Grostl256,
     Hmac,
-    HostBlake2b,
-    HostBlake2bKeyed,
-    HostBlake2s,
-    HostBlake2sKeyed,
-    HostBlake3,
-    HostBlake3DeriveKey,
-    HostBlake3Keyed,
-    HostSha3_256,
-    HostSha3_512,
-    HostSha256,
-    HostSha384,
-    HostSha512,
-    HostSha512_256,
-    HostShake128,
-    HostShake256,
-    HostSm3,
     Keccak256,
     Mgf1,
     Ripemd160,
@@ -80,7 +64,7 @@ from hash_frx import (
     Shake256,
     Sm3,
 )
-from hash_frx.byte_hash import DeviceRow, HostRow
+from hash_frx.byte_hash import DeviceRow
 
 _KEY_A = bytes(range(32))
 _KEY_B = bytes(range(1, 33))
@@ -154,59 +138,6 @@ ALL_ROWS: tuple[RowCase, ...] = (
         lambda: Blake3DeriveKey("ctx a"),
         (lambda: Blake3DeriveKey("ctx b"), lambda: Blake3DeriveKey("ctx a", 16)),
     ),
-    RowCase("HostSha256", HostSha256),
-    RowCase("HostSha512", HostSha512),
-    RowCase("HostSha384", HostSha384),
-    RowCase("HostSha512_256", HostSha512_256),
-    RowCase("HostSm3", HostSm3),
-    RowCase(
-        "HostBlake2s",
-        HostBlake2s,
-        (lambda: HostBlake2s(20), lambda: HostBlake2s(32, person=b"p")),
-    ),
-    RowCase(
-        "HostBlake2b",
-        HostBlake2b,
-        (lambda: HostBlake2b(20), lambda: HostBlake2b(64, person=b"p")),
-    ),
-    RowCase(
-        "HostBlake2sKeyed",
-        lambda: HostBlake2sKeyed(_KEY_A),
-        (
-            lambda: HostBlake2sKeyed(_KEY_B),
-            lambda: HostBlake2sKeyed(_KEY_A, 20),
-            lambda: HostBlake2sKeyed(_KEY_A, salt=b"s"),
-            lambda: HostBlake2sKeyed(_KEY_A, person=b"p"),
-        ),
-    ),
-    RowCase(
-        "HostBlake2bKeyed",
-        lambda: HostBlake2bKeyed(_KEY_A),
-        (
-            lambda: HostBlake2bKeyed(_KEY_B),
-            lambda: HostBlake2bKeyed(_KEY_A, 20),
-            lambda: HostBlake2bKeyed(_KEY_A, salt=b"s"),
-            lambda: HostBlake2bKeyed(_KEY_A, person=b"p"),
-        ),
-    ),
-    RowCase("HostSha3_256", HostSha3_256),
-    RowCase("HostSha3_512", HostSha3_512),
-    RowCase("HostShake128", lambda: HostShake128(32), (lambda: HostShake128(64),)),
-    RowCase("HostShake256", lambda: HostShake256(64), (lambda: HostShake256(32),)),
-    RowCase("HostBlake3", HostBlake3, (lambda: HostBlake3(16),)),
-    RowCase(
-        "HostBlake3Keyed",
-        lambda: HostBlake3Keyed(_KEY_A),
-        (lambda: HostBlake3Keyed(_KEY_B), lambda: HostBlake3Keyed(_KEY_A, 16)),
-    ),
-    RowCase(
-        "HostBlake3DeriveKey",
-        lambda: HostBlake3DeriveKey("ctx a"),
-        (
-            lambda: HostBlake3DeriveKey("ctx b"),
-            lambda: HostBlake3DeriveKey("ctx a", 16),
-        ),
-    ),
     # The two adapter rows. Both subclass `Row` directly rather than either
     # base, so both derive into a different set of buckets below than any
     # family row does.
@@ -244,12 +175,8 @@ BYTE_HASH_ROWS: tuple[RowCase, ...] = tuple(
 )
 
 # Device rows: traceable, `digest` returns an `Array`, `fusion_path` derived per
-# (row, backend). Host rows: never traceable, `digest` returns `np.ndarray`,
-# `fusion_path` the one legitimate constant. Both read off the class, so a row
-# cannot be filed under the wrong one; a row on neither base lands in neither.
+# (row, backend). Read off the class rather than restated here, so a row cannot
+# be filed under the wrong one and a row on neither base lands in neither.
 DEVICE_ROWS: tuple[RowCase, ...] = tuple(
     c for c in ALL_ROWS if issubclass(c.make().__class__, DeviceRow)
-)
-HOST_ROWS: tuple[RowCase, ...] = tuple(
-    c for c in ALL_ROWS if issubclass(c.make().__class__, HostRow)
 )

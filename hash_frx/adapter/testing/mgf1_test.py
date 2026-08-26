@@ -41,7 +41,7 @@ from absl.testing import absltest, parameterized
 from hash_frx.adapter.mgf1 import Mgf1, mgf1
 from hash_frx.byte_hash import ByteHash
 from hash_frx.keccak.byte_hashes import Shake256
-from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sha512.sha512 import Sha512
 
 _SEED = bytes(range(32))
@@ -130,13 +130,6 @@ class OtherHashesTest(parameterized.TestCase):
                     _expected_block(i, hash_fn, h_len),
                 )
 
-    def test_a_host_row_agrees_with_its_device_sibling(self) -> None:
-        # The host row returns `np.ndarray` and never traces; the bytes are
-        # the same hash either way.
-        device = np.asarray(mgf1(Sha256(), _seed(), 100))
-        host = np.asarray(mgf1(HostSha256(), _seed(), 100))
-        np.testing.assert_array_equal(device, host)
-
 
 class BatchingTest(absltest.TestCase):
     def test_rows_are_independent(self) -> None:
@@ -177,7 +170,6 @@ class RowContractTest(absltest.TestCase):
     def test_fusion_path_delegates_to_the_underlying_hash(self) -> None:
         # The mask IS that hash's digests, so the path cannot honestly differ.
         self.assertEqual(Mgf1(Sha256(), 70).fusion_path, Sha256().fusion_path)
-        self.assertEqual(Mgf1(HostSha256(), 70).fusion_path, HostSha256().fusion_path)
 
     def test_it_satisfies_the_ByteHash_protocol(self) -> None:
         # The point of being a row: an `Xof` slot or anything else taking a

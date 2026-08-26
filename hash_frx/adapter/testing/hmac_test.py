@@ -20,7 +20,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.adapter.hmac import Hmac
-from hash_frx.sha256.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import Sha256
 
 # RFC 4231 §4 HMAC-SHA-256 rows. `trunc` is the RFC's own output truncation
 # (case 5 keeps 128 bits); None keeps the full digest.
@@ -78,33 +78,22 @@ _RFC4231 = (
     ),
 )
 
-# Both seam substrates must produce identical bytes; the host row is also what
-# keeps the eager path honest.
-_ROWS = (("device", Sha256), ("host", HostSha256))
 
-
-def _hmac_sha256(row: type) -> Hmac:
-    return Hmac(row(), block_size=64)
+def _hmac_sha256() -> Hmac:
+    return Hmac(Sha256(), block_size=64)
 
 
 class HmacTest(parameterized.TestCase):
-    @parameterized.parameters(
-        *(
-            (f"{r}_{c}", row, key, data, trunc, hexmac)
-            for (r, row) in _ROWS
-            for (c, key, data, trunc, hexmac) in _RFC4231
-        )
-    )
+    @parameterized.parameters(*_RFC4231)
     def test_rfc4231_vectors(
         self,
         _name: str,
-        row: type,
         key: bytes,
         data: bytes,
         trunc: int | None,
         hexmac: str,
     ) -> None:
-        mac = _hmac_sha256(row)
+        mac = _hmac_sha256()
         got = bytes(
             np.asarray(
                 mac.mac(
@@ -124,7 +113,7 @@ class HmacTest(parameterized.TestCase):
         rng = np.random.default_rng(key_len)
         key = rng.integers(0, 256, size=key_len, dtype=np.uint8)
         msg = rng.integers(0, 256, size=(1, 120), dtype=np.uint8)
-        got = bytes(np.asarray(_hmac_sha256(Sha256).mac(key, msg))[0])
+        got = bytes(np.asarray(_hmac_sha256().mac(key, msg))[0])
         want = stdlib_hmac.new(bytes(key), bytes(msg[0]), hashlib.sha256).digest()
         self.assertEqual(got, want)
 
@@ -132,7 +121,7 @@ class HmacTest(parameterized.TestCase):
         rng = np.random.default_rng(0)
         key = rng.integers(0, 256, size=32, dtype=np.uint8)
         msgs = rng.integers(0, 256, size=(5, 40), dtype=np.uint8)
-        got = np.asarray(_hmac_sha256(Sha256).mac(key, msgs))
+        got = np.asarray(_hmac_sha256().mac(key, msgs))
         for i in range(msgs.shape[0]):
             want = stdlib_hmac.new(bytes(key), bytes(msgs[i]), hashlib.sha256)
             self.assertEqual(bytes(got[i]), want.digest())
@@ -141,16 +130,14 @@ class HmacTest(parameterized.TestCase):
         rng = np.random.default_rng(1)
         keys = rng.integers(0, 256, size=(5, 48), dtype=np.uint8)
         msgs = rng.integers(0, 256, size=(5, 40), dtype=np.uint8)
-        got = np.asarray(_hmac_sha256(Sha256).mac(keys, msgs))
+        got = np.asarray(_hmac_sha256().mac(keys, msgs))
         for i in range(5):
             want = stdlib_hmac.new(bytes(keys[i]), bytes(msgs[i]), hashlib.sha256)
             self.assertEqual(bytes(got[i]), want.digest())
 
     def test_empty_message(self) -> None:
         key = np.arange(16, dtype=np.uint8)
-        got = bytes(
-            np.asarray(_hmac_sha256(Sha256).mac(key, np.zeros((1, 0), np.uint8)))[0]
-        )
+        got = bytes(np.asarray(_hmac_sha256().mac(key, np.zeros((1, 0), np.uint8)))[0])
         self.assertEqual(got, stdlib_hmac.new(bytes(key), b"", hashlib.sha256).digest())
 
     def test_traced_matches_eager(self) -> None:
@@ -159,7 +146,7 @@ class HmacTest(parameterized.TestCase):
         rng = np.random.default_rng(2)
         key = rng.integers(0, 256, size=(3, 32), dtype=np.uint8)
         msg = rng.integers(0, 256, size=(3, 40), dtype=np.uint8)
-        mac = _hmac_sha256(Sha256)
+        mac = _hmac_sha256()
         eager = np.asarray(mac.mac(key, msg))
         traced = np.asarray(frx.jit(mac.mac)(key, msg))
         np.testing.assert_array_equal(traced, eager)
@@ -168,7 +155,7 @@ class HmacTest(parameterized.TestCase):
         # The construction adds no marker of its own: a short-key mac is the
         # inner and outer digest markers (2 composites), and a long key adds
         # exactly the hash-down digest (3) — nothing else.
-        mac = _hmac_sha256(Sha256)
+        mac = _hmac_sha256()
         short = np.zeros((1, 32), np.uint8)
         long_ = np.zeros((1, 65), np.uint8)
         msg = np.zeros((1, 40), np.uint8)
@@ -187,7 +174,6 @@ class HmacTest(parameterized.TestCase):
         self.assertEqual(Hmac(Sha256(), 64), Hmac(Sha256(), 64))
         self.assertEqual(hash(Hmac(Sha256(), 64)), hash(Hmac(Sha256(), 64)))
         self.assertNotEqual(Hmac(Sha256(), 64), Hmac(Sha256(), 128))
-        self.assertNotEqual(Hmac(Sha256(), 64), Hmac(HostSha256(), 64))
 
     def test_the_block_size_defaults_through_the_table(self) -> None:
         # What makes `adapter/block_size.py` an adapter rather than a data
@@ -214,7 +200,7 @@ class HmacTest(parameterized.TestCase):
         # the other nine, and a divergent string is how that silently stops
         # being true. `_require_batch_rank` states the invariant.
         with self.assertRaisesRegex(ValueError, r"msg must be 2-D uint8 \[B, L\]"):
-            _hmac_sha256(Sha256).mac(np.zeros(16, np.uint8), np.zeros(40, np.uint8))
+            _hmac_sha256().mac(np.zeros(16, np.uint8), np.zeros(40, np.uint8))
 
     def test_a_wrong_rank_is_rejected_before_any_conversion(self) -> None:
         # The reason the shared helper checks first: a wrong rank must not reach
@@ -222,9 +208,7 @@ class HmacTest(parameterized.TestCase):
         # digest if it got that far, naming an intermediate the caller never
         # wrote.
         with self.assertRaisesRegex(ValueError, r"got ndim=3"):
-            _hmac_sha256(Sha256).mac(
-                np.zeros(16, np.uint8), np.zeros((2, 3, 40), np.uint8)
-            )
+            _hmac_sha256().mac(np.zeros(16, np.uint8), np.zeros((2, 3, 40), np.uint8))
 
 
 if __name__ == "__main__":

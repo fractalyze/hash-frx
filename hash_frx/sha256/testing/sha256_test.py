@@ -26,6 +26,7 @@ from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
     emitted_composites,
 )
+from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block
 # cutoff), 63/64 (block edge), 119/120 (multi-block).
@@ -159,17 +160,16 @@ class Sha256ByteHashTest(parameterized.TestCase):
     """The two `ByteHash` implementations, against the seam and against each other.
 
     `byte_hash_test.py` stays seam-only — a double, so it runs on a branch where
-    no concrete hash exists — which leaves the real classes untested by it. This
-    is the other half of that split: the assertions that need `Sha256` and
-    `HostSha256` themselves and are tautologies against a double.
+    no concrete hash exists — which leaves the real class untested by it. This
+    is the other half of that split: the assertions that need `Sha256` itself
+    and are tautologies against a double.
     """
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h in (sha256.Sha256(), sha256.HostSha256()):
-            with self.subTest(impl=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, 32)
-                self.assertIsInstance(h.fusion_path, FusionPath)
+        h = sha256.Sha256()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, 32)
+        self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_flag_pins_the_substrate(self) -> None:
         # The only assertion in the repo that says WHICH implementation is the
@@ -178,40 +178,25 @@ class Sha256ByteHashTest(parameterized.TestCase):
         # fused hash and a single nonce otherwise — so a silent flip here would
         # change a proof-of-work strategy rather than fail a hash.
         self.assertIs(sha256.Sha256().fusion_path.is_one_kernel, True)
-        self.assertIs(sha256.HostSha256().fusion_path, FusionPath.HOST)
 
     @parameterized.parameters(*_LENGTHS)
-    def test_host_matches_hashlib(self, length: int) -> None:
-        # HostSha256 is a separate implementation, not a wrapper over the marked
-        # path: it loops `hashlib` per row. Nothing above covers it.
-        rng = np.random.default_rng(length)
-        msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
-        got = np.asarray(sha256.HostSha256().digest(msgs))
-        self.assertEqual(got.shape, (4, 32))
-        for i in range(msgs.shape[0]):
-            self.assertEqual(bytes(got[i]), hashlib.sha256(bytes(msgs[i])).digest())
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_device_and_host_agree(self, length: int) -> None:
-        # Two implementations of identical bytes are only safe while they stay
-        # identical; this is the guard that keeps them from drifting, across every
-        # padding boundary rather than one convenient length.
+    def test_device_matches_hashlib(self, length: int) -> None:
+        # `hashlib` is the out-of-tree oracle, so this is evidence about the
+        # implementation rather than about one reading of the spec applied
+        # twice — across every padding boundary rather than one convenient
+        # length.
         rng = np.random.default_rng(length + 1)
         msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
         np.testing.assert_array_equal(
             np.asarray(sha256.Sha256().digest(msgs)),
-            np.asarray(sha256.HostSha256().digest(msgs)),
+            oracle_digest(lambda b: hashlib.sha256(b).digest(), 32, msgs),
         )
 
     def test_value_identity_is_by_type(self) -> None:
         # Param-free, so every instance of a type is equal and hashes alike — what
-        # keeps the seam re-trace-safe as pytree aux. The two are never equal, or
-        # swapping substrate would not re-trace.
-        for cls in (sha256.Sha256, sha256.HostSha256):
-            with self.subTest(impl=cls.__name__):
-                self.assertEqual(cls(), cls())
-                self.assertEqual(hash(cls()), hash(cls()))
-        self.assertNotEqual(sha256.Sha256(), sha256.HostSha256())
+        # keeps the seam re-trace-safe as pytree aux.
+        self.assertEqual(sha256.Sha256(), sha256.Sha256())
+        self.assertEqual(hash(sha256.Sha256()), hash(sha256.Sha256()))
 
     def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
         blocks = sha256._padded_words(
@@ -435,7 +420,6 @@ class EmptyBatchTest(absltest.TestCase):
     def test_zero_rows_digest_to_zero_rows(self) -> None:
         rows: list[tuple[ByteHash, int]] = [
             (sha256.Sha256(), 32),
-            (sha256.HostSha256(), 32),
         ]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))

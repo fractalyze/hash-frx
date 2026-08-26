@@ -18,7 +18,6 @@ XLA).
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
@@ -32,11 +31,9 @@ from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import (
     DeviceRow,
-    HostRow,
     at_capacity,
     capacity,
     device_message,
-    host_digest,
     message_length,
     padded_batch,
     require_capacity_buffer,
@@ -53,6 +50,8 @@ from hash_frx.word import pack_be, rotr, unpack_be
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
+
+    pass
 
 U32 = fnp.uint32
 
@@ -578,28 +577,6 @@ class Sha256(DeviceRow):
         return digest(msg)  # the module-level marker digest above
 
 
-class HostSha256(HostRow):
-    """`ByteHash` for host SHA-256 — `digest` loops `hashlib` per message on the
-    host (eager, no device kernel), so `fusion_path = HOST`. The fast path for a
-    strictly-sequential byte challenger: `hashlib` on a small buffer beats a
-    device dispatch per squeeze.
-
-    For a host-shaped byte transcript, which holds a `bytes` buffer and reads
-    each digest back immediately — so a device hash there buys a kernel and pays
-    a device-to-host sync per squeeze. It is also the instance that makes the
-    `HOST` path reachable, which consumers branch on: zorch's byte transcript
-    grinds a wide nonce window against a fused hash and one nonce at a time
-    against this one."""
-
-    digest_size = 32
-
-    def digest(self, msg: ArrayLike) -> np.ndarray:
-        return host_digest(
-            lambda row: hashlib.sha256(row).digest(), self.digest_size, msg
-        )
-
-
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_marker: type[ByteHash] = Sha256
-    _bh_host: type[ByteHash] = HostSha256

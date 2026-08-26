@@ -10,7 +10,6 @@ py_library(
     srcs = [
         "__init__.py",
         "blake2b.py",
-        "byte_hashes.py",
     ],
     visibility = ["//visibility:public"],
     deps = [

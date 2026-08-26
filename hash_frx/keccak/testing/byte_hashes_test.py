@@ -40,10 +40,6 @@ from hash_frx.keccak.byte_hashes import (
     SHA3_512_RATE,
     SHAKE128_RATE,
     SHAKE256_RATE,
-    HostSha3_256,
-    HostSha3_512,
-    HostShake128,
-    HostShake256,
     Keccak256,
     Sha3_256,
     Sha3_512,
@@ -69,13 +65,11 @@ _SHA3_CASES = (
     (
         "sha3_256",
         lambda _out: Sha3_256(),
-        lambda _out: HostSha3_256(),
         lambda msg, _out: hashlib.sha3_256(msg).digest(),
     ),
     (
         "sha3_512",
         lambda _out: Sha3_512(),
-        lambda _out: HostSha3_512(),
         lambda msg, _out: hashlib.sha3_512(msg).digest(),
     ),
 )
@@ -84,13 +78,11 @@ _XOF_CASES = (
     (
         "shake128",
         Shake128,
-        HostShake128,
         lambda msg, out: hashlib.shake_128(msg).digest(out),
     ),
     (
         "shake256",
         Shake256,
-        HostShake256,
         lambda msg, out: hashlib.shake_256(msg).digest(out),
     ),
 )
@@ -98,7 +90,7 @@ _XOF_CASES = (
 # one table: a slice silently picks the wrong rows the moment one is inserted.
 _CASES = _SHA3_CASES + _XOF_CASES
 
-_Case = tuple[str, Callable[[int], ByteHash], Callable[[int], ByteHash], Callable]
+_Case = tuple[str, Callable[[int], ByteHash], Callable]
 
 
 def _message(length: int) -> np.ndarray:
@@ -110,7 +102,7 @@ class Fips202Test(parameterized.TestCase):
     def test_matches_hashlib_across_absorb_boundaries(
         self, case: _Case, length: int
     ) -> None:
-        name, device, _host, reference = case
+        name, device, reference = case
         msg = _message(length)
         with self.subTest(hash=name):
             got = bytes(np.asarray(device(64).digest(msg))[0])
@@ -118,24 +110,11 @@ class Fips202Test(parameterized.TestCase):
 
     @parameterized.product(case=_XOF_CASES, out=_SHAKE_OUTPUTS)
     def test_output_length_matches_hashlib(self, case: _Case, out: int) -> None:
-        name, device, _host, reference = case
+        name, device, reference = case
         msg = _message(200)
         with self.subTest(hash=name):
             got = bytes(np.asarray(device(out).digest(msg))[0])
             self.assertEqual(got, reference(bytes(msg[0]), out))
-
-    @parameterized.parameters(*_CASES)
-    def test_host_sibling_agrees_with_the_device_one(
-        self,
-        name: str,
-        device: Callable[[int], ByteHash],
-        host: Callable[[int], ByteHash],
-        _reference: Callable,
-    ) -> None:
-        msg = _message(300)
-        np.testing.assert_array_equal(
-            np.asarray(device(200).digest(msg)), np.asarray(host(200).digest(msg))
-        )
 
     def test_batched_equals_per_row(self) -> None:
         rng = np.random.default_rng(0)
@@ -155,7 +134,7 @@ class Fips202Test(parameterized.TestCase):
         #
         # `outer=1` is not redundant with 3: a leading axis of one is the case a
         # fix that squeezes rather than collapses would pass.
-        name, device, _host, reference = case
+        name, device, reference = case
         rng = np.random.default_rng(0)
         batch = rng.integers(0, 256, size=(outer, 5, 200), dtype=np.uint8)
         with self.subTest(hash=name):
@@ -208,7 +187,6 @@ class TracedDigestTest(parameterized.TestCase):
         self,
         name: str,
         device: Callable[[int], ByteHash],
-        _host: Callable[[int], ByteHash],
         reference: Callable,
     ) -> None:
         msg = _message(64)
@@ -227,19 +205,14 @@ class SeamConformanceTest(absltest.TestCase):
             Shake128(32),
             Shake256(32),
             Keccak256(),
-            HostSha3_256(),
-            HostSha3_512(),
-            HostShake128(32),
-            HostShake256(32),
         ):
             with self.subTest(hash=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
 
-    def test_only_the_device_rows_report_a_dedicated_fusion(self) -> None:
-        # Pinned rather than left to the docstring: a device row lowers the whole
-        # padded absorb and squeeze to one `hash_frx.digest.keccak_sponge` kernel
-        # wherever that emitter can be reached, and a host row never lowers at
-        # all.
+    def test_the_rows_report_a_dedicated_fusion(self) -> None:
+        # Pinned rather than left to the docstring: a row lowers the whole
+        # padded absorb and squeeze to one `hash_frx.digest.keccak_sponge`
+        # kernel wherever that emitter can be reached.
         #
         # The device side is compared against the shipped condition rather than
         # against True so the case follows the pin and the backend rather than
@@ -262,14 +235,6 @@ class SeamConformanceTest(absltest.TestCase):
                     device.fusion_path,
                     FusionPath.DEDICATED if expected else FusionPath.GENERIC,
                 )
-        for host in (
-            HostSha3_256(),
-            HostSha3_512(),
-            HostShake128(32),
-            HostShake256(32),
-        ):
-            with self.subTest(host=type(host).__name__):
-                self.assertIs(host.fusion_path, FusionPath.HOST)
 
     def test_digest_size_matches_what_digest_returns(self) -> None:
         msg = _message(64)
@@ -278,8 +243,6 @@ class SeamConformanceTest(absltest.TestCase):
             Sha3_512(),
             Shake128(48),
             Shake256(48),
-            HostSha3_512(),
-            HostShake256(48),
         ):
             with self.subTest(hash=type(h).__name__):
                 out = np.asarray(h.digest(msg))
@@ -296,7 +259,6 @@ class SeamConformanceTest(absltest.TestCase):
         # Same rate and output, different function: distinct types must not
         # compare equal, or a consumer's pytree aux would confuse them.
         self.assertNotEqual(Shake256(32), Shake128(32))
-        self.assertNotEqual(Shake256(32), HostShake256(32))
         # The two SHA-3 rows share a suffix and differ only in rate and length,
         # so they are the pair most likely to be conflated by a `__eq__` written
         # over `digest_size` without the type.
@@ -348,7 +310,6 @@ class EmptyBatchTest(absltest.TestCase):
             (Sha3_256(), 32),
             (Shake128(32), 32),
             (Keccak256(), 32),
-            (HostSha3_256(), 32),
         ]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
@@ -356,13 +317,10 @@ class EmptyBatchTest(absltest.TestCase):
             self.assertEqual(got.dtype, np.uint8)
 
 
-class HostXofSizeTest(absltest.TestCase):
-    """A host XOF refuses the zero-length output its device sibling refuses
-    (#215) — otherwise the pair disagrees on what counts as a hash."""
+class XofSizeTest(absltest.TestCase):
+    """An XOF refuses a zero-length output (#215)."""
 
-    def test_zero_output_is_rejected_on_both_rows(self) -> None:
-        with self.assertRaisesRegex(ValueError, "digest_size"):
-            HostShake128(0)
+    def test_zero_output_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "output_size"):
             Shake128(0)
 

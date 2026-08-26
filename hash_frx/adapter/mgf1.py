@@ -14,7 +14,7 @@ bytes, which is the family-wide rule `keccak/byte_hashes.py` states for
 value surface `__eq__`/`__hash__` cover — a jit cache key, per `byte_hash.Row`
 — and `Mgf1` is a `ByteHash` a consumer can hand anywhere one is taken.
 `hmac.Hmac` is the precedent for an adapter that is a `Row` without being a
-`DeviceRow` or a `HostRow`: what it is depends on the hash underneath.
+`DeviceRow`: what it is depends on the hash underneath.
 
 `mgf1(hash, seed, length)` stays as a one-liner over it, because RFC 8017 spells
 the call `MGF(mgfSeed, maskLen)` and a consumer transcribing the RFC should be
