@@ -57,17 +57,53 @@ def _custom_fusion_lines(fn: Callable[..., Any], *args: Any) -> list[str]:
 
 
 def assert_marker_recognized(
-    test: Any, routing_key: str, fn: Callable[..., Any], *args: Any
+    test: Any,
+    routing_key: str,
+    fn: Callable[..., Any],
+    *args: Any,
+    envelope_key: str | None = None,
 ) -> None:
-    """Assert `fn` compiles to a custom fusion named `routing_key`.
+    """Assert `fn` compiles to a custom fusion this family claims.
 
     The instruction name is matched as `%<routing_key> =` rather than by
     substring: `poseidon` is a prefix of `poseidon2`, so a substring match would
     let either emitter satisfy the other's assertion.
+
+    `envelope_key` is for a family routed through a SHARED emitter rather than
+    one of its own. The plugin's generic envelopes — the Merkle-Damgard digest
+    is the first — take one routing key for every family they can drive and
+    carry the family itself in the fusion's config, so the instruction is named
+    for the envelope and `%<routing_key> =` never appears. Passing the envelope
+    key accepts that shape too, still pinned to THIS family by requiring the
+    config to name it: an envelope fusion driving a different primitive fails
+    the assertion exactly as a foreign per-family emitter would.
+
+    Both shapes are accepted rather than one because which of them a marker
+    lowers to is a property of the PINNED plugin, not of this repo — a family
+    that has its own emitter today is routed through the envelope by a later
+    bump, with no change here. Accepting both is what lets the two sides ship on
+    independent cadences, the same reason the marker spellings are
+    dual-recognized during a pin cycle.
     """
     lines = _custom_fusion_lines(fn, *args)
     test.assertTrue(lines, f"no custom fusion: {routing_key} was not recognized")
+    claims_family = re.compile(rf'"primitive"\s*:\s*"{re.escape(routing_key)}"')
+
+    def claimed(line: str) -> bool:
+        if f"%{routing_key} =" in line:
+            return True
+        return (
+            envelope_key is not None
+            and f"%{envelope_key} =" in line
+            and bool(claims_family.search(line))
+        )
+
+    expected = (
+        routing_key
+        if envelope_key is None
+        else (f"{routing_key}, nor as {envelope_key} driving it")
+    )
     test.assertTrue(
-        any(f"%{routing_key} =" in ln for ln in lines),
-        f"recognized, but not as {routing_key}: {lines}",
+        any(claimed(ln) for ln in lines),
+        f"recognized, but not as {expected}: {lines}",
     )

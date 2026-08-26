@@ -218,7 +218,11 @@ class Sha256ByteHashTest(parameterized.TestCase):
             fnp.asarray(np.arange(64, dtype=np.uint8))[None, :]
         )
         fn = functools.partial(sha256.sha256_merkle_damgard, sha256.INITIAL_STATE)
-        assert_marker_recognized(self, "sha256", fn, blocks)
+        # `md_digest` is the plugin's generic words-in Merkle-Damgard envelope.
+        # SHA-256 had its own routing key until the envelope landed and took
+        # every words-in family; both are accepted because which one claims the
+        # marker depends on the pinned plugin, not on this repo.
+        assert_marker_recognized(self, "sha256", fn, blocks, envelope_key="md_digest")
 
 
 class Sha256DigestRoutingTest(absltest.TestCase):
