@@ -77,7 +77,7 @@ without naming one.
 | Question                                                                                   | Where                                               |
 | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | HMAC — the FIPS 198-1 keyed MAC, one class parameterized by hash and block size             | [`adapter/hmac.py`](../hash_frx/adapter/hmac.py)                     |
-| Which hashes have an HMAC block size, and why BLAKE3 and Ascon deliberately do not | [`adapter/block_size.py`](../hash_frx/adapter/block_size.py) |
+| Which hashes have an HMAC block size, and why BLAKE3, keyed BLAKE2 and Ascon deliberately do not | [`adapter/block_size.py`](../hash_frx/adapter/block_size.py) |
 | Which device row pairs with which host row, and picking one per call off where the values live | [`adapter/dual.py`](../hash_frx/adapter/dual.py) |
 | Holding a variable-output family before an output length is chosen, and what fills that slot | [`adapter/xof.py`](../hash_frx/adapter/xof.py) |
 | HKDF — RFC 5869 extract-then-expand, the KDF the composition standards name                  | [`adapter/hkdf.py`](../hash_frx/adapter/hkdf.py)                     |
@@ -97,6 +97,7 @@ without naming one.
 | Keccak-f[1600] — the permutation under SHA-3, SHAKE and Keccak-256, over uint32 lane halves  | [`keccak/`](../hash_frx/keccak)                      |
 | BLAKE3 — the chunk tree, and hash / keyed / derive-key as `ByteHash` rows at any output length over one compression function | [`blake3/`](../hash_frx/blake3), [`blake3/modes.py`](../hash_frx/blake3/modes.py), [`blake3/rows.py`](../hash_frx/blake3/rows.py) |
 | BLAKE2b — the HAIFA `ByteHash` pair: the device row over 64-bit half pairs behind its digest marker, and the host row over `hashlib` (why the host row came first) | [`blake2b/`](../hash_frx/blake2b) |
+| BLAKE2 keyed, salted and personalized hashing — RFC 7693 §2.8's parameter block, and why keying rides the existing marker rather than a new one | [`blake2_params.py`](../hash_frx/blake2_params.py), [`blake2b/blake2b.py`](../hash_frx/blake2b/blake2b.py) |
 | BLAKE2s — the 32-bit RFC 7693 sibling at native uint32: device and host rows on its own digest marker | [`blake2s/blake2s.py`](../hash_frx/blake2s/blake2s.py) |
 | SM3 — the GB/T 32905 ShangMi hash, SHA-256's structural cousin: device and host rows on its own digest marker | [`sm3/sm3.py`](../hash_frx/sm3/sm3.py) |
 | Grøstl-256 — the AES-round Merkle–Damgård `ByteHash` over GF(2^8), with a bitsliced S-box and a testonly host partner | [`grostl/`](../hash_frx/grostl) |

@@ -16,7 +16,10 @@ from absl.testing import absltest
 from hash_frx.adapter.block_size import _BLOCK_SIZES, block_size
 from hash_frx.ascon.ascon import AsconHash256
 from hash_frx.blake2b import blake2b
+from hash_frx.blake2b.blake2b import Blake2bKeyed
+from hash_frx.blake2b.byte_hashes import HostBlake2bKeyed
 from hash_frx.blake2s import blake2s
+from hash_frx.blake2s.blake2s import Blake2sKeyed, HostBlake2sKeyed
 from hash_frx.blake3.rows import Blake3, Blake3Keyed, HostBlake3
 from hash_frx.grostl import grostl
 from hash_frx.keccak.byte_hashes import (
@@ -105,6 +108,32 @@ class DeliberateAbsencesTest(absltest.TestCase):
                     block_size(row)
                 with self.assertRaisesRegex(LookupError, r"adapter/block_size\.py"):
                     block_size(row)
+
+    def test_natively_keyed_blake2_has_no_block_size(self) -> None:
+        # The BLAKE3 argument at a different standard. RFC 7693 §3.3 keys
+        # BLAKE2 through the parameter block, so HMAC over a keyed row would
+        # key it TWICE — the outer key under FIPS 198-1's schedule and the
+        # inner under §2.8's — which produces well-formed bytes nobody else
+        # computes.
+        #
+        # The UNKEYED rows keep their entries, and the pairing is what this
+        # case is really pinning: a lookup that stripped `Keyed` the way it
+        # strips `Host` would answer 128 here and be silently wrong.
+        for row in (
+            Blake2bKeyed(bytes(range(32))),
+            Blake2sKeyed(bytes(range(32))),
+            HostBlake2bKeyed(bytes(range(32))),
+            HostBlake2sKeyed(bytes(range(32))),
+        ):
+            with self.subTest(row=type(row).__name__):
+                with self.assertRaisesRegex(LookupError, "keyed mode is native"):
+                    block_size(row)
+
+    def test_the_unkeyed_rows_answer_for_their_salted_instances(self) -> None:
+        # A salt or a personalization moves `h0`, not the block width, so a
+        # personalized row must still answer — and answer the same number.
+        self.assertEqual(block_size(blake2b.Blake2b(64, person=b"ZcashPH")), 128)
+        self.assertEqual(block_size(blake2s.Blake2s(32, person=b"WGmac1")), 64)
 
     def test_ascon_has_no_block_size(self) -> None:
         # An 8-byte rate against a 32-byte digest, so FIPS 198-1 §4's "replace a

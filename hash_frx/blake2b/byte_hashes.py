@@ -25,9 +25,16 @@ rides the value surface `__eq__`/`__hash__` cover, the same rule the SHAKE and
 BLAKE3 rows state. The default is 64: unlike an XOF, BLAKE2b names a canonical
 full-length form (BLAKE2b-512), which is what a caller means without a length.
 
-Keyed hashing, salting and the tree parameters are RFC 7693 features this row
-does not yet carry — each is a value-surface addition (the BLAKE3 keyed rows
-are the template), added when a consumer needs it rather than speculatively.
+**Keyed hashing, salting and personalization are here**, and `hashlib` gives
+them away: `blake2b(key=, salt=, person=)` takes all three, so each row is a
+constructor's width check plus one `_hash_one`. Keying is a separate row
+(`HostBlake2bKeyed`) rather than a keyword, which is `Blake3Keyed`'s precedent
+and the reason the device sibling states — a key is not a setting, and keeping
+`HostBlake2b(digest_size)` a one-argument constructor is what lets it satisfy
+`adapter.Xof`.
+
+The tree parameters are still not carried; `blake2_params` writes sequential
+mode's constants and records the offsets a tree mode would need.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from frx.typing import ArrayLike
 
+from hash_frx.blake2_params import BLAKE2B_WORD_BYTES, param_block
 from hash_frx.byte_hash import HostRow, host_digest
 
 if TYPE_CHECKING:
@@ -54,25 +62,103 @@ class HostBlake2b(HostRow):
 
     The loop it runs under is [`byte_hash.host_digest`](../byte_hash.py),
     shared with every other host row in the package.
+
+    `salt` and `person` are part of which hash this is, not settings on one:
+    RFC 7693 folds both into the initial state through the §2.8 parameter
+    block, so `HostBlake2b(32, person=b"ZcashPH")` disagrees with
+    `HostBlake2b(32)` on every input. Both ride the value surface alongside
+    the output length.
     """
 
-    def __init__(self, digest_size: int = MAX_DIGEST_SIZE) -> None:
+    def __init__(
+        self,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
         # Range-checked here rather than left to `hashlib` at the first
-        # `digest`, where the caller can no longer choose another length.
+        # `digest`, where the caller can no longer choose another length. The
+        # salt and personalization widths go through the same door —
+        # `blake2_params` owns them, and reaching for it here rather than for
+        # the device module's `_initial_state` is what keeps this file free of
+        # the import cycle it would otherwise close (`blake2b.py` imports
+        # `MAX_DIGEST_SIZE` from here).
         if not 1 <= digest_size <= MAX_DIGEST_SIZE:
             raise ValueError(
                 f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
                 f"{digest_size}"
             )
+        param_block(BLAKE2B_WORD_BYTES, digest_size, 0, salt, person)
         self.digest_size = digest_size
+        self._salt = salt
+        self._person = person
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._salt, self._person)
 
     def _hash_one(self, data: ReadableBuffer) -> bytes:
-        return hashlib.blake2b(data, digest_size=self.digest_size).digest()
+        return hashlib.blake2b(
+            data,
+            digest_size=self.digest_size,
+            salt=self._salt,
+            person=self._person,
+        ).digest()
+
+    def digest(self, msg: ArrayLike) -> np.ndarray:
+        return host_digest(self._hash_one, self.digest_size, msg)
+
+
+class HostBlake2bKeyed(HostRow):
+    """`ByteHash` for host keyed BLAKE2b — `hashlib.blake2b(key=...)` looped
+    per message. The sequential fast path for `blake2b.Blake2bKeyed`, and the
+    row a caller porting from libsodium's `crypto_generichash` lands on.
+
+    A separate row rather than a `key=` keyword, for the reason
+    `blake2b.Blake2bKeyed` states. The key is secret material held in a plain
+    attribute, `__hash__` is over the bytes, and nothing here erases it."""
+
+    def __init__(
+        self,
+        key: bytes,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
+        if not 1 <= digest_size <= MAX_DIGEST_SIZE:
+            raise ValueError(
+                f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
+                f"{digest_size}"
+            )
+        # An empty key is a caller bug rather than a demotion to the unkeyed
+        # row: `kk` reaches the initial state, so the two are different hashes
+        # and silently returning the unkeyed digest would hide the mistake.
+        if not key:
+            raise ValueError("key must be non-empty; the unkeyed hash is `HostBlake2b`")
+        param_block(BLAKE2B_WORD_BYTES, digest_size, len(key), salt, person)
+        self.digest_size = digest_size
+        self._key = key
+        self._salt = salt
+        self._person = person
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._key, self._salt, self._person)
+
+    def _hash_one(self, data: ReadableBuffer) -> bytes:
+        return hashlib.blake2b(
+            data,
+            digest_size=self.digest_size,
+            key=self._key,
+            salt=self._salt,
+            person=self._person,
+        ).digest()
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(self._hash_one, self.digest_size, msg)
 
 
 if TYPE_CHECKING:
-    # Seam-conformance pin (docs/reference/conventions.md).
+    # Seam-conformance pins (docs/reference/conventions.md).
     _bh_host_blake2b: type[ByteHash] = HostBlake2b
+    _bh_host_blake2b_keyed: type[ByteHash] = HostBlake2bKeyed

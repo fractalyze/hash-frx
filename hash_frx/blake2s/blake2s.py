@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""Unkeyed BLAKE2s (RFC 7693), host and device rows — BLAKE2b's 32-bit
+"""BLAKE2s (RFC 7693), host and device rows — BLAKE2b's 32-bit
 sibling, byte-identical to the standard (and any conforming implementation,
 e.g. Python's `hashlib.blake2s`). The construction is the same HAIFA shape the
 `blake2b` package documents — Merkle–Damgård plus a byte counter and a
@@ -44,10 +44,16 @@ itself be traced. `digest_size` is 1..32 and rides the VALUE surface — RFC
 hash asked for fewer bytes (the SHAKE/BLAKE3 rule, stated on the sibling's
 rows). Requires no x64.
 
-Keyed hashing, salting and the tree parameters are RFC 7693 features this
-module does not yet carry — value-surface additions riding the same marker,
-added when a consumer (WireGuard's Noise IK uses keyed BLAKE2s) needs them
-rather than speculatively.
+**Keyed hashing, salting and personalization ride the SAME marker**, which is
+what the earlier deferral note predicted and this module now does — the
+mechanism, the untouched operand ABI and the trace-cache consequence are all
+the sibling's (`blake2b.blake2b`, which states them once), at this family's
+64-byte message block and 32-byte parameter block. WireGuard's mac1/mac2,
+named in that note as the consumer who would force this, is keyed BLAKE2s.
+
+The tree parameters (fanout, depth, node offset, node depth, inner length) are
+still not carried: `blake2_params` writes sequential mode's constants and
+records the offsets a tree mode would need.
 """
 
 from __future__ import annotations
@@ -62,6 +68,7 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
+from hash_frx.blake2_params import BLAKE2S_WORD_BYTES, param_block, param_words
 from hash_frx.byte_hash import (
     DeviceRow,
     HostRow,
@@ -163,24 +170,43 @@ _IV = np.array(_IV32, dtype=np.uint32)
 
 
 @lru_cache(maxsize=None)
-def _initial_state(digest_size: int) -> np.ndarray:
-    """The initial state h for an unkeyed BLAKE2s-`digest_size` hash: the IV
-    with the parameter-block word XORed into h[0] (RFC 7693 §2.5/§3.3:
-    p[0] = 0x0101kknn — nn the hash size in bytes, kk = 0 unkeyed, bytes 2
-    and 3 set as 01), as HOST uint32 [8] (`fnp.asarray`ed at use, for the
-    reason `_IV` states). Cached per size: there are at most 32 of them.
-    This is where the digest length enters the hash — which is why truncating
-    a longer digest is the WRONG bytes at every shorter length, and why the
-    range check lives here on the module path as well as on the row's
-    constructor."""
+def _initial_state(
+    digest_size: int,
+    key_size: int = 0,
+    salt: bytes = b"",
+    person: bytes = b"",
+) -> np.ndarray:
+    """The initial state h for a BLAKE2s-`digest_size` hash: the §2.6 IV XORed
+    word-for-word with `blake2_params`' §2.8 parameter block (RFC 7693 §2.5),
+    as HOST uint32 [8] (`fnp.asarray`ed at use, for the reason `_IV` states).
+
+    Cached on the whole parameter tuple — `bytes` are hashable, so salting and
+    personalizing widen the key without changing the mechanism. Unkeyed and
+    unsalted this is the `0x01010000 ^ digest_size` XOR into h[0] that the
+    module carried before, which `blake2_params_test` pins.
+
+    **This is where everything that is not the message enters the hash** — the
+    digest length, the key length, the salt and the personalization, which is
+    why none of them can be applied to a finished digest and why the range
+    checks live here as well as on each row's constructor."""
     if not 1 <= digest_size <= MAX_DIGEST_SIZE:
         raise ValueError(
             f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
             f"{digest_size}"
         )
     out = _IV.copy()
-    out[0] ^= 0x01010000 ^ digest_size
+    for i, p in enumerate(
+        param_words(BLAKE2S_WORD_BYTES, digest_size, key_size, salt, person)
+    ):
+        out[i] ^= np.uint32(p)
     return out
+
+
+def _key_block(key: bytes) -> np.ndarray:
+    """The key as RFC 7693 §3.3's first message block: zero-padded to a whole
+    64-byte block, whatever the key's length (the sibling's `_key_block` states
+    why the padding is to the message block rather than the key field)."""
+    return np.frombuffer(key.ljust(_BLOCK, b"\0"), dtype=np.uint8)
 
 
 # How this family pads, as the axes `extension/md.py` names.
@@ -367,9 +393,21 @@ def blake2s_bytes(h0: Array, msg: Array, tail: Array) -> Array:
     )
 
 
-def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
-    """Unkeyed BLAKE2s of a batch of equal-length messages. msg: uint8 [B, L]
+def digest(
+    msg: ArrayLike,
+    digest_size: int = MAX_DIGEST_SIZE,
+    key: bytes = b"",
+    salt: bytes = b"",
+    person: bytes = b"",
+) -> fnp.ndarray:
+    """BLAKE2s of a batch of equal-length messages. msg: uint8 [B, L]
     -> [B, digest_size] (default 32: BLAKE2s-256, the named full-length form).
+
+    `key`, `salt` and `person` are the §2.8 parameter block and behave exactly
+    as the sibling's `blake2b.digest` states: the key is zero-padded to one
+    64-byte block and prepended (§3.3), everything else folds into `h0`, and a
+    keyed hash of the EMPTY message is a different hash from the unkeyed one
+    of nothing.
 
     Byte-identical to RFC 7693 per message; the whole digest is emitted as
     the one name-routed `hash_frx.digest.blake2s` marker (`blake2s_bytes`),
@@ -383,8 +421,17 @@ def digest(msg: ArrayLike, digest_size: int = MAX_DIGEST_SIZE) -> fnp.ndarray:
     states.
     """
     msg = device_message(msg)
+    # The initial state FIRST, because building it is what validates every
+    # parameter (`_initial_state` -> `blake2_params.param_block`). Prepending
+    # the key block before that check would turn an over-long key into a
+    # broadcast shape error from `_key_block`'s no-op `ljust` rather than into
+    # the standard's own bound.
+    h0 = _initial_state(digest_size, len(key), salt, person)
+    if key:
+        block = fnp.broadcast_to(fnp.asarray(_key_block(key)), (msg.shape[0], _BLOCK))
+        msg = fnp.concatenate([block, msg], axis=-1)
     full = blake2s_bytes(
-        fnp.asarray(_initial_state(digest_size)),
+        fnp.asarray(h0),
         msg,
         fnp.asarray(_PAD.tail(msg.shape[-1])),
     )
@@ -408,20 +455,74 @@ class Blake2s(DeviceRow):
     sibling's rows state, and the param-free by-type equality of
     `Sha256`/`Ripemd160` does not apply here."""
 
-    def __init__(self, digest_size: int = MAX_DIGEST_SIZE) -> None:
+    def __init__(
+        self,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
         # Range-checked here rather than left to the first `digest`, where
         # the caller can no longer choose another length (`_initial_state`
-        # re-checks on the module path).
+        # re-checks on the module path); the salt and personalization widths
+        # are `blake2_params`', checked on the same both-doors principle.
         if not 1 <= digest_size <= MAX_DIGEST_SIZE:
             raise ValueError(
                 f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
                 f"{digest_size}"
             )
         self.digest_size = digest_size
+        self._salt = salt
+        self._person = person
+        param_block(BLAKE2S_WORD_BYTES, digest_size, 0, salt, person)  # width check
         super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
 
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._salt, self._person)
+
     def digest(self, msg: ArrayLike) -> Array:
-        return digest(msg, self.digest_size)  # the module-level marker digest
+        # the module-level marker digest
+        return digest(msg, self.digest_size, b"", self._salt, self._person)
+
+
+class Blake2sKeyed(DeviceRow):
+    """`ByteHash` for device keyed BLAKE2s — RFC 7693 §3.3's MAC mode at the
+    32-bit width, the construction WireGuard's mac1/mac2 computes.
+
+    A separate row rather than a `key=` keyword on `Blake2s`, and every reason
+    is the sibling `blake2b.Blake2bKeyed`'s: `Blake3Keyed`'s precedent, keeping
+    `Blake2s(digest_size)` satisfying `adapter.Xof`, the key being secret
+    material in a plain attribute, and a new key NOT re-tracing because it
+    enters through the message operand rather than a captured constant. That
+    docstring states them once; this row differs only in the block size."""
+
+    def __init__(
+        self,
+        key: bytes,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
+        if not 1 <= digest_size <= MAX_DIGEST_SIZE:
+            raise ValueError(
+                f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
+                f"{digest_size}"
+            )
+        if not key:
+            raise ValueError("key must be non-empty; the unkeyed hash is `Blake2s`")
+        self.digest_size = digest_size
+        self._key = key
+        self._salt = salt
+        self._person = person
+        param_block(BLAKE2S_WORD_BYTES, digest_size, len(key), salt, person)
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._key, self._salt, self._person)
+
+    def digest(self, msg: ArrayLike) -> Array:
+        return digest(msg, self.digest_size, self._key, self._salt, self._person)
 
 
 class HostBlake2s(HostRow):
@@ -430,17 +531,84 @@ class HostBlake2s(HostRow):
     for a strictly-sequential byte caller, free the way the sibling's host
     row was. The output length rides the value surface, same as `Blake2s`."""
 
-    def __init__(self, digest_size: int = MAX_DIGEST_SIZE) -> None:
+    def __init__(
+        self,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
         if not 1 <= digest_size <= MAX_DIGEST_SIZE:
             raise ValueError(
                 f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
                 f"{digest_size}"
             )
         self.digest_size = digest_size
+        self._salt = salt
+        self._person = person
+        # `hashlib` validates the widths too, but only at the first `digest` —
+        # too late for a caller who can no longer choose. Same door as the
+        # device row's.
+        param_block(BLAKE2S_WORD_BYTES, digest_size, 0, salt, person)
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._salt, self._person)
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return host_digest(
-            lambda row: hashlib.blake2s(row, digest_size=self.digest_size).digest(),
+            lambda row: hashlib.blake2s(
+                row,
+                digest_size=self.digest_size,
+                salt=self._salt,
+                person=self._person,
+            ).digest(),
+            self.digest_size,
+            msg,
+        )
+
+
+class HostBlake2sKeyed(HostRow):
+    """`ByteHash` for host keyed BLAKE2s over `hashlib.blake2s(key=...)` — the
+    sequential fast path for `Blake2sKeyed`, free the way every host row in
+    this family is: `hashlib` takes the key directly, so the whole row is the
+    constructor's validation plus one `_hash_one`.
+
+    The key is secret material held in a plain attribute here too, and
+    `__hash__` is over the bytes."""
+
+    def __init__(
+        self,
+        key: bytes,
+        digest_size: int = MAX_DIGEST_SIZE,
+        *,
+        salt: bytes = b"",
+        person: bytes = b"",
+    ) -> None:
+        if not 1 <= digest_size <= MAX_DIGEST_SIZE:
+            raise ValueError(
+                f"digest_size must be in 1..{MAX_DIGEST_SIZE} (RFC 7693), got "
+                f"{digest_size}"
+            )
+        if not key:
+            raise ValueError("key must be non-empty; the unkeyed hash is `HostBlake2s`")
+        self.digest_size = digest_size
+        self._key = key
+        self._salt = salt
+        self._person = person
+        param_block(BLAKE2S_WORD_BYTES, digest_size, len(key), salt, person)
+
+    def _parameters(self) -> tuple[object, ...]:
+        return (self.digest_size, self._key, self._salt, self._person)
+
+    def digest(self, msg: ArrayLike) -> np.ndarray:
+        return host_digest(
+            lambda row: hashlib.blake2s(
+                row,
+                digest_size=self.digest_size,
+                key=self._key,
+                salt=self._salt,
+                person=self._person,
+            ).digest(),
             self.digest_size,
             msg,
         )
@@ -449,4 +617,6 @@ class HostBlake2s(HostRow):
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_blake2s: type[ByteHash] = Blake2s
+    _bh_blake2s_keyed: type[ByteHash] = Blake2sKeyed
     _bh_host_blake2s: type[ByteHash] = HostBlake2s
+    _bh_host_blake2s_keyed: type[ByteHash] = HostBlake2sKeyed

@@ -106,7 +106,9 @@ _EXPORTS: dict[str, str] = {
     "AsconHash256": "hash_frx.ascon.ascon",
     "AsconXof128": "hash_frx.ascon.ascon",
     "Blake2b": "hash_frx.blake2b.blake2b",
+    "Blake2bKeyed": "hash_frx.blake2b.blake2b",
     "Blake2s": "hash_frx.blake2s.blake2s",
+    "Blake2sKeyed": "hash_frx.blake2s.blake2s",
     "Blake3": "hash_frx.blake3.rows",
     "Blake3DeriveKey": "hash_frx.blake3.rows",
     "Blake3Keyed": "hash_frx.blake3.rows",
@@ -124,7 +126,9 @@ _EXPORTS: dict[str, str] = {
     "Sm3": "hash_frx.sm3.sm3",
     # -- rows: host (never traceable, return `np.ndarray`) -----------------
     "HostBlake2b": "hash_frx.blake2b.byte_hashes",
+    "HostBlake2bKeyed": "hash_frx.blake2b.byte_hashes",
     "HostBlake2s": "hash_frx.blake2s.blake2s",
+    "HostBlake2sKeyed": "hash_frx.blake2s.blake2s",
     "HostBlake3": "hash_frx.blake3.rows",
     "HostBlake3DeriveKey": "hash_frx.blake3.rows",
     "HostBlake3Keyed": "hash_frx.blake3.rows",
@@ -216,9 +220,13 @@ if TYPE_CHECKING:
     from hash_frx.ascon.ascon import AsconXof128 as AsconXof128
     from hash_frx.ascon.permutation import AsconP as AsconP
     from hash_frx.blake2b.blake2b import Blake2b as Blake2b
+    from hash_frx.blake2b.blake2b import Blake2bKeyed as Blake2bKeyed
     from hash_frx.blake2b.byte_hashes import HostBlake2b as HostBlake2b
+    from hash_frx.blake2b.byte_hashes import HostBlake2bKeyed as HostBlake2bKeyed
     from hash_frx.blake2s.blake2s import Blake2s as Blake2s
+    from hash_frx.blake2s.blake2s import Blake2sKeyed as Blake2sKeyed
     from hash_frx.blake2s.blake2s import HostBlake2s as HostBlake2s
+    from hash_frx.blake2s.blake2s import HostBlake2sKeyed as HostBlake2sKeyed
     from hash_frx.blake3.rows import Blake3 as Blake3
     from hash_frx.blake3.rows import Blake3DeriveKey as Blake3DeriveKey
     from hash_frx.blake3.rows import Blake3Keyed as Blake3Keyed
