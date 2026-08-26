@@ -25,6 +25,57 @@ from hash_frx.fusion import fused_region
 from hash_frx.word import unpack_be, unpack_le
 
 
+def masked_chain(
+    state: Array,
+    *,
+    count: int,
+    compress_block: Callable[[Array, int], Array],
+    live: Array | None = None,
+) -> Array:
+    """Fold `count` blocks into `state` one at a time, keeping only the first
+    `live` of them. Returns the final midstate; serializing it is the caller's,
+    since Grøstl finishes with Ω rather than a serialize.
+
+    `live` is what separates the two walks a family can need, and it is the whole
+    reason this is one function:
+
+    - **`None`** — every block is a message block. The static walk `chain` runs,
+      where the block count came from the message's shape. No predicate is
+      emitted at all, so this branch is `tree.chain`'s body line for line. They
+      stay apart for the reason `tree.chain` already gives — a chunk's blocks
+      are independent of each other and a message's are not, which is what makes
+      the tree parallel — and because `tree.py` carries no deps at all. The
+      shape being shared is what the two schedules have in common; the
+      construction is not.
+    - **a traced block count** — the runtime-length forms, where the count is
+      data. Every block the buffer could need is compressed and the ones past
+      the message are selected away, which is unconditional work rather than a
+      branch: the count is not known at trace time, and a `while` would be a
+      control-flow boundary the marked region cannot contain
+      (`padded_message_region` says why the speculation is affordable).
+
+    In both cases the loop is a Python `for` over a static, small count, per the
+    unrolled-round-loop rule in docs/reference/conventions.md.
+
+    **`compress_block(state, i)` takes the block's INDEX, not the block.** Where
+    block `i` comes from, how it is shaped, and which constants it folds are all
+    the caller's — this schedule's only emitted op is the select. That is the
+    shape both sibling schedules already take (`tree.chain`,
+    `sponge.absorb_squeeze`) and it is taken for the reason `sponge.py` writes
+    down: a helper that receives a block has to emit that block first, which
+    fixes one emission order for every caller and silently excludes the ones
+    that build theirs in the other order. A schedule that emits nothing imposes
+    no order, so a flat byte region (Grøstl slices) and a packed word region
+    (everything else indexes) both ride it unchanged, and a family whose
+    compression needs its position — BLAKE2's HAIFA counter is `(i, nblocks)` —
+    reads it off `i` instead of being locked out by the arity.
+    """
+    for i in range(count):  # static, small
+        folded = compress_block(state, i)
+        state = folded if live is None else fnp.where(i < live, folded, state)
+    return state
+
+
 def chain(
     h0: Array,
     blocks: Array,
@@ -37,15 +88,16 @@ def chain(
     """The compression chain from midstate `h0` over `blocks`, as one marked
     region: `[B, nblocks, ...]` -> the serialized final state.
 
-    **The loop is the schedule, so it lives here.** `compress_block` absorbs one
-    block; walking the blocks is Merkle-Damgard's job, not the primitive's, and
-    every family that had its own copy of this wrote the same `for i in
-    range(nblocks)` over a static, small count.
+    **The loop is the schedule, so it is not the primitive's.** `compress_block`
+    absorbs one block; walking the blocks is Merkle-Damgard's job, and every
+    family that had its own copy wrote the same `for i in range(nblocks)` over a
+    static, small count. The walk itself is `masked_chain`, which this calls
+    unmasked.
 
     `h0` is the shared midstate — an initial state for a whole-message digest,
     or a resumed one, which is what lets a streaming transcript and a batch
-    digest share a single marker. It broadcasts across the batch here rather
-    than being materialized per row.
+    digest share a single marker. It broadcasts across the batch rather than
+    being materialized per row.
 
     **The operand order is the wire ABI.** `[h0, constants, blocks]` is what the
     recognizing emitters read positionally, so all three are passed explicitly
@@ -70,9 +122,13 @@ def chain(
         # other value would be a broadcast error rather than a different
         # outcome — a parameter that cannot change a result is one nobody needs.
         state = fnp.broadcast_to(h0, (blocks.shape[0], h0.shape[-1]))
-        for i in range(blocks.shape[1]):  # static, small
-            state = compress_block(state, blocks[:, i], constants)
-        return serialize(state)
+        return serialize(
+            masked_chain(
+                state,
+                count=blocks.shape[1],
+                compress_block=lambda s, i: compress_block(s, blocks[:, i], constants),
+            )
+        )
 
     return fused_region(
         decomposition, h0, constants, blocks, name=name, version=version

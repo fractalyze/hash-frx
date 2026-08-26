@@ -167,9 +167,12 @@ def haifa_counter(
     the messages whose length is not a block multiple.
 
     Shared by BLAKE2b and BLAKE2s, whose copies were identical down to the
-    comment. Not folded into a general bytes-in chain: measured across the four
-    bytes-in families, such a helper would share three lines out of forty to
-    fifty-six and need five callbacks to do it, so the loop stays where it reads.
+    comment. The measurement that kept the surrounding loop out of a general
+    bytes-in chain — three lines out of forty to fifty-six, behind five
+    callbacks — was about a helper that swallowed the whole decomposition, and
+    it stands for that. The block walk alone is one callback
+    (`md.masked_chain`), and it takes the block's INDEX, so a family reads its
+    `(t, last)` off the same `i` rather than being locked out by the arity.
     """
     last = index == nblocks - 1
     return (length if last else (index + 1) * block_size), last

@@ -51,6 +51,7 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
+from hash_frx.extension.md import masked_chain
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_le, rotl, unpack_le
@@ -275,8 +276,11 @@ def ripemd160_bytes(msg: Array) -> Array:
             padded.reshape(b, padded.shape[-1] // _BLOCK, _BLOCK)
         )  # [B, nblocks, 16]
         state = fnp.broadcast_to(h0, (b, 5))
-        for i in range(words.shape[1]):  # static, small
-            state = _compress(state, words[:, i])
+        state = masked_chain(
+            state,
+            count=words.shape[1],
+            compress_block=lambda s, i: _compress(s, words[:, i]),
+        )
         return unpack_le(state)  # little-endian digest serialization: [B, 20]
 
     return fused_region(

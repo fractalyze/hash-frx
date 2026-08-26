@@ -41,7 +41,12 @@ from hash_frx.byte_hash import (
     padded_batch,
     require_capacity_buffer,
 )
-from hash_frx.extension.md import MdStream, chain, padded_message_region
+from hash_frx.extension.md import (
+    MdStream,
+    chain,
+    masked_chain,
+    padded_message_region,
+)
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import pack_be, rotr, unpack_be
@@ -400,11 +405,12 @@ def sha256_bytes(buf: Array, length: Array) -> Array:
         words = _runtime_padded_words(msg, ln)
         live = _PAD.nblocks(ln)
         state = fnp.broadcast_to(h0, (msg.shape[0], 8))
-        # The block count is runtime data, so every block the buffer could need
-        # is compressed and the ones past the message selected away. Static and
-        # small, and never the routed path (`md.padded_message_region` says why).
-        for i in range(words.shape[1]):
-            state = fnp.where(i < live, _compress(state, words[:, i], k), state)
+        state = masked_chain(
+            state,
+            count=words.shape[1],
+            compress_block=lambda s, i: _compress(s, words[:, i], k),
+            live=live,
+        )
         return serialize_digest(state)
 
     return fused_region(

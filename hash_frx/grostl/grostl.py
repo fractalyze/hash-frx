@@ -48,7 +48,7 @@ from hash_frx.byte_hash import (
     message_length,
     require_capacity_buffer,
 )
-from hash_frx.extension.md import padded_message_region
+from hash_frx.extension.md import masked_chain, padded_message_region
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
 from hash_frx.word import roll
@@ -450,9 +450,16 @@ def grostl256_bytes(buf: Array, length: Array) -> Array:
         # The block count is runtime data, so every block the buffer could need
         # is compressed and the ones past the message selected away. Static and
         # small, and never the routed path (`md.padded_message_region` says why).
-        for i in range(padded.shape[-1] // _BLOCK):
-            block = padded[:, i * _BLOCK : (i + 1) * _BLOCK]
-            h = fnp.where(i < live, _compress(h, block, rc_p, rc_q), h)
+        # The region is flat bytes rather than packed words, so a block is a
+        # slice of it — which `md.masked_chain` never sees, taking the index.
+        h = masked_chain(
+            h,
+            count=padded.shape[-1] // _BLOCK,
+            compress_block=lambda s, i: _compress(
+                s, padded[:, i * _BLOCK : (i + 1) * _BLOCK], rc_p, rc_q
+            ),
+            live=live,
+        )
         # Ω(h) = trunc_256(P(h) ⊕ h): the trailing 32 bytes (§3.3).
         p = _from_state(_permutation(_to_state(h), rc_p, _SHIFT_P))
         return (p ^ h)[:, _BLOCK - GROSTL256_DIGEST_SIZE :]

@@ -80,3 +80,17 @@ py_test(
         requirement("absl_py"),
     ],
 )
+
+# Calls `frx.jit` over a traced `live`, so it takes the plugin deps for the same
+# reason `pad_traced_test` does.
+py_test(
+    name = "md_test",
+    size = "small",
+    srcs = ["md_test.py"],
+    deps = [
+        "//hash_frx/extension:md",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
