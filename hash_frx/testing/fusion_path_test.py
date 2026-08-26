@@ -61,16 +61,22 @@ from hash_frx.vision.params import vision_mark32_params
 from hash_frx.vision.vision import Vision
 
 # The matrix rows: which backends the pinned plugin's dedicated emitters cover,
-# per family. Keccak's arms are GPU-only and Grøstl's is CPU-only; the rest run
-# wherever the ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except
-# sparse Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`,
-# and Vision, Ascon, RIPEMD-160, SM3 and the BLAKE2 pair, for which no plugin
-# ships an emitter at all.
+# per family. Grøstl's arm is CPU-only; the rest run wherever the
+# ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
+# Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
+# Vision, Ascon, RIPEMD-160, SM3 and the BLAKE2 pair, for which no plugin ships
+# an emitter at all.
+#
+# Keccak covers both legs only from the wheel carrying the CPU sponge emitter.
+# Its two arms had to arrive together: one tuple gates the permute marker and
+# the whole-hash one, and routing the coarser marker to a leg that cannot honour
+# it costs the whole absorb-and-squeeze trace (`keccak.permutation` records the
+# measurement).
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
     sparse_mod: ("gpu",),
-    keccak_perm_mod: ("gpu",),
+    keccak_perm_mod: ("cpu", "gpu"),
     vision_mod: (),
     sha256_mod: ("cpu", "gpu"),
     sha512_mod: (),
