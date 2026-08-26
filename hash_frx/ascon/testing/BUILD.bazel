@@ -28,27 +28,6 @@ py_test(
     ],
 )
 
-# Testonly, unlike the SHA-2/SHA-3 host siblings: no C library implements
-# Ascon, so this one loops the plain-python oracle — the differential partner
-# only, never a shipped fast path (the `keccak/testing:host_keccak256`
-# asymmetry, stated in the module docstring).
-py_library(
-    name = "host_ascon_hash256",
-    testonly = True,
-    srcs = [
-        "__init__.py",
-        "host_ascon_hash256.py",
-    ],
-    visibility = ["//hash_frx:__subpackages__"],
-    deps = [
-        ":reference",
-        "//hash_frx:byte_hash",
-        "//hash_frx/ascon",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
 py_test(
     name = "ascon_test",
     # Compile-heavy: the digest body splices twelve-round permutations per
@@ -57,7 +36,6 @@ py_test(
     size = "large",
     srcs = ["ascon_test.py"],
     deps = [
-        ":host_ascon_hash256",
         ":reference",
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",

@@ -5,7 +5,7 @@ load("@rules_python//python:defs.bzl", "py_library")
 # batch hash behind the `hash_frx.digest.grostl256` marker plus the `Grostl256`
 # ByteHash row. A standalone hash, not a Permutation; no zk_dtypes / x64
 # dependency. The host differential partner is testonly
-# (//hash_frx/grostl/testing:host_grostl256) — no C library implements Grøstl.
+# (//hash_frx/grostl/testing:reference) — no C library implements Grøstl.
 py_library(
     name = "grostl",
     srcs = [

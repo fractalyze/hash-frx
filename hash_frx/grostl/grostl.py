@@ -510,10 +510,10 @@ class Grostl256(DeviceRow):
     marker rides either way and the bytes are the standard's, so a backend
     gaining an arm moves the module flags and nothing here.
 
-    For batched hashing where the messages already live on the device. The
-    strictly-sequential caller's alternative is the testonly
-    `grostl.testing.host_grostl256.HostGrostl256` — pure-Python, so unlike
-    the SHA-2/SHA-3 host rows it does not ship (`hashlib` has no Grøstl)."""
+    For batched hashing where the messages already live on the device. A
+    strictly-sequential caller has no in-package alternative — `hashlib` has no
+    Grøstl either — so it pays this row's dispatch and its compile per distinct
+    length."""
 
     digest_size = GROSTL256_DIGEST_SIZE
 
