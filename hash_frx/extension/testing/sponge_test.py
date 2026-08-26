@@ -26,7 +26,22 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
-from hash_frx.extension.sponge import absorb_squeeze, field_absorb, squeeze_blocks
+from hash_frx.extension.sponge import (
+    _scan_step,
+    absorb_squeeze,
+    field_absorb,
+    scanned_absorb,
+    squeeze,
+    squeeze_blocks,
+)
+
+
+class _Holder:
+    """A bound method is a fresh object per attribute access, so it pins the
+    memo's key on equality rather than identity."""
+
+    def permute(self, state: fnp.ndarray) -> fnp.ndarray:
+        return state
 
 
 @dataclass
@@ -197,6 +212,169 @@ class FieldAbsorbTest(absltest.TestCase):
 
         x = fnp.asarray(np.zeros(2, dtype=np.int32))
         np.testing.assert_array_equal(np.asarray(frx.jit(run)(x)), np.asarray(run(x)))
+
+
+class SqueezeRuleIsSharedTest(absltest.TestCase):
+    """`absorb_squeeze` reaches the squeeze through `squeeze`, so the guard is
+    spelled once and a scanned caller gets the same one."""
+
+    def test_it_agrees_with_absorb_squeeze_on_the_absorbed_state(self) -> None:
+        bundled = _Trace()
+        out_bundled = absorb_squeeze(
+            "S",
+            blocks=0,
+            squeezes=3,
+            absorb=bundled.absorb,
+            permute=bundled.permute,
+            read=bundled.read,
+        )
+
+        alone = _Trace()
+        out_alone = squeeze("S", squeezes=3, permute=alone.permute, read=alone.read)
+
+        self.assertEqual(out_bundled, out_alone)
+        self.assertEqual(bundled.permutes, alone.permutes)
+
+
+class ScannedAbsorbTest(absltest.TestCase):
+    """The static-count schedule that does not unroll. Its blocks arrive as
+    values on a leading axis, which is the whole difference from the other two:
+    a scan feeds its body the row, not an index."""
+
+    def test_it_absorbs_the_rows_in_order(self) -> None:
+        state = fnp.asarray(np.zeros(2, dtype=np.int32))
+        blocks = fnp.asarray(np.array([[1, 1], [2, 2], [3, 3]], dtype=np.int32))
+
+        got = np.asarray(
+            scanned_absorb(
+                state,
+                blocks,
+                absorb=lambda s, b: s + b,
+                permute=lambda s: s * fnp.int32(2),
+            )
+        )
+        # (((0+1)*2 + 2)*2 + 3)*2 = 22
+        np.testing.assert_array_equal(got, np.full(2, 22, dtype=np.int32))
+
+    def test_reverse_walks_the_rows_from_the_back(self) -> None:
+        # For a caller whose layout puts block 0 in the last row. Reversing the
+        # rows instead would be an op in the caller's graph; this is a flag.
+        state = fnp.asarray(np.zeros(1, dtype=np.int32))
+        blocks = fnp.asarray(np.array([[1], [2], [3]], dtype=np.int32))
+
+        forward = np.asarray(
+            scanned_absorb(
+                state,
+                blocks,
+                absorb=lambda s, b: s * fnp.int32(10) + b,
+                permute=lambda s: s,
+            )
+        )
+        backward = np.asarray(
+            scanned_absorb(
+                state,
+                blocks,
+                absorb=lambda s, b: s * fnp.int32(10) + b,
+                permute=lambda s: s,
+                reverse=True,
+            )
+        )
+
+        np.testing.assert_array_equal(forward, np.array([123], dtype=np.int32))
+        np.testing.assert_array_equal(backward, np.array([321], dtype=np.int32))
+
+    def test_a_zero_block_count_leaves_the_state(self) -> None:
+        state = fnp.asarray(np.arange(3, dtype=np.int32))
+        blocks = fnp.asarray(np.zeros((0, 3), dtype=np.int32))
+
+        np.testing.assert_array_equal(
+            np.asarray(
+                scanned_absorb(
+                    state,
+                    blocks,
+                    absorb=lambda s, b: s + fnp.int32(1),
+                    permute=lambda s: s,
+                )
+            ),
+            np.arange(3, dtype=np.int32),
+        )
+
+    def test_it_agrees_with_the_unrolled_schedule(self) -> None:
+        # The two schedules differ in loop form and block contract and in
+        # nothing else, so the same message absorbs to the same state either
+        # way — which is what makes moving between them a cost decision.
+        rows = np.array([[1, 2], [3, 4], [5, 6]], dtype=np.int32)
+        state = fnp.asarray(np.zeros(2, dtype=np.int32))
+
+        unrolled = absorb_squeeze(
+            state,
+            blocks=len(rows),
+            squeezes=1,
+            absorb=lambda s, i: s + fnp.asarray(rows[i]),
+            permute=lambda s: s * fnp.int32(2),
+            read=lambda s: s,
+        )[0]
+        scanned = scanned_absorb(
+            state,
+            fnp.asarray(rows),
+            absorb=lambda s, b: s + b,
+            permute=lambda s: s * fnp.int32(2),
+        )
+
+        np.testing.assert_array_equal(np.asarray(scanned), np.asarray(unrolled))
+
+    def test_it_survives_tracing(self) -> None:
+        # The scan is the point, so an eager-only case would not see a
+        # control-flow mistake.
+        def run(x: fnp.ndarray) -> fnp.ndarray:
+            return scanned_absorb(
+                x,
+                fnp.asarray(np.ones((3, 2), dtype=np.int32)),
+                absorb=lambda s, b: s + b,
+                permute=lambda s: s * fnp.int32(3),
+            )
+
+        x = fnp.asarray(np.zeros(2, dtype=np.int32))
+        np.testing.assert_array_equal(np.asarray(frx.jit(run)(x)), np.asarray(run(x)))
+
+    def test_its_body_is_memoized_on_the_callback_pair(self) -> None:
+        # `lax.scan` keys its trace cache on the body's identity, so a body
+        # rebuilt per call re-traces an identical graph every time. Pinned here
+        # rather than through a timing, which would be flaky.
+        def absorb(s: fnp.ndarray, b: fnp.ndarray) -> fnp.ndarray:
+            return s + b
+
+        def permute(s: fnp.ndarray) -> fnp.ndarray:
+            return s
+
+        self.assertIs(_scan_step(absorb, permute), _scan_step(absorb, permute))
+        # By equality, not identity: a bound method is a fresh object per access
+        # (`obj.m is obj.m` is False) but compares equal, so a caller passing one
+        # still hits.
+        holder = _Holder()
+        self.assertIsNot(holder.permute, holder.permute)
+        self.assertIs(
+            _scan_step(absorb, holder.permute), _scan_step(absorb, holder.permute)
+        )
+
+    def test_it_does_not_unroll(self) -> None:
+        # The reason this schedule exists: the graph must not grow with the
+        # block count. A `for` would put one permute per row in the jaxpr.
+        def run(x: fnp.ndarray, blocks: fnp.ndarray) -> fnp.ndarray:
+            return scanned_absorb(
+                x, blocks, absorb=lambda s, b: s + b, permute=lambda s: s * fnp.int32(3)
+            )
+
+        x = fnp.asarray(np.zeros(2, dtype=np.int32))
+        sizes = [
+            len(
+                frx.make_jaxpr(run)(
+                    x, fnp.asarray(np.ones((n, 2), np.int32))
+                ).jaxpr.eqns
+            )
+            for n in (2, 32)
+        ]
+        self.assertEqual(sizes[0], sizes[1])
 
 
 if __name__ == "__main__":

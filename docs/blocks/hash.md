@@ -182,10 +182,28 @@ merge. Its block count is read at runtime through a `lax.while_loop` so a
 concrete and a symbolic `n` lower alike, where both byte sponges are
 Python-unrolled over static counts; it also has no batch axis, no padding, and a
 single truncating read instead of an iterated squeeze. A body parameterized on
-which loop it is would be two bodies behind one name, so the two schedules are
+which loop it is would be two bodies behind one name, so the schedules are
 siblings in `extension/sponge.py`. The same split holds one layer down: field
 trip counts are runtime operands where byte ones are static, so the XLA envelopes
 keep both forms too.
+
+A **third** sibling, `scanned_absorb`, walks a static count with a `lax.scan`.
+It exists because "static" and "small" are two claims: a round count is both, so
+unrolling it is right, but an absorb's count is `len(message) / rate`, which
+nothing bounds. Measured on `Sha3_256`, the jaxpr grows ~22 eqns per block while
+the compile goes 5.9 s at 16 blocks, 84.6 s at 32 and 137.0 s at 64.
+
+What separates the three is the **block contract** rather than the loop alone —
+a Python `int`, a traced index, or the row as an operand — which is the same
+reason `absorb_squeeze` does not take the merge itself. `field_absorb` accepts a
+static bound too, so avoiding the unroll was never the scan's alone; what the
+scan adds is a caller that indexes nothing.
+
+Which loop form a *marked* caller may take is its **emitter's** question. A
+generically marked body admits no control flow at all. A name-routed one admits
+what its ABI says: `sponge.py` ships a `while` inside the
+`hash_frx.digest.field_sponge` region for its runtime absorb length. A loop
+around a marked region is always fine.
 
 ### Tree
 

@@ -98,6 +98,9 @@ _EXPORTS: dict[str, str] = {
     "DuplexSponge": "hash_frx.duplex_sponge",
     "RateLanes": "hash_frx.duplex_sponge",
     "SpillPermute": "hash_frx.duplex_sponge",
+    "scanned_absorb": "hash_frx.extension.sponge",
+    "squeeze": "hash_frx.extension.sponge",
+    "squeeze_blocks": "hash_frx.extension.sponge",
     "KeccakSponge": "hash_frx.keccak.sponge",
     "Sponge": "hash_frx.sponge",
     "SpongeChaining": "hash_frx.sponge",
@@ -243,6 +246,9 @@ if TYPE_CHECKING:
     from hash_frx.duplex_sponge import DuplexSponge as DuplexSponge
     from hash_frx.duplex_sponge import RateLanes as RateLanes
     from hash_frx.duplex_sponge import SpillPermute as SpillPermute
+    from hash_frx.extension.sponge import scanned_absorb as scanned_absorb
+    from hash_frx.extension.sponge import squeeze as squeeze
+    from hash_frx.extension.sponge import squeeze_blocks as squeeze_blocks
     from hash_frx.fusion import FUSED_REGION_MARKER as FUSED_REGION_MARKER
     from hash_frx.fusion import FusionPath as FusionPath
     from hash_frx.fusion import fused_region as fused_region
