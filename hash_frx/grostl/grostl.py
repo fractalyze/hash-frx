@@ -26,7 +26,7 @@ count reaches the marker as an OPERAND rather than through the message shape, so
 `digest` hashes out of a capacity buffer and compilation keys on that buffer's
 width instead of on each length. The padding is still data-independent — built
 from the length and never read off the message — which is what lets `msg` itself
-be traced; it is now selected in-graph (`_runtime_padded_blocks`) where it used
+be traced; it is now selected in-graph (`md.padded_message_region`) where it used
 to be a host constant. Requires no x64; everything is uint8.
 """
 
@@ -41,11 +41,17 @@ import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
-from hash_frx.byte_hash import DeviceRow, at_capacity, capacity, message_length
-from hash_frx.extension.md import padded_region
+from hash_frx.byte_hash import (
+    DeviceRow,
+    at_capacity,
+    capacity,
+    message_length,
+    require_capacity_buffer,
+)
+from hash_frx.extension.md import padded_message_region
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
-from hash_frx.word import roll, unpack_be
+from hash_frx.word import roll
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -372,59 +378,6 @@ def _compress(h: Array, m: Array, rc_p: Array, rc_q: Array) -> Array:
     return p ^ q ^ h
 
 
-def _block_count_field(nblocks: Array) -> Array:
-    """Grøstl v2.0.1 §3.1's 64-bit block count, big-endian: uint8 [8].
-
-    The trailer this family strengthens with is the number of blocks the PADDED
-    message occupies, not the bit length the other Merkle-Damgard rows write —
-    `PadRule.tail` encodes the same value on the static path, and this is its
-    counterpart for a traced length.
-
-    Takes the count rather than the byte length, because the caller has already
-    derived it to size the region: `sha256._length_field` takes a length because
-    a BIT length is not otherwise in hand, and copying that signature here would
-    have put a second `(len + 8) // 64 + 1` chain in every emitted body — in a
-    different dtype from the first, so not even one XLA would fold together.
-
-    The high word is zero rather than derived. The count rides as an int32, so
-    a message is under 2^31 bytes and its block count under 2^25, which no
-    32-bit half can overflow — where SHA-256's field has to split, because a
-    byte count near 2^31 has a BIT length near 2^34 and one word would wrap.
-    Stacking two words anyway is what makes the field eight bytes wide by
-    construction rather than by an assumption about `unpack_be`'s shape.
-    """
-    return unpack_be(fnp.stack([fnp.uint32(0), nblocks.astype(fnp.uint32)]))
-
-
-def _runtime_padded_blocks(buf: Array, length: Array) -> Array:
-    """The first `length` bytes of each row, padded to whole blocks: uint8
-    [B, LMAX] plus an int32 scalar -> uint8 [B, NB * 64].
-
-    What `_PAD.tail` builds from a static length, built from a traced one: the
-    tail cannot be a host constant when the length is runtime data, so the
-    region comes from `md.padded_region` — the same select `MdStream.finalize`
-    pads with, widened from its two blocks to every block the buffer could
-    need. `sha256._runtime_padded_words` is the sibling and differs only in
-    packing its result into big-endian words; Grøstl compresses bytes, so this
-    one hands the region back as it is.
-
-    This is the marked region's decomposition rather than a path `digest` takes:
-    where the marker is recognized the emitter replaces it. The speculation it
-    costs — every block the buffer could need is compressed and the ones past
-    the message selected away — is exactly the data-dependent-length cost the
-    emitter exists to avoid paying, which is why this is written for
-    correctness and the floor below refuses the wheels that would run it.
-    """
-    lmax = buf.shape[-1]
-    pos = fnp.arange(_PAD.nblocks(lmax) * _PAD.block_size, dtype=fnp.int32)
-    # Bytes at or past `length` are padding, so the message read is clamped into
-    # range rather than guarded: every lane it could spoil is selected away.
-    content = buf[:, fnp.clip(pos, 0, lmax - 1)]
-    nblocks = _PAD.nblocks(length)
-    active = nblocks * fnp.int32(_PAD.block_size)
-    return padded_region(_PAD, content, length, active, _block_count_field(nblocks))
-
-
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
 # emission, and a Merkle commit emits one digest call per tree level — so the
 # uncached re-trace of the 20-permutation body would dominate the first-trace
@@ -486,26 +439,17 @@ def grostl256_bytes(buf: Array, length: Array) -> Array:
     host-materialised array captured by the body would be lifted into an unnamed
     operand *ahead* of these, one per call site, leaving no layout to write down.
     """
-    if buf.shape[-1] < 1:
-        # The recognizer's floor, restated where it can still be a clear error.
-        # It declines a zero-width buffer, which would leave the decomposition
-        # to run — and that one indexes the message through a clamp with no byte
-        # to clamp to. The empty message is `length = 0` in a buffer of at least
-        # one byte, never a buffer of none.
-        raise ValueError(
-            f"buf must be uint8 [B, LMAX >= 1], got width {buf.shape[-1]}: an "
-            "empty message is length 0 in a non-empty buffer"
-        )
+    require_capacity_buffer(buf)
 
     def decomposition(
         iv: Array, rc_p: Array, rc_q: Array, msg: Array, ln: Array, **_attrs: object
     ) -> Array:
-        padded = _runtime_padded_blocks(msg, ln)
+        padded = padded_message_region(_PAD, msg, ln)
         live = _PAD.nblocks(ln)
         h = fnp.broadcast_to(iv, (msg.shape[0], _BLOCK))
         # The block count is runtime data, so every block the buffer could need
         # is compressed and the ones past the message selected away. Static and
-        # small, and never the routed path (`_runtime_padded_blocks` says why).
+        # small, and never the routed path (`md.padded_message_region` says why).
         for i in range(padded.shape[-1] // _BLOCK):
             block = padded[:, i * _BLOCK : (i + 1) * _BLOCK]
             h = fnp.where(i < live, _compress(h, block, rc_p, rc_q), h)
@@ -544,7 +488,7 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     inside its own `@jit` or `vmap` without reaching past the `ByteHash` seam.
     The padding is built from the length and never reads the message, which is
     the property that allows it — the length is now the marker's operand rather
-    than the message's shape, and `_runtime_padded_blocks` builds the same three
+    than the message's shape, and `md.padded_message_region` builds the same three
     regions in-graph that `_PAD.tail` built on the host.
     """
     length = message_length(msg)

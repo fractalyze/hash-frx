@@ -20,8 +20,9 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from hash_frx.extension.pad import PadRule
+from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import fused_region
+from hash_frx.word import unpack_be, unpack_le
 
 
 def chain(
@@ -106,6 +107,75 @@ class _Midstate(Protocol):
         """Total bytes absorbed so far."""
 
 
+def trailer_field(pad: PadRule, msg_bytes: Array) -> Array:
+    """`PadRule.tail`'s strengthening bytes, at a RUNTIME length:
+    uint8 [pad.reserve].
+
+    The traced half of `PadRule.tail`, and written to be diffed against it line
+    for line: the same switch on `pad.trailer` for the VALUE, the same
+    `pad.big_endian` for its byte order, and the same `pad.reserve` width with
+    the eight-byte field at the END of it. `tail` builds those bytes on the host
+    from a static length; a runtime-length path cannot, so it selects them
+    in-graph instead — and every axis it has to branch on is already a named
+    field on the rule rather than a fact about which file the caller is in.
+
+    Before this existed the branch was hand-written once per family, and the
+    copies had begun to disagree about what they even took: SHA-256's took a
+    byte count because a BIT length is not otherwise in hand, and Grøstl's took
+    a block count because its caller had already derived one. Three spellings
+    of `unpack_be(stack([hi, lo]))` for one encoding, in a package whose
+    conventions state that "a tenth copy is a regression rather than a new
+    family".
+
+    **The value.** `BIT_LENGTH` is the byte count times eight, carried as a
+    uint32 half pair because the product outgrows one word — a count near 2^31
+    has a bit length near 2^34, so a single word wraps at 512 MiB and encodes a
+    shorter message, which is the same digest for two different lengths.
+    `BLOCK_COUNT` is `nblocks`, whose high word is zero outright: the count
+    rides as an int32, so the block count cannot reach 2^32. It is derived in
+    int32 and cast after, so the expression is the one a caller sizing its
+    region has already written and XLA folds the two together.
+
+    `Trailer.NONE` has no field to build — HAIFA feeds the length to the
+    compression instead — so it is rejected here rather than answered with
+    zeros, the way `PadRule.__post_init__` rejects a trailer with too few
+    reserved bytes.
+    """
+    if pad.trailer is Trailer.NONE:
+        raise ValueError(
+            "Trailer.NONE has no length field: HAIFA carries the length as a "
+            "counter into the compression (`pad.haifa_counter`), not in the "
+            "padding"
+        )
+    if pad.trailer is Trailer.BIT_LENGTH:
+        count = msg_bytes.astype(fnp.uint32)
+        high, low = count >> fnp.uint32(29), count << fnp.uint32(3)
+    else:
+        high = fnp.uint32(0)
+        low = fnp.asarray(pad.nblocks(msg_bytes), dtype=fnp.uint32)
+    # The word order flips with the byte order: big-endian is high word first,
+    # little-endian is the low word's low byte first. Splitting this the wrong
+    # way is a byte-reversed field, which `pad_traced_test` catches by holding
+    # every family's rule against the host `tail` it mirrors.
+    field = (
+        unpack_be(fnp.stack([high, low]))
+        if pad.big_endian
+        else unpack_le(fnp.stack([low, high]))
+    )
+    if pad.reserve == 8:
+        # Not a readability choice, and not skippable: a zero-width concatenate
+        # does NOT fold away here. Dropping this arm and always concatenating
+        # measured +1 `concatenate`, +1 `broadcast_in_dim` and +1 `constant` in
+        # every lowered digest of every reserve-8 family — SHA-256's lowered
+        # module stops being byte-identical to the one it had before the field
+        # was shared, which is the property this extraction is held to.
+        return field
+    # A wider reservation is zero-filled AHEAD of the field, because `tail`
+    # writes the eight bytes at `[-8:]` whatever `reserve` is — SHA-512 claims
+    # sixteen bytes for a 128-bit length it never fills past sixty-four bits.
+    return fnp.concatenate([fnp.zeros(pad.reserve - 8, dtype=fnp.uint8), field])
+
+
 def padded_region(
     pad: PadRule,
     content: Array,
@@ -128,9 +198,13 @@ def padded_region(
     Shared rather than spelled per caller because that spelling is the subtlest
     traced-index machinery in the package and getting it wrong is a wrong digest
     rather than a slow one — the hazard `MdStream` below was extracted to end.
-    Its `finalize` builds a two-block region at a runtime `pending_len`; a
-    whole-message runtime-length digest builds one as wide as its buffer. Only
-    the gather and the width differ, which is why those stay with the callers.
+
+    Two callers build a region, and only one of them still passes its own
+    gather. `MdStream.finalize`'s is gap-shifted around the pending block, so it
+    stays there. The whole-message one is `padded_message_region` below: it was
+    a caller's too while there was a single family writing it, and the moment
+    there were two the five lines were character-identical, comment included. A
+    new runtime-length family calls that rather than spelling this.
 
     The padding is built as ONE row and broadcast against `content`, the way
     `byte_hash.padded_batch` broadcasts the static tail: it is a function of the
@@ -149,6 +223,53 @@ def padded_region(
         ),
     )
     return fnp.where((pos < content_len)[None, :], content, padding[None, :])
+
+
+def padded_message_region(pad: PadRule, buf: Array, length: Array) -> Array:
+    """`buf[:, :length]` padded to whole blocks at a RUNTIME length:
+    uint8 [B, LMAX] plus an int32 scalar -> uint8 [B, NB * pad.block_size].
+
+    The whole-message half of `padded_region`, which that function's docstring
+    deferred while there was one caller to defer it for: *"a whole-message
+    runtime-length digest builds one as wide as its buffer. Only the gather and
+    the width differ, which is why those stay with the callers."* Two callers
+    later the gathers were character-identical, comment included, so the premise
+    had stopped holding and the five lines moved here.
+
+    Everything the caller still owns is what it does with the result: SHA-256
+    packs the region into big-endian words, Grøstl-256 compresses the bytes as
+    they are. Only the region is common, so only the region moved — the rule
+    `byte_hash.padded_batch` states for the static tail.
+
+    **Merkle-Damgard rules with a trailer only.** A `Trailer.NONE` rule is
+    rejected here rather than two frames down: HAIFA pads with a bare zero fill
+    and feeds its length to the compression as a counter, so it wants neither
+    the `0x80` byte `padded_region` writes nor a length field at all. Its traced
+    counterpart is `pad.haifa_counter`'s to grow when a HAIFA family adopts this
+    ABI — not built ahead of a consumer, the way the byte-sponge seam was paid
+    for by waiting until a second byte sponge existed.
+
+    **The width is the buffer's, not the message's.** `NB` covers every block
+    `LMAX` could need, and the blocks past the live message are selected away by
+    the caller's own loop rather than skipped: the block count is runtime data,
+    which is exactly the cost a recognizing emitter exists to avoid paying. So
+    this is written for correctness on the path where the marker is declined,
+    and the family's `frx>=` floor is what keeps that path off a release.
+    """
+    if pad.trailer is Trailer.NONE:
+        raise ValueError(
+            "padded_message_region needs a rule with a trailer: HAIFA pads with "
+            "a bare zero fill and carries its length as a counter into the "
+            "compression (`pad.haifa_counter`), so neither the 0x80 byte nor "
+            "the length field this region writes belongs to it"
+        )
+    lmax = buf.shape[-1]
+    pos = fnp.arange(pad.nblocks(lmax) * pad.block_size, dtype=fnp.int32)
+    # Bytes at or past `length` are padding, so the message read is clamped into
+    # range rather than guarded: every lane it could spoil is selected away.
+    content = buf[:, fnp.clip(pos, 0, lmax - 1)]
+    active = pad.nblocks(length) * fnp.int32(pad.block_size)
+    return padded_region(pad, content, length, active, trailer_field(pad, length))
 
 
 @dataclass(frozen=True)
@@ -180,7 +301,7 @@ class MdStream:
     # the streaming path and the batch digest go through ONE marker.
     chain: Callable[[Array, Array], Array]
     make_state: Callable[[Array, Array, Array], Any]
-    length_field: Callable[[Array], Array]
+    # No `length_field`: `finalize` derives it from `pad` (`trailer_field`).
 
     def absorb(self, state: _Midstate, data: Array) -> Any:
         """Fold every newly-complete block of `data` (uint8 [L], L static) into
@@ -271,7 +392,7 @@ class MdStream:
             )
         pl = state.pending_len
         content_len = pl + fnp.int32(e)
-        len_bytes = self.length_field(state.total_len + fnp.int32(e))
+        len_bytes = trailer_field(self.pad, state.total_len + fnp.int32(e))
 
         # One block only if the content, the 0x80 and the length field all fit.
         two_blocks = content_len > fnp.int32(block - lb - 1)

@@ -41,6 +41,7 @@ py_library(
     deps = [
         ":pad",
         "//hash_frx:fusion",
+        "//hash_frx:word",
         requirement("frx"),
     ],
 )

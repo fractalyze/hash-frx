@@ -158,20 +158,6 @@ class FinalizeBoundsTest(parameterized.TestCase):
         with self.assertRaisesRegex(ValueError, "extras width"):
             sha512.sha512_stream_finalize(state, fnp.zeros((1, 113), dtype=fnp.uint8))
 
-    @parameterized.parameters(0, 1, 55, 1 << 20, (1 << 29) - 1, 1 << 29, (1 << 31) - 1)
-    def test_length_field_matches_the_standard_encoding(self, count: int) -> None:
-        got = np.asarray(sha512._length_field(fnp.int32(count))).tobytes()
-        self.assertEqual(got, (count * 8).to_bytes(16, "big"))
-
-    @parameterized.parameters(1 << 31, (1 << 31) + 12345, (1 << 32) - 1)
-    def test_length_field_survives_the_int32_counter_wrap(self, count: int) -> None:
-        """Past 2 GiB the int32 byte counter is negative, and the encoding is
-        still right: it reinterprets the wrapped value as a uint32, which is
-        the same bit pattern. That is why the ceiling is 4 GiB, not 2."""
-        wrapped = np.asarray(count & 0xFFFFFFFF, dtype=np.uint32).astype(np.int32)
-        got = np.asarray(sha512._length_field(fnp.asarray(wrapped))).tobytes()
-        self.assertEqual(got, (count * 8).to_bytes(16, "big"))
-
 
 if __name__ == "__main__":
     absltest.main()
