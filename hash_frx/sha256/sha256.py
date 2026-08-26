@@ -402,7 +402,7 @@ def sha256_bytes(buf: Array, length: Array) -> Array:
         state = fnp.broadcast_to(h0, (msg.shape[0], 8))
         # The block count is runtime data, so every block the buffer could need
         # is compressed and the ones past the message selected away. Static and
-        # small, and never the routed path (`_runtime_padded_words` says why).
+        # small, and never the routed path (`md.padded_message_region` says why).
         for i in range(words.shape[1]):
             state = fnp.where(i < live, _compress(state, words[:, i], k), state)
         return serialize_digest(state)

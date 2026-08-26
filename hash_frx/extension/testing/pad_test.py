@@ -18,14 +18,15 @@ from __future__ import annotations
 from absl.testing import absltest, parameterized
 
 from hash_frx.extension.pad import PadRule, SpongePad, Trailer, haifa_counter
-
-SHA256 = PadRule(64, Trailer.BIT_LENGTH)
-SHA512 = PadRule(128, Trailer.BIT_LENGTH, reserve=16)
-RIPEMD160 = PadRule(64, Trailer.BIT_LENGTH, big_endian=False)
-SM3 = PadRule(64, Trailer.BIT_LENGTH)
-GROSTL = PadRule(64, Trailer.BLOCK_COUNT)
-BLAKE2S = PadRule(64, Trailer.NONE)
-BLAKE2B = PadRule(128, Trailer.NONE)
+from hash_frx.extension.testing.rules import (
+    BLAKE2B,
+    BLAKE2S,
+    GROSTL,
+    RIPEMD160,
+    SHA256,
+    SHA512,
+    SM3,
+)
 
 # (rule, message length, tail length, first byte, last eight bytes)
 _VECTORS = (

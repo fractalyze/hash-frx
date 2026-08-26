@@ -163,6 +163,12 @@ def trailer_field(pad: PadRule, msg_bytes: Array) -> Array:
         else unpack_le(fnp.stack([low, high]))
     )
     if pad.reserve == 8:
+        # Not a readability choice, and not skippable: a zero-width concatenate
+        # does NOT fold away here. Dropping this arm and always concatenating
+        # measured +1 `concatenate`, +1 `broadcast_in_dim` and +1 `constant` in
+        # every lowered digest of every reserve-8 family — SHA-256's lowered
+        # module stops being byte-identical to the one it had before the field
+        # was shared, which is the property this extraction is held to.
         return field
     # A wider reservation is zero-filled AHEAD of the field, because `tail`
     # writes the eight bytes at `[-8:]` whatever `reserve` is — SHA-512 claims
@@ -192,9 +198,13 @@ def padded_region(
     Shared rather than spelled per caller because that spelling is the subtlest
     traced-index machinery in the package and getting it wrong is a wrong digest
     rather than a slow one — the hazard `MdStream` below was extracted to end.
-    Its `finalize` builds a two-block region at a runtime `pending_len`; a
-    whole-message runtime-length digest builds one as wide as its buffer. Only
-    the gather and the width differ, which is why those stay with the callers.
+
+    Two callers build a region, and only one of them still passes its own
+    gather. `MdStream.finalize`'s is gap-shifted around the pending block, so it
+    stays there. The whole-message one is `padded_message_region` below: it was
+    a caller's too while there was a single family writing it, and the moment
+    there were two the five lines were character-identical, comment included. A
+    new runtime-length family calls that rather than spelling this.
 
     The padding is built as ONE row and broadcast against `content`, the way
     `byte_hash.padded_batch` broadcasts the static tail: it is a function of the
@@ -231,6 +241,14 @@ def padded_message_region(pad: PadRule, buf: Array, length: Array) -> Array:
     they are. Only the region is common, so only the region moved — the rule
     `byte_hash.padded_batch` states for the static tail.
 
+    **Merkle-Damgard rules with a trailer only.** A `Trailer.NONE` rule is
+    rejected here rather than two frames down: HAIFA pads with a bare zero fill
+    and feeds its length to the compression as a counter, so it wants neither
+    the `0x80` byte `padded_region` writes nor a length field at all. Its traced
+    counterpart is `pad.haifa_counter`'s to grow when a HAIFA family adopts this
+    ABI — not built ahead of a consumer, the way the byte-sponge seam was paid
+    for by waiting until a second byte sponge existed.
+
     **The width is the buffer's, not the message's.** `NB` covers every block
     `LMAX` could need, and the blocks past the live message are selected away by
     the caller's own loop rather than skipped: the block count is runtime data,
@@ -238,6 +256,13 @@ def padded_message_region(pad: PadRule, buf: Array, length: Array) -> Array:
     this is written for correctness on the path where the marker is declined,
     and the family's `frx>=` floor is what keeps that path off a release.
     """
+    if pad.trailer is Trailer.NONE:
+        raise ValueError(
+            "padded_message_region needs a rule with a trailer: HAIFA pads with "
+            "a bare zero fill and carries its length as a counter into the "
+            "compression (`pad.haifa_counter`), so neither the 0x80 byte nor "
+            "the length field this region writes belongs to it"
+        )
     lmax = buf.shape[-1]
     pos = fnp.arange(pad.nblocks(lmax) * pad.block_size, dtype=fnp.int32)
     # Bytes at or past `length` are padding, so the message read is clamped into
@@ -276,11 +301,7 @@ class MdStream:
     # the streaming path and the batch digest go through ONE marker.
     chain: Callable[[Array, Array], Array]
     make_state: Callable[[Array, Array, Array], Any]
-    # No `length_field`: it was a callback every family filled with its own
-    # transcription of one switch, and `trailer_field(self.pad, ...)` above
-    # derives the same bytes from the rule this class already holds. Carrying it
-    # would be an axis that changes no outcome, which `pad.py`'s own doctrine
-    # forbids — and `finalize` below already reads its width off `self.pad`.
+    # No `length_field`: `finalize` derives it from `pad` (`trailer_field`).
 
     def absorb(self, state: _Midstate, data: Array) -> Any:
         """Fold every newly-complete block of `data` (uint8 [L], L static) into

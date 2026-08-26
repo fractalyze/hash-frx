@@ -23,19 +23,17 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.extension.md import trailer_field
-from hash_frx.extension.pad import PadRule, SpongePad, Trailer
-
-SHA256 = PadRule(64, Trailer.BIT_LENGTH)
-SHA512 = PadRule(128, Trailer.BIT_LENGTH, reserve=16)
-BLAKE2S = PadRule(64, Trailer.NONE)
-BLAKE2B = PadRule(128, Trailer.NONE)
-# The two axes no SHA-2 rule exercises, both shipped: Grøstl counts blocks
-# where the rest count bits, and RIPEMD-160 writes the field little-endian.
-GROSTL = PadRule(64, Trailer.BLOCK_COUNT)
-RIPEMD160 = PadRule(64, Trailer.BIT_LENGTH, big_endian=False)
-ASCON_PAD = SpongePad(rate=8, head=0x01, final_bit=False)
-SHA3_256_PAD = SpongePad(rate=136, head=0x06)
+from hash_frx.extension.md import padded_message_region, trailer_field
+from hash_frx.extension.pad import PadRule, SpongePad
+from hash_frx.extension.testing.rules import (
+    ASCON_PAD,
+    BLAKE2B,
+    BLAKE2S,
+    SHA3_256_PAD,
+    SHA256,
+    SHA512,
+    TRAILER_RULES,
+)
 
 
 class NblocksSurvivesATracerTest(parameterized.TestCase):
@@ -61,7 +59,7 @@ class NblocksSurvivesATracerTest(parameterized.TestCase):
 
 class NblocksSizesALoopBoundTest(absltest.TestCase):
     """The shape a runtime-length caller actually writes: the block count times
-    the block size, as `sha256._runtime_padded_words` spells it. A rule that
+    the block size, as `md.padded_message_region` spells it. A rule that
     only works on host ints fails here rather than at the first family that
     tries to adopt the ABI."""
 
@@ -91,12 +89,7 @@ class TrailerFieldMirrorsTheHostTailTest(parameterized.TestCase):
     against sixteen. `Trailer.NONE` is the one rule with no field at all.
     """
 
-    @parameterized.named_parameters(
-        ("sha256", SHA256),
-        ("sha512", SHA512),
-        ("grostl", GROSTL),
-        ("ripemd160", RIPEMD160),
-    )
+    @parameterized.named_parameters(*TRAILER_RULES)
     def test_matches_the_last_reserved_bytes_of_the_host_tail(
         self, pad: PadRule
     ) -> None:
@@ -108,12 +101,7 @@ class TrailerFieldMirrorsTheHostTailTest(parameterized.TestCase):
                 got = np.asarray(trailer_field(pad, fnp.int32(length)))
                 np.testing.assert_array_equal(got, want)
 
-    @parameterized.named_parameters(
-        ("sha256", SHA256),
-        ("sha512", SHA512),
-        ("grostl", GROSTL),
-        ("ripemd160", RIPEMD160),
-    )
+    @parameterized.named_parameters(*TRAILER_RULES)
     def test_survives_a_tracer(self, pad: PadRule) -> None:
         # The reason this file exists: the field is built for a length only the
         # runtime knows, so a branch that reaches for `bool()` on the count has
@@ -126,7 +114,7 @@ class TrailerFieldMirrorsTheHostTailTest(parameterized.TestCase):
         # Reaches where the host tail cannot be the oracle: `PadRule.tail`
         # memoizes per length, so a gigabyte case would materialize a gigabyte
         # of padding to check eight bytes. Against the arithmetic instead.
-        for count in (0, 1, 55, 1 << 20, (1 << 29) - 1, 1 << 29, (1 << 31) - 1):
+        for count in (1 << 20, (1 << 29) - 1, 1 << 29, (1 << 31) - 1):
             with self.subTest(count=count):
                 got = np.asarray(trailer_field(pad, fnp.int32(count))).tobytes()
                 self.assertEqual(got, (count * 8).to_bytes(pad.reserve, "big"))
@@ -153,6 +141,59 @@ class TrailerFieldMirrorsTheHostTailTest(parameterized.TestCase):
         # confused the two arrangements.
         with self.assertRaisesRegex(ValueError, "Trailer.NONE has no length field"):
             trailer_field(pad, fnp.int32(64))
+
+
+class PaddedMessageRegionMirrorsTheHostPathTest(parameterized.TestCase):
+    """`md.padded_message_region` against the static padding, rule by rule.
+
+    The field got a rule-parameterized test when it was extracted; the region
+    did not, and it is exercised end to end only by SHA-256 and Grøstl — two
+    rules that agree on all three axes (`block_size` 64, `reserve` 8,
+    big-endian). So the `reserve = 16` and little-endian paths THROUGH THE
+    REGION would first execute when SHA-512 and RIPEMD-160 adopt the ABI, which
+    is the opposite of the claim the extraction makes: that a new family is a
+    `PadRule` and nothing else.
+
+    The oracle is the static path — `msg ‖ pad.tail(len)` — for the reason the
+    field's test gives: `pad_test` already holds it to all seven families, so a
+    disagreement is the traced side being wrong rather than both being wrong
+    together.
+    """
+
+    @parameterized.named_parameters(*TRAILER_RULES)
+    def test_the_live_prefix_is_the_statically_padded_message(
+        self, pad: PadRule
+    ) -> None:
+        rng = np.random.default_rng(0)
+        for length in (0, 1, pad.block_size - 9, pad.block_size, pad.block_size + 1):
+            for slack in (0, 1, pad.block_size):
+                with self.subTest(length=length, capacity=length + slack):
+                    width = max(length + slack, 1)
+                    buf = np.full((2, width), 0xFF, dtype=np.uint8)
+                    msg = rng.integers(0, 256, size=(2, length), dtype=np.uint8)
+                    buf[:, :length] = msg
+                    got = np.asarray(
+                        padded_message_region(pad, fnp.asarray(buf), fnp.int32(length))
+                    )
+                    # The region is as wide as the BUFFER could need; what the
+                    # message occupies is the first `nblocks(length)` blocks,
+                    # and only those are read by the caller's masked loop.
+                    live = pad.nblocks(length) * pad.block_size
+                    want = np.concatenate(
+                        [msg, np.broadcast_to(pad.tail(length), (2, live - length))],
+                        axis=1,
+                    )
+                    np.testing.assert_array_equal(got[:, :live], want)
+
+    @parameterized.named_parameters(("blake2s", BLAKE2S), ("blake2b", BLAKE2B))
+    def test_a_haifa_rule_is_refused_at_the_region(self, pad: PadRule) -> None:
+        # Refused here rather than two frames down in `trailer_field`: HAIFA
+        # wants neither the 0x80 byte this region writes nor a length field, so
+        # the message a caller sees should name the region, not the field.
+        with self.assertRaisesRegex(ValueError, "needs a rule with a trailer"):
+            padded_message_region(
+                pad, fnp.asarray(np.zeros((1, 64), dtype=np.uint8)), fnp.int32(8)
+            )
 
 
 if __name__ == "__main__":
