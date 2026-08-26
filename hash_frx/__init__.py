@@ -149,6 +149,7 @@ _EXPORTS: dict[str, str] = {
     "Sha256State": "hash_frx.sha256.sha256",
     "Sha512State": "hash_frx.sha512.sha512",
     "ShakeAbsorb": "hash_frx.keccak.streaming",
+    "ShakeBlockSqueeze": "hash_frx.keccak.streaming",
     "ShakeSqueeze": "hash_frx.keccak.streaming",
     "blake3_stream_init": "hash_frx.blake3.streaming",
     "sha256_stream_absorb": "hash_frx.sha256.sha256",
@@ -272,6 +273,9 @@ if TYPE_CHECKING:
     from hash_frx.keccak.permutation import KeccakF1600 as KeccakF1600
     from hash_frx.keccak.sponge import KeccakSponge as KeccakSponge
     from hash_frx.keccak.streaming import ShakeAbsorb as ShakeAbsorb
+    from hash_frx.keccak.streaming import (
+        ShakeBlockSqueeze as ShakeBlockSqueeze,
+    )
     from hash_frx.keccak.streaming import ShakeSqueeze as ShakeSqueeze
     from hash_frx.keccak.streaming import shake128_init as shake128_init
     from hash_frx.keccak.streaming import shake256_init as shake256_init
