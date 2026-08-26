@@ -69,16 +69,16 @@ _EXPORTS: dict[str, str] = {
     "MarkerKind": "hash_frx.markers",
     # -- primitives: permutations ------------------------------------------
     "AsconP": "hash_frx.ascon.permutation",
-    "KeccakF1600": "hash_frx.keccak.permutation",
     "BabyBear16": "hash_frx.poseidon2.standard",
+    "KeccakF1600": "hash_frx.keccak.permutation",
     "KoalaBear16": "hash_frx.poseidon2.standard",
     "Poseidon": "hash_frx.poseidon.poseidon",
     "Poseidon2": "hash_frx.poseidon2.poseidon2",
     "SparsePoseidon": "hash_frx.poseidon.sparse",
     "Vision": "hash_frx.vision.vision",
     # -- primitive parameters ----------------------------------------------
-    "KECCAK256_RATE": "hash_frx.keccak.byte_hashes",
     "BABYBEAR16_PARAMS": "hash_frx.poseidon2.standard",
+    "KECCAK256_RATE": "hash_frx.keccak.byte_hashes",
     "KOALABEAR16_PARAMS": "hash_frx.poseidon2.standard",
     "Poseidon2Params": "hash_frx.poseidon2.params",
     "PoseidonParams": "hash_frx.poseidon.params",

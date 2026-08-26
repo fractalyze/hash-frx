@@ -53,11 +53,12 @@ the guarantee.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from zk_dtypes import babybear_mont as _BB
-from zk_dtypes import koalabear_mont as _F
+from zk_dtypes import koalabear_mont as _KB
 
 from hash_frx.poseidon2.params import Poseidon2Params
 from hash_frx.poseidon2.poseidon2 import Poseidon2
@@ -66,10 +67,10 @@ from hash_frx.poseidon2.poseidon2 import Poseidon2
 # comment: "which Plonky3 is this" is then a question the package answers.
 KOALABEAR16_PLONKY3_COMMIT = "4318eba062fd1cbca3dbe98904ad18ad950f3b49"
 
-_WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
+_KB_WIDTH, _KB_ER, _KB_IR, _KB_ALPHA = 16, 4, 20, 3
 
 # Canonical-u32 constants from the pinned Plonky3 koala-bear poseidon2-16.
-_EXTERNAL_INITIAL = [
+_KB_EXTERNAL_INITIAL = [
     [
         2128964168,
         288780357,
@@ -144,7 +145,7 @@ _EXTERNAL_INITIAL = [
     ],
 ]
 
-_EXTERNAL_TERMINAL = [
+_KB_EXTERNAL_TERMINAL = [
     [
         1139268644,
         630873441,
@@ -219,7 +220,7 @@ _EXTERNAL_TERMINAL = [
     ],
 ]
 
-_INTERNAL_RC = [
+_KB_INTERNAL_RC = [
     1423960925,
     2101391318,
     1915532054,
@@ -242,7 +243,7 @@ _INTERNAL_RC = [
     510054082,
 ]
 
-_INTERNAL_DIAG = [
+_KB_INTERNAL_DIAG = [
     2130706431,
     1,
     2,
@@ -262,6 +263,23 @@ _INTERNAL_DIAG = [
 ]
 
 
+def _koalabear16_params() -> Poseidon2Params:
+    """KoalaBear-16's bundle. Built on demand and never at module scope; the
+    caching that makes `KoalaBear16` and `KOALABEAR16_PARAMS` share one object
+    belongs to `_SETS` below, so this function only says what the set IS."""
+    return Poseidon2Params(
+        width=_KB_WIDTH,
+        dtype=_KB,
+        alpha=_KB_ALPHA,
+        external_rounds=_KB_ER,
+        internal_rounds=_KB_IR,
+        external_constants_initial=fnp.array(_KB_EXTERNAL_INITIAL, dtype=_KB),
+        external_constants_terminal=fnp.array(_KB_EXTERNAL_TERMINAL, dtype=_KB),
+        internal_constants=fnp.array(_KB_INTERNAL_RC, dtype=_KB),
+        internal_diag=fnp.array(_KB_INTERNAL_DIAG, dtype=_KB),
+    )
+
+
 # ---------------------------------------------------------------------------
 # BabyBear-16 — plonky3's `default_babybear_poseidon2_16`.
 #
@@ -278,7 +296,7 @@ _INTERNAL_DIAG = [
 # with the optimized vector
 #   [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8,
 #    -1/16, -1/2^27]
-# reduced to canonical form in `_BABYBEAR16_INTERNAL_DIAG` below. Unlike SP1's
+# reduced to canonical form in `_BB_INTERNAL_DIAG` below. Unlike SP1's
 # vendored KoalaBear kernel there is no Montgomery factor folded into the
 # layer, so `internal_j_scale` stays at its default 1 — which is also what
 # makes this set general rather than one prover's.
@@ -291,7 +309,7 @@ BABYBEAR16_PLONKY3_COMMIT = "90008383a99bdcbf725c91c91efbdf6775da7054"
 
 _BB_WIDTH, _BB_ER, _BB_IR, _BB_ALPHA = 16, 4, 13, 7
 
-_BABYBEAR16_EXTERNAL_INITIAL = [
+_BB_EXTERNAL_INITIAL = [
     [
         0x69CBB6AF,
         0x46AD93F9,
@@ -366,7 +384,7 @@ _BABYBEAR16_EXTERNAL_INITIAL = [
     ],
 ]
 
-_BABYBEAR16_EXTERNAL_TERMINAL = [
+_BB_EXTERNAL_TERMINAL = [
     [
         0x7290A80D,
         0x6F7E5329,
@@ -441,7 +459,7 @@ _BABYBEAR16_EXTERNAL_TERMINAL = [
     ],
 ]
 
-_BABYBEAR16_INTERNAL_RC = [
+_BB_INTERNAL_RC = [
     0x5A8053C0,
     0x693BE639,
     0x3858867D,
@@ -457,7 +475,7 @@ _BABYBEAR16_INTERNAL_RC = [
     0x241AF16D,
 ]
 
-_BABYBEAR16_INTERNAL_DIAG = [
+_BB_INTERNAL_DIAG = [
     0x77FFFFFF,
     0x00000001,
     0x00000002,
@@ -478,82 +496,104 @@ _BABYBEAR16_INTERNAL_DIAG = [
 
 
 def _babybear16_params() -> Poseidon2Params:
-    """The BabyBear-16 bundle, built once and cached into `globals()` so that
-    `BabyBear16` and the `BABYBEAR16_PARAMS` export share one object — the
-    arrangement `_params` above states."""
-    cached = globals().get("BABYBEAR16_PARAMS")
-    if cached is not None:
-        return cached
-    params = Poseidon2Params(
+    """BabyBear-16's bundle, the sibling of `_koalabear16_params` above and
+    subject to the same rule: it says what the set is, and `_SETS` below owns
+    when it runs and what caches the result."""
+    return Poseidon2Params(
         width=_BB_WIDTH,
         dtype=_BB,
         alpha=_BB_ALPHA,
         external_rounds=_BB_ER,
         internal_rounds=_BB_IR,
-        external_constants_initial=fnp.array(_BABYBEAR16_EXTERNAL_INITIAL, dtype=_BB),
-        external_constants_terminal=fnp.array(_BABYBEAR16_EXTERNAL_TERMINAL, dtype=_BB),
+        external_constants_initial=fnp.array(_BB_EXTERNAL_INITIAL, dtype=_BB),
+        external_constants_terminal=fnp.array(_BB_EXTERNAL_TERMINAL, dtype=_BB),
         # One constant per round, lane 0 (`params.py`'s contract). The set
         # arrived here from a consumer that expanded these thirteen into a
         # (13, 16) matrix with fifteen structurally-zero columns per row; that
         # shape predates the contract and is not reproduced.
-        internal_constants=fnp.array(_BABYBEAR16_INTERNAL_RC, dtype=_BB),
-        internal_diag=fnp.array(_BABYBEAR16_INTERNAL_DIAG, dtype=_BB),
+        internal_constants=fnp.array(_BB_INTERNAL_RC, dtype=_BB),
+        internal_diag=fnp.array(_BB_INTERNAL_DIAG, dtype=_BB),
     )
-    globals()["BABYBEAR16_PARAMS"] = params
-    return params
 
 
-def _params() -> Poseidon2Params:
-    """The parameter bundle, built once and cached into `globals()` so that
-    `KoalaBear16` and the `KOALABEAR16_PARAMS` export share one object."""
-    cached = globals().get("KOALABEAR16_PARAMS")
+# name -> what builds it. The table IS the list of shipped sets: a set joins by
+# adding two rows, and `standard_test` sweeps this rather than restating each
+# set's properties, so joining is not optional the way it is with a hand-kept
+# second list (`testing/rows.py` states that argument; `markers.py` and this
+# package's own `_EXPORTS` are the same shape one level up).
+#
+# **The values are thunks, and that is the whole design.** Nothing here
+# constructs a `Poseidon2Params` or a `Poseidon2` — a module-scope table of
+# BUILT objects would be exactly the import-time materialization `__getattr__`
+# below exists to prevent. A table of callables is a module-scope value that
+# builds nothing until a name is asked for, so the deferral rule constrains
+# what this table holds, not whether it exists.
+#
+# A permutation's thunk reaches its parameters through `_member` rather than
+# calling the builder a second time, which is what keeps a set's two names one
+# object: `Poseidon2(_koalabear16_params())` here would build a second equal
+# bundle, and two equal-but-distinct bundles are two jit cache keys for one
+# parameterization (`params.py` states what that costs).
+_SETS: dict[str, Callable[[], Any]] = {
+    "KOALABEAR16_PARAMS": _koalabear16_params,
+    "KoalaBear16": lambda: Poseidon2(_member("KOALABEAR16_PARAMS")),
+    "BABYBEAR16_PARAMS": _babybear16_params,
+    "BabyBear16": lambda: Poseidon2(_member("BABYBEAR16_PARAMS")),
+}
+
+
+def _member(name: str) -> Any:
+    """`name`, built and cached on the first ask and read from the cache after.
+
+    The one place a shipped set is built, which is the point: a per-set copy of
+    this is the thing that cannot be trusted. A builder that wrote the wrong
+    cache key would rebuild its tables on every access, forever, while
+    producing identical values — nothing fails, and the only guard would be
+    whether whoever added the set also remembered to assert it. Written once,
+    a new set cannot get it wrong.
+
+    Reads `globals()` rather than a private dict because that is where
+    `__getattr__` must leave the binding anyway: Python consults the module
+    dict first, so a cached name never reaches `__getattr__` a second time.
+    """
+    cached = globals().get(name)
     if cached is not None:
         return cached
-    params = Poseidon2Params(
-        width=_WIDTH,
-        dtype=_F,
-        alpha=_ALPHA,
-        external_rounds=_ER,
-        internal_rounds=_IR,
-        external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=_F),
-        external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=_F),
-        internal_constants=fnp.array(_INTERNAL_RC, dtype=_F),
-        internal_diag=fnp.array(_INTERNAL_DIAG, dtype=_F),
-    )
-    globals()["KOALABEAR16_PARAMS"] = params
-    return params
+    value = _SETS[name]()
+    globals()[name] = value
+    return value
 
 
 def __getattr__(name: str) -> Any:
-    """Build `KOALABEAR16_PARAMS` / `KoalaBear16` on first access (PEP 562).
+    """Build a named set on first access (PEP 562).
 
     Not module-scope values, for the reason `fusion.routing` gives: constructing
     a `Poseidon2` reads `frx.default_backend()` to pick its marker, so building
     one at import freezes the routing to whichever backend happened to be
     default when this module loaded. `keccak/sponge.py` declines a module-level
     `KeccakF1600()` on the same grounds. Deferring also keeps the cost off a
-    consumer that only wants `KOALABEAR16_PLONKY3_COMMIT` — importing this
+    consumer that only wants a `*_PLONKY3_COMMIT` citation — importing this
     module was 95 ms and a live device before, and is now free.
 
-    Each binding is cached in `globals()`, so this runs once per name and the
-    root package's own lazy re-export sees a plain attribute afterwards. A named
-    instance still snapshots its routing at that first access; what this fixes
-    is the snapshot happening at import, before a consumer has had any chance to
-    select a backend.
+    Each binding is cached in `globals()` by `_member`, so this runs once per
+    name and the root package's own lazy re-export sees a plain attribute
+    afterwards. A named instance still snapshots its routing at that first
+    access; what this fixes is the snapshot happening at import, before a
+    consumer has had any chance to select a backend.
+
+    A name outside `_SETS` raises rather than being invented, which is what
+    keeps a typo from resolving to a permutation.
     """
-    if name == "KOALABEAR16_PARAMS":
-        return _params()
-    if name == "KoalaBear16":
-        perm = Poseidon2(_params())
-        globals()["KoalaBear16"] = perm
-        return perm
-    if name == "BABYBEAR16_PARAMS":
-        return _babybear16_params()
-    if name == "BabyBear16":
-        perm = Poseidon2(_babybear16_params())
-        globals()["BabyBear16"] = perm
-        return perm
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    if name not in _SETS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return _member(name)
+
+
+def __dir__() -> list[str]:
+    """The module's own names plus the sets `__getattr__` will build, so
+    `dir()` and tab-completion see a set that has not been asked for yet — the
+    root package's `__dir__` exists for the same reason."""
+    return sorted({*globals(), *_SETS})
 
 
 if TYPE_CHECKING:  # mypy cannot see through the runtime `__getattr__`

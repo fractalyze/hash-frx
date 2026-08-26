@@ -22,7 +22,6 @@ from zk_dtypes import babybear_mont as F
 from hash_frx.poseidon2.poseidon2 import Poseidon2
 from hash_frx.poseidon2.standard import BABYBEAR16_PARAMS
 
-# permute(fnp.arange(16)) under plonky3 v0.4.3's default_babybear_poseidon2_16.
 BABYBEAR16_EXPECTED = fnp.array(
     [
         1906786279,

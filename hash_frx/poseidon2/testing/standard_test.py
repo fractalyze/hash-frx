@@ -35,18 +35,16 @@ class LazyConstructionTest(absltest.TestCase):
         the test. So this must be the single test that touches these members —
         splitting it in two would make the halves order-dependent, which is how
         the first version of this test failed.
+
+        It sweeps `standard._SETS` rather than naming the sets, so a set that
+        ships without being swept is not a thing that can happen: the table it
+        joins to be exported is the table this reads.
         """
-        for name in (
-            "KOALABEAR16_PARAMS",
-            "KoalaBear16",
-            "BABYBEAR16_PARAMS",
-            "BabyBear16",
-        ):
+        for name in standard._SETS:
             self.assertFalse(_built(name), f"{name} built at import")
 
         # Reading a citation is a plain module-level string; it must not drag
-        # the constant tables or a backend in behind it. Both are checked,
-        # because each set answers for its own `__getattr__` arm.
+        # the constant tables or a backend in behind it.
         self.assertEqual(
             standard.KOALABEAR16_PLONKY3_COMMIT,
             "4318eba062fd1cbca3dbe98904ad18ad950f3b49",
@@ -55,34 +53,50 @@ class LazyConstructionTest(absltest.TestCase):
             standard.BABYBEAR16_PLONKY3_COMMIT,
             "90008383a99bdcbf725c91c91efbdf6775da7054",
         )
-        self.assertFalse(_built("KoalaBear16"), "reading the citation built it")
-        self.assertFalse(_built("BabyBear16"), "reading the citation built it")
+        for name in standard._SETS:
+            self.assertFalse(_built(name), f"reading a citation built {name}")
 
-        perm = standard.KoalaBear16
+        # Build one set's names and assert the OTHER set stayed unbuilt. That is
+        # the property that matters — not "the arms are separate", which is a
+        # mechanism, but "building one set must not build another", which
+        # survives any mechanism and is what a shared builder would break.
+        koalabear = standard.KoalaBear16
         self.assertTrue(_built("KoalaBear16"))
-        self.assertIs(standard.KoalaBear16, perm, "not cached — rebuilt per access")
-        # The permutation is built over the object the export hands out, not a
-        # second equal-but-distinct bundle.
-        self.assertTrue(_built("KOALABEAR16_PARAMS"))
-        self.assertIs(standard.KOALABEAR16_PARAMS, standard.KOALABEAR16_PARAMS)
-
-        # Building one set must not build the other: the two arms are separate,
-        # and a shared `_params()` would make a KoalaBear consumer pay for
-        # BabyBear's tables and its `zk_dtypes` field.
+        self.assertIs(standard.KoalaBear16, koalabear, "rebuilt per access")
         self.assertFalse(_built("BabyBear16"), "KoalaBear16 built its sibling")
         self.assertFalse(_built("BABYBEAR16_PARAMS"), "KoalaBear16 built its sibling")
 
-        bb = standard.BabyBear16
+        babybear = standard.BabyBear16
         self.assertTrue(_built("BabyBear16"))
-        self.assertIs(standard.BabyBear16, bb, "not cached — rebuilt per access")
-        self.assertTrue(_built("BABYBEAR16_PARAMS"))
-        self.assertIs(standard.BABYBEAR16_PARAMS, standard.BABYBEAR16_PARAMS)
-        # And the two sets are genuinely different parameterizations, not one
-        # object handed out twice under two names.
+        self.assertIs(standard.BabyBear16, babybear, "rebuilt per access")
+
+        # Every name in the table caches, swept rather than listed so a set
+        # added without an assertion cannot slip through.
+        for name in standard._SETS:
+            with self.subTest(name=name):
+                self.assertTrue(_built(name), f"{name} never built")
+                self.assertIs(getattr(standard, name), getattr(standard, name))
+
+        # And the sets are genuinely different parameterizations rather than one
+        # object handed out under several names.
         self.assertIsNot(standard.BABYBEAR16_PARAMS, standard.KOALABEAR16_PARAMS)
         self.assertNotEqual(
             standard.BABYBEAR16_PARAMS.alpha, standard.KOALABEAR16_PARAMS.alpha
         )
+        # A set's two names are ONE bundle, though: a permutation must be built
+        # over the object the export hands out, not over a second equal one.
+        # Two equal-but-distinct bundles are two jit cache keys for one
+        # parameterization, which `params.py` states the cost of.
+        self.assertIs(standard.KoalaBear16._p, standard.KOALABEAR16_PARAMS)
+        self.assertIs(standard.BabyBear16._p, standard.BABYBEAR16_PARAMS)
+
+    def test_dir_lists_sets_that_have_not_been_built(self) -> None:
+        """`__dir__` exists so tab-completion sees a set before anything asks
+        for it — a module with a `__getattr__` and no `__dir__` hides its own
+        exports."""
+        listed = dir(standard)
+        for name in standard._SETS:
+            self.assertIn(name, listed)
 
     def test_unknown_attribute_still_raises(self) -> None:
         """`__getattr__` must decline names it does not own rather than invent
