@@ -51,8 +51,6 @@ from hash_frx.word import pack_be, rotr, unpack_be
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-    pass
-
 U32 = fnp.uint32
 
 SHA256_MARKER = "hash_frx.digest.sha256"

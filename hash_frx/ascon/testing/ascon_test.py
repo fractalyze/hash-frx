@@ -42,6 +42,7 @@ from hash_frx.ascon.testing.reference import (
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.oracle import oracle_digest
 from hash_frx.word import split
 
 # Rate-boundary lengths for the differential sweep: 0/1 (empty + tiny — even
@@ -55,16 +56,6 @@ _LENGTHS = (0, 1, 7, 8, 9, 15, 16, 65)
 def _message(length: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(length * 31 + seed)
     return rng.integers(0, 256, size=(4, length), dtype=np.uint8)
-
-
-def _oracle(msgs: np.ndarray) -> np.ndarray:
-    """The reference digest of every row, in order. The device call is
-    data-parallel over the batch and this is not, so the equality below is the
-    bulk-parallel claim as much as the value one."""
-    return np.array(
-        [np.frombuffer(ascon_hash256(bytes(row)), dtype=np.uint8) for row in msgs],
-        dtype=np.uint8,
-    ).reshape(len(msgs), 32)
 
 
 class AsconHash256KatTest(parameterized.TestCase):
@@ -83,7 +74,8 @@ class AsconHash256KatTest(parameterized.TestCase):
         # batch — not one convenient length.
         msgs = _message(length)
         np.testing.assert_array_equal(
-            np.asarray(AsconHash256().digest(msgs)), _oracle(msgs)
+            np.asarray(AsconHash256().digest(msgs)),
+            oracle_digest(ascon_hash256, 32, msgs),
         )
 
 
@@ -222,13 +214,9 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [
-            (AsconHash256(), 32),
-        ]
-        for hasher, size in rows:
-            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-            self.assertEqual(got.shape, (0, size))
-            self.assertEqual(got.dtype, np.uint8)
+        got = np.asarray(AsconHash256().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+        self.assertEqual(got.shape, (0, 32))
+        self.assertEqual(got.dtype, np.uint8)
 
 
 class AsconXof128KatTest(parameterized.TestCase):

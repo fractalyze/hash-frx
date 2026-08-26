@@ -35,24 +35,20 @@ the length a parameter is the family-wide rule, stated once in
 [`docs/reference/conventions.md`](../../docs/reference/conventions.md); it is
 also why the SHAKEs take no default where BLAKE3's rows do.
 
-**`fusion_path` is `HOST` on the host rows, and on the device rows it is
-`DEDICATED` or `GENERIC` per what the running backend can reach**, because the
+**`fusion_path` is `DEDICATED` or `GENERIC` per what the running backend can
+reach**, because the
 whole padded absorb and squeeze lowers to one `hash_frx.digest.keccak_sponge` kernel
 only where that emitter exists. The switch is
-`keccak.permutation._routes_to_dedicated_emitter`, which the device rows read
+`keccak.permutation._routes_to_dedicated_emitter`, which the rows read
 through `KeccakF1600`; it asks both whether the pinned plugin carries the
 emitters and whether this backend has them. Both legs carry them from the wheel
-that first shipped the CPU sponge emitter, so the device rows read `DEDICATED`
+that first shipped the CPU sponge emitter, so the rows read `DEDICATED`
 on cpu and gpu; a backend without an arm — Metal today — is still `GENERIC`.
 
-`is_one_kernel` is nonetheless the wrong thing to separate substrate by, here
-as elsewhere: it answers "does this lower to a dedicated kernel", which a pin
-or a backend can change, and the return type is what actually divides device
-from host — a device hash returns an `Array` and accepts a tracer, a host one
-returns `np.ndarray` and never can (the
-return type stays the authority). That is a seam question rather than a fact
-about these hashes, and it is stated where the rule lives —
-[`byte_hash.py`](../byte_hash.py) and `docs/blocks/hash.md`.
+`is_one_kernel` answers "does this lower to a dedicated kernel", which a pin or
+a backend can change — so it is a routing fact rather than a property of these
+hashes, and the rule lives where the seam is stated
+([`byte_hash.py`](../byte_hash.py) and `docs/blocks/hash.md`).
 """
 
 from __future__ import annotations
@@ -68,8 +64,6 @@ from hash_frx.keccak.sponge import KeccakSponge
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
-
-    pass
 
 # FIPS 202 section 6.1: SHA3-256(M) = KECCAK[512](M ‖ 01, 256) and
 # SHA3-512(M) = KECCAK[1024](M ‖ 01, 512), and section B.2 packs the `01` domain

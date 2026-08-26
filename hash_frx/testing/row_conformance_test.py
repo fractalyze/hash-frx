@@ -35,7 +35,6 @@ from hash_frx.testing.package_sweep import (
 from hash_frx.testing.rows import (
     ALL_ROWS,
     BYTE_HASH_ROWS,
-    DEVICE_ROWS,
     RowCase,
 )
 
@@ -127,13 +126,6 @@ class RowSeamTest(parameterized.TestCase):
         # says it for rows on `DeviceRow`; this reaches the ones on no base —
         # `Mgf1` is a byte hash on neither, and is the row most able to
         # disagree, its `fusion_path` being delegated rather than its own.
-        row = case.make()
-        self.assertIsInstance(row.digest(_MSG), Array)
-
-    @parameterized.named_parameters(*_named(DEVICE_ROWS))
-    def test_device_rows_return_arrays_and_are_traceable(self, case: RowCase) -> None:
-        # The return type is the authority for traceability, and `fusion_path`
-        # is held to agree with it.
         row = case.make()
         self.assertIsInstance(row.digest(_MSG), Array)
 

@@ -80,8 +80,6 @@ from hash_frx.word import pack_le, roll, rotr, unpack_le
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-    pass
-
 U32 = fnp.uint32
 
 MAX_DIGEST_SIZE = 32  # RFC 7693: BLAKE2s digests are 1..32 bytes

@@ -42,6 +42,7 @@ py_test(
         "//hash_frx:word",
         "//hash_frx/ascon",
         "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:oracle",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

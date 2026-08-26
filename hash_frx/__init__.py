@@ -127,7 +127,6 @@ _EXPORTS: dict[str, str] = {
     "Shake128": "hash_frx.keccak.byte_hashes",
     "Shake256": "hash_frx.keccak.byte_hashes",
     "Sm3": "hash_frx.sm3.sm3",
-    # -- rows: host (never traceable, return `np.ndarray`) -----------------
     # -- streaming state (the midstate is per-construction, so are these) --
     "Blake3Stream": "hash_frx.blake3.streaming",
     "Sha256State": "hash_frx.sha256.sha256",

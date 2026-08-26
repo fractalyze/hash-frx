@@ -66,8 +66,6 @@ from hash_frx.word64 import Pair, add64, rotr64, xor64
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-    pass
-
 SHA512_MARKER = "hash_frx.digest.sha512"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI in
 # `sha512_merkle_damgard`. XLA recognizes a marker by name + attributes and

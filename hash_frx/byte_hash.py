@@ -15,10 +15,7 @@ construction.
 This is the byte counterpart of `permutation.Permutation`: where a `Permutation`
 backs the algebraic sponge / compression / duplex transcript over a field dtype,
 a `ByteHash` backs byte hashing over raw bytes. The two `fusion_path` attributes
-mean the same thing — how one call lowers on this backend — with one difference:
-a `ByteHash` may be `HOST` (a native library looped per message), a state a
-`Permutation` never has, so this is the seam where all three states of
-`hash_frx.fusion.FusionPath` are live.
+mean the same thing — how one call lowers on this backend.
 
 Implementations define value-based `__eq__`/`__hash__` over their full parameter
 surface — the same rule `Permutation` carries. A host byte transcript is a
@@ -31,7 +28,7 @@ re-trace-safe by construction (a param-free hash compares by type).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import frx.numpy as fnp
 import numpy as np
@@ -39,12 +36,6 @@ from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.fusion import FusionPath
-
-if TYPE_CHECKING:
-    # Typeshed-only: what every host hash accepts, and what numpy's stub declines
-    # to say `ndarray` is. TYPE_CHECKING-guarded, so it is a name mypy resolves
-    # and never an import at runtime.
-    pass
 
 
 @runtime_checkable
@@ -55,10 +46,9 @@ class ByteHash(Protocol):
     # kernel; consumers gate device-fusion wrapping on
     # `fusion_path.is_one_kernel` without naming a concrete hash. `GENERIC` — a
     # device path whose marker this backend does not route (it inlines; right
-    # bytes, no kernel), still traceable. `HOST` — a native library looped per
-    # message; never traceable, and `digest`'s return type says so. Device rows
-    # derive it per (hash, backend) at construction; a host row is the one
-    # legitimate constant (`HOST` everywhere).
+    # bytes, no kernel). Derived per (hash, backend) at construction, never a
+    # class constant: the emitter switch is a property of the pin and the
+    # backend.
     fusion_path: FusionPath
 
     # Supply it as a stored attribute — `DeviceRow.__init__`'s assignment or
@@ -70,36 +60,24 @@ class ByteHash(Protocol):
     # shipped a delegating property for as long as it was the one module
     # without one.
 
-    def digest(self, msg: ArrayLike) -> Array | np.ndarray:
+    def digest(self, msg: ArrayLike) -> Array:
         """Hash a batch of equal-length messages: uint8 `[B, L]` -> uint8
         `[B, digest_size]`, big-endian (the hash's standard output order). The
-        result is a device `Array` (a marker hash) or a host `np.ndarray` (a
-        host-library hash); consumers `np.asarray` it to bytes.
+        result is a device `Array`; consumers `np.asarray` it to bytes.
 
         One call is one function — the unit that lowers to one fused kernel on
         the `DEDICATED` path. `L` is static, so any padding is data-independent.
         Batch with the `B` axis: a dedicated-fusion hash lowers the whole batch
         through one shared decomposition (Merkle leaves, a PoW nonce window).
 
-        **Whether it may be called inside a traced region is the return type.**
-        An implementation returning a device `Array` accepts a traced `msg`, so a
-        consumer can hash inside its own `@jit` or `vmap` — which is what lets a
-        scheme reach the hash through this seam rather than naming a concrete one
-        to get a traceable path. An implementation returning `np.ndarray` is a
-        host call and never can: it has to read the bytes.
+        **Every implementation returns an `Array`**, so a consumer can hash
+        inside its own `@jit` or `vmap` — which is what lets a scheme reach the
+        hash through this seam rather than naming a concrete one to get a
+        traceable path.
 
-        `fusion_path` states the same split declaratively:
-        `fusion_path` reports routing only; the return type is the authority
-        (a device row — `DEDICATED` or `GENERIC` — returns `Array`; a `HOST` row
-        returns `np.ndarray`), and the return type remains the authority the
-        attribute is held to. The lone bool this seam used to carry could not
-        say it — a device hash whose marker the pinned plugin does not route
-        (BLAKE3 on Metal) and a host hash both read `False` — which is what the
-        three-state `FusionPath` exists to keep apart.
-
-        Which hash sits in the `GENERIC` gap moves with the pin — Keccak was
-        there until its emitter shipped — so the reason the return type stays
-        the authority does not move with it.
+        `fusion_path` reports routing and nothing else: whether the marker
+        lowers to one kernel on this backend. Which hash sits in the `GENERIC`
+        gap moves with the pin — Keccak was there until its emitter shipped.
         """
         ...
 

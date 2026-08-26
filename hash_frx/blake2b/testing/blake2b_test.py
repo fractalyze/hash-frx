@@ -305,11 +305,9 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(Blake2b(), 64)]
-        for hasher, size in rows:
-            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-            self.assertEqual(got.shape, (0, size))
-            self.assertEqual(got.dtype, np.uint8)
+        got = np.asarray(Blake2b().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+        self.assertEqual(got.shape, (0, 64))
+        self.assertEqual(got.dtype, np.uint8)
 
 
 class MessageRankTest(absltest.TestCase):
@@ -524,14 +522,12 @@ class Blake2bKeyedRowTest(absltest.TestCase):
         # At construction, where the caller can still choose — not at the
         # first `digest`, which is the rule the unkeyed rows already follow
         # for `digest_size`.
-        for cls in (Blake2bKeyed,):
-            with self.subTest(row=cls.__name__):
-                with self.assertRaisesRegex(ValueError, "salt"):
-                    cls(b"k", 32, salt=b"x" * 17)
-                with self.assertRaisesRegex(ValueError, "person"):
-                    cls(b"k", 32, person=b"x" * 17)
-                with self.assertRaisesRegex(ValueError, "key_size"):
-                    cls(b"k" * 65, 32)
+        with self.assertRaisesRegex(ValueError, "salt"):
+            Blake2bKeyed(b"k", 32, salt=b"x" * 17)
+        with self.assertRaisesRegex(ValueError, "person"):
+            Blake2bKeyed(b"k", 32, person=b"x" * 17)
+        with self.assertRaisesRegex(ValueError, "key_size"):
+            Blake2bKeyed(b"k" * 65, 32)
 
 
 class Blake2bKeyedMarkerTest(absltest.TestCase):

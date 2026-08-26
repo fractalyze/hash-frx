@@ -248,7 +248,7 @@ callback that took the seam's place, rather than only in review history.
 ## Adapters — constructions over a finished hash
 
 An adapter reads `digest` and nothing below it. [`adapter/`](../../hash_frx/adapter)
-holds them: HMAC and HKDF, MGF1, PBKDF2, the `Xof` and `Dual` holders, the
+holds them: HMAC and HKDF, MGF1, PBKDF2, the `Xof` holder, the
 per-hash `block_size` table, and the named duplex conventions.
 
 The intersection rule that shapes the seams decides where HMAC's block size

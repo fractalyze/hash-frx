@@ -89,9 +89,6 @@ def block_size(byte_hash: ByteHash) -> int:
     wrong key schedule, which is a silent interoperability failure rather than a
     crash — so declining to answer is the only safe default.
 
-    The host and device rows of one family share an entry: they are the same
-    hash, and a row differs from another in where it runs rather than in
-    what it computes.
     """
     name = type(byte_hash).__name__
     width = _BLOCK_SIZES.get(name)

@@ -2,7 +2,7 @@ load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash plus the `Sha256` /
-# `HostSha256` ByteHash implementations. A standalone hash, not a Permutation; no
+# ByteHash implementation. A standalone hash, not a Permutation; no
 # zk_dtypes / x64 dependency.
 py_library(
     name = "sha256",

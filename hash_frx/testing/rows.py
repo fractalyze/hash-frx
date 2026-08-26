@@ -64,7 +64,6 @@ from hash_frx import (
     Shake256,
     Sm3,
 )
-from hash_frx.byte_hash import DeviceRow
 
 _KEY_A = bytes(range(32))
 _KEY_B = bytes(range(1, 33))
@@ -172,11 +171,4 @@ ALL_ROWS: tuple[RowCase, ...] = (
 # on the Protocol would make that case assert its own selection criterion.
 BYTE_HASH_ROWS: tuple[RowCase, ...] = tuple(
     c for c in ALL_ROWS if hasattr(c.make(), "digest")
-)
-
-# Device rows: traceable, `digest` returns an `Array`, `fusion_path` derived per
-# (row, backend). Read off the class rather than restated here, so a row cannot
-# be filed under the wrong one and a row on neither base lands in neither.
-DEVICE_ROWS: tuple[RowCase, ...] = tuple(
-    c for c in ALL_ROWS if issubclass(c.make().__class__, DeviceRow)
 )

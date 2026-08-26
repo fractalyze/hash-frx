@@ -285,11 +285,9 @@ class SeamContractTest(absltest.TestCase):
     """
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(sm3.Sm3(), 32)]
-        for hasher, size in rows:
-            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-            self.assertEqual(got.shape, (0, size))
-            self.assertEqual(got.dtype, np.uint8)
+        got = np.asarray(sm3.Sm3().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+        self.assertEqual(got.shape, (0, 32))
+        self.assertEqual(got.dtype, np.uint8)
 
     def test_a_1d_message_is_rejected_at_the_seam(self) -> None:
         with self.assertRaisesRegex(ValueError, "2-D uint8"):

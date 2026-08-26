@@ -35,6 +35,7 @@ from hash_frx.ripemd160.ripemd160 import Ripemd160
 from hash_frx.ripemd160.testing.reference import VECTORS
 from hash_frx.ripemd160.testing.reference import ripemd160 as _ripemd160_oracle
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths for the differential sweep: 0/1 (empty + tiny),
 # 55/56 (the one-vs-two-block cutoff — the 0x80 byte and the 8-byte length
@@ -46,16 +47,6 @@ _LENGTHS = (0, 1, 55, 56, 63, 64, 65, 128)
 def _message(length: int, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(length * 31 + seed)
     return rng.integers(0, 256, size=(4, length), dtype=np.uint8)
-
-
-def _oracle(msgs: np.ndarray) -> np.ndarray:
-    """The reference digest of every row, in order. The device call is
-    data-parallel over the batch and this is not, so the equality below is the
-    bulk-parallel claim as much as the value one."""
-    return np.array(
-        [np.frombuffer(_ripemd160_oracle(bytes(row)), dtype=np.uint8) for row in msgs],
-        dtype=np.uint8,
-    ).reshape(len(msgs), 20)
 
 
 def _hashlib_has_ripemd160() -> bool:
@@ -87,7 +78,8 @@ class Ripemd160VectorTest(parameterized.TestCase):
         # batch — not one convenient length.
         msgs = _message(length)
         np.testing.assert_array_equal(
-            np.asarray(Ripemd160().digest(msgs)), _oracle(msgs)
+            np.asarray(Ripemd160().digest(msgs)),
+            oracle_digest(_ripemd160_oracle, 20, msgs),
         )
 
     @absltest.skipUnless(
@@ -233,11 +225,11 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(ripemd160.Ripemd160(), 20)]
-        for hasher, size in rows:
-            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-            self.assertEqual(got.shape, (0, size))
-            self.assertEqual(got.dtype, np.uint8)
+        got = np.asarray(
+            ripemd160.Ripemd160().digest(fnp.zeros((0, 64), dtype=fnp.uint8))
+        )
+        self.assertEqual(got.shape, (0, 20))
+        self.assertEqual(got.dtype, np.uint8)
 
 
 if __name__ == "__main__":

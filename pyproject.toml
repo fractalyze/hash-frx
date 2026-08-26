@@ -38,11 +38,6 @@ classifiers = [
 #
 # The GPU plugins (frx-cuda12-*) stay undeclared: they are an install-time
 # platform choice, offered through frx's own `cuda12` extra.
-#
-# `blake3` is declared because the shipped tree imports it: the `HostBlake3*` rows
-# in `hash_frx/blake3/byte_hashes.py` need a native BLAKE3 the way the other host
-# rows need `hashlib`, and the standard library has none. It ships prebuilt wheels
-# for every platform this package supports, so it costs a consumer no toolchain.
 dependencies = [
     "numpy",
     # Floor = the first wheel whose Grøstl-256 emitter accepts the RUNTIME-LENGTH
