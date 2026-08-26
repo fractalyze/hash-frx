@@ -19,23 +19,37 @@ cover every kernel:
   in. `hash_frx.digest.field_sponge` (the field sponge) sits here too — field-level
   rather than byte-level, but a whole hash all the same.
 
-**Namespace rule.** Every marker is spelled ``hash_frx.<kind>.<name>``:
-``hash_frx.perm.*`` / ``hash_frx.compress.*`` / ``hash_frx.digest.*``
-(``compress`` rather than ``comp``, which would read as "composite"). The rows
-below carry the namespaced spellings; the pre-namespace spellings stayed on
-the wire until the pinned Fractalyze XLA recognizers accepted both — a marker
-name is a wire ABI (`hash_frx.fusion`), so the rename staged behind
-dual-spelling recognition (#165, which also tracks retiring the old
-spellings once every producer has flipped).
+**Naming rule.** A marker name is a wire ABI (`hash_frx.fusion`), and two
+naming disciplines are in use:
 
-The registry restates each emitting module's constants as literals instead of
-importing them, so reading it stays free of every hash's dependencies (frx, the
-`blake3` binding); `markers_test` holds every row equal to its module constant
-and the enumeration complete, which is where drift is caught. The inversion —
-emitting modules importing their names from here — would de-duplicate too, but
-a marker's name and version belong beside its emitter: the version constants
-carry their contract-change notes at the emission site, which a central file
-would strand.
+- *Primitive-named* — ``hash_frx.<kind>.<name>``: ``hash_frx.perm.*`` /
+  ``hash_frx.compress.*`` / ``hash_frx.digest.*`` (``compress`` rather than
+  ``comp``, which would read as "composite"). One emitting module owns the
+  name, so its constants live beside that emitter.
+- *Operation-named* — ``hash_frx.<operation>``, a single segment with no kind
+  prefix: the name IS the kind, so there is no primitive for it to nest behind,
+  and WHICH primitive runs rides a composite attribute instead of the name.
+  Several modules emit one, so none of them owns it.
+
+`Marker.naming` carries the distinction and `markers_test` holds each row to the
+spelling its discipline requires, so a new operation name is a value there
+rather than another exemption in the test.
+
+Both renames staged behind dual-spelling recognition in Fractalyze XLA, a marker
+name being wire ABI: the pre-namespace spellings stayed on the wire until the
+pinned recognizers accepted both (#165, which also tracks retiring them once
+every producer has flipped), and the per-primitive permute spellings are doing
+the same now behind `hash_frx.permute` (fractalyze/xla#616).
+
+The registry restates each primitive-named module's constants as literals
+instead of importing them, so reading it stays free of every hash's dependencies
+(frx, the `blake3` binding); `markers_test` holds every row equal to its module
+constant and the enumeration complete, which is where drift is caught. The
+inversion — emitting modules importing their names from here — would de-duplicate
+too, but a marker's name and version belong beside its emitter: the version
+constants carry their contract-change notes at the emission site, which a central
+file would strand. An operation-named marker has no single emitter to sit beside,
+which is why its constants are the exception and are defined here.
 
 `zorch.fused_region` and the other `zorch.*` markers are deliberately absent:
 they are generic regions the `zorch` repos own, not hashes this package does.
@@ -52,6 +66,49 @@ PERM_NAMESPACE = "hash_frx.perm."
 COMPRESS_NAMESPACE = "hash_frx.compress."
 DIGEST_NAMESPACE = "hash_frx.digest."
 
+# The operation-named permute marker: one name for every permutation, with the
+# primitive carried in the `permutation` composite attribute the dedicated
+# markers already emit. Naming the OPERATION rather than the primitive is what
+# lets a permutation ship without minting a marker name, and what gives the
+# plugin's registry something to look up other than a suffix.
+PERMUTE_MARKER = "hash_frx.permute"
+
+# One name, one wire ABI, so one version -- it tracks the permute SCHEMA
+# (state, then the primitive's own constants), not any primitive's parameters.
+# The per-primitive versions it replaces staged per-primitive contracts; under
+# this name a primitive's contract change rides its `permutation` attribute
+# instead.
+PERMUTE_MARKER_VERSION = 1
+
+# Emitted only where the pinned plugin recognizes it. The dual-spelling half
+# landed in fractalyze/xla#616; this stays False until the `frx>=` floor moves
+# to a wheel carrying it, because flipping first makes every permute marker
+# unrecognized -- it would not fail, it would silently inline and lose fusion.
+#
+# Same shape and the same reason as the per-family `_DEDICATED_EMITTER_AVAILABLE`
+# constants, and it retires with them when the plugin exposes what it can route.
+# It needs no backend axis of its own, unlike those constants' `_EMITTER_BACKENDS`
+# siblings: this only re-spells a marker the family's own routing gate has ALREADY
+# chosen on this backend, and xla#616 recognizes the new name in the same shared
+# rewriter that reads the spellings it replaces. So it cannot change WHERE a
+# permutation routes, only what the region it already routes to is called.
+_OPERATION_NAMED_PERMUTE = False
+
+
+def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:
+    """The `(name, version)` a DEDICATED permute marker rides today.
+
+    Takes the primitive's own spelling and returns either it or the
+    operation-named one, so the choice is made in a single place rather than
+    six. Only the DEDICATED spelling is decided here, because answering the
+    generic case too would need `FUSED_REGION_MARKER` and this module is
+    deliberately dependency-free; `fusion.permute_marker` composes the two and
+    is what a permutation actually calls.
+    """
+    if _OPERATION_NAMED_PERMUTE:
+        return PERMUTE_MARKER, PERMUTE_MARKER_VERSION
+    return name, version
+
 
 class MarkerKind(enum.Enum):
     """The kind of fusible unit a marker names (the module docstring's split)."""
@@ -61,13 +118,30 @@ class MarkerKind(enum.Enum):
     DIGEST = "digest"  # whole hash, construction baked in
 
 
+class MarkerNaming(enum.Enum):
+    """Which naming discipline a row follows (the module docstring's split).
+
+    Orthogonal to `MarkerKind`, which says what unit lowers: an operation name
+    still names a kind, it just spells it without the primitive.
+    """
+
+    PRIMITIVE = "primitive"  # `hash_frx.<kind>.<name>`, one emitter owns it
+    OPERATION = "operation"  # `hash_frx.<operation>`, the primitive is an attribute
+
+
 class Marker(NamedTuple):
     name: str  # the `composite.name` on the wire
     version: int  # the `composite.version` the emitting module currently rides
     kind: MarkerKind
+    naming: MarkerNaming = MarkerNaming.PRIMITIVE
 
 
 MARKERS: tuple[Marker, ...] = (
+    # The operation-named permute marker; the per-primitive spellings below it
+    # are retiring and stay recognized for one pin cycle.
+    Marker(
+        PERMUTE_MARKER, PERMUTE_MARKER_VERSION, MarkerKind.PERM, MarkerNaming.OPERATION
+    ),
     # Permutations — one marked region per permute.
     Marker("hash_frx.perm.poseidon", 1, MarkerKind.PERM),
     Marker("hash_frx.perm.poseidon_sparse", 2, MarkerKind.PERM),

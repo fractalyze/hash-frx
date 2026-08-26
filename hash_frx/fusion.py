@@ -53,6 +53,7 @@ import frx
 from frx import Array
 
 from hash_frx._composite import _Region, composite
+from hash_frx.markers import dedicated_permute_marker
 
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
@@ -141,6 +142,24 @@ def routing(available: bool, backends: tuple[str, ...]) -> bool:
     `FusionPath.from_routing`'s to say.
     """
     return available and frx.default_backend() in backends
+
+
+def permute_marker(name: str, version: int) -> tuple[str, int]:
+    """The `(name, version)` a permutation puts on the wire for its region.
+
+    Takes whichever name the family's routing gate selected and answers both
+    halves of the choice in one place: a generic region carries no version (the
+    recognizer reads only the name there, so a version would claim a contract
+    the marker does not have), and a routed one gets whichever permute spelling
+    `markers` is currently emitting.
+
+    It lives here rather than in `markers` because it needs `FUSED_REGION_MARKER`,
+    and `markers` is deliberately dependency-free — so the dependency can only run
+    fusion → markers, never back.
+    """
+    if name == FUSED_REGION_MARKER:
+        return FUSED_REGION_MARKER, 0
+    return dedicated_permute_marker(name, version)
 
 
 def fused_region(

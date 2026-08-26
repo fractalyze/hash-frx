@@ -31,6 +31,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    permute_marker,
     routing,
 )
 from hash_frx.poseidon2.linear import (
@@ -90,12 +91,7 @@ class Poseidon2:
         self._is_m4_structured = params.is_m4_block_structured
         self._external_m4 = params.external_m4 if self._is_m4_structured else None
         name = self._select_fused_region_name()
-        # A generic region carries no version: the recognizer reads only the name
-        # there, so a version would claim a contract the marker does not have.
-        self.fused_region_marker = (
-            name,
-            POSEIDON2_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, POSEIDON2_MARKER_VERSION)
         # Dedicated == permute lowers to a hash-named marker, not the generic
         # region one (which a vendor can't route, so a whole-region composite
         # around it is unexpandable).

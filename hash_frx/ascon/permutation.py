@@ -43,6 +43,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    permute_marker,
     routing,
 )
 from hash_frx.word import roll
@@ -313,13 +314,7 @@ class AsconP:
         # is a value the permutation carries, and a test can construct both
         # routings in one process.
         name = ASCON_P_MARKER if _routes_to_dedicated_emitter() else FUSED_REGION_MARKER
-        # A generic region carries no version: the recognizer reads only the
-        # name there, so a version would claim a contract the marker does not
-        # have.
-        self.fused_region_marker = (
-            name,
-            ASCON_P_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, ASCON_P_MARKER_VERSION)
         self.fusion_path = FusionPath.from_marker(name)
 
     def __eq__(self, other: object) -> bool:

@@ -40,6 +40,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    permute_marker,
     routing,
 )
 from hash_frx.linear import apply_matrix
@@ -119,12 +120,7 @@ class Poseidon:
         # marker carries these ints (flattened row-major) as the `mds` attribute.
         self._mds_rows = params.mds_rows
         name = self._select_fused_region_name(self._mds_rows)
-        # A generic region carries no version: the recognizer reads only the name
-        # there, so a version would claim a contract the marker does not have.
-        self.fused_region_marker = (
-            name,
-            POSEIDON_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, POSEIDON_MARKER_VERSION)
         self.fusion_path = FusionPath.from_marker(name)
 
     def _select_fused_region_name(self, mds_rows: tuple[tuple[int, ...], ...]) -> str:
