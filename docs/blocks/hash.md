@@ -137,15 +137,33 @@ first, with the comment explaining it; the MD absorb re-derived it rather than
 reading it off the sponge in the same package, so both files now cross-reference
 each other.
 
-**The seven families are two wire ABIs, and only one of them shares a chain.**
+**The seven families are two wire ABIs, and both now share the block walk.**
 Words-in (`*_merkle_damgard`, padding applied outside the marked region) and
 bytes-in (`*_bytes`, padding applied inside) is the split
 [`markers.py`](../../hash_frx/markers.py) already draws. `chain` covers the three
-words-in families; the four bytes-in ones keep a two-line block loop of their own.
-That is measured rather than conceded: a shared bytes-in helper needs five to
-seven callbacks to share **three lines out of forty-one to fifty-six**, and the
-rest is each family's real content. `haifa_counter` is the residue that was
-genuinely shared, so it was extracted and the loop was not.
+words-in families; `masked_chain` underneath it is the walk itself, and the
+bytes-in families call it directly.
+
+The earlier measurement here — that a shared bytes-in helper needs five to seven
+callbacks to share **three lines out of forty-one to fifty-six** — was about a
+whole *decomposition* helper: padding, packing, loop and serialize behind one
+call. It stands for that. It does not reach the **walk alone**, which is one
+callback for five lines and was extracted once a second family
+(`grostl256_bytes`) needed the same runtime-length masking SHA-256 already had.
+
+What made the walk shareable where the decomposition was not is that
+`masked_chain` takes the block's **index**, so it emits nothing but the select —
+the shape [`tree.chain`](../../hash_frx/extension/tree.py) and
+[`sponge.absorb_squeeze`](../../hash_frx/extension/sponge.py) already take, and
+for the reason `sponge.py` writes down: a helper handed a *block* must emit that
+block first, which fixes one emission order for every caller and silently
+excludes whichever builds theirs in the other order. Grøstl slices a flat byte
+region where the packed families index a word one; both ride an index callback
+unchanged, and neither could ride a block one.
+
+`haifa_counter` is the other residue that was genuinely shared. BLAKE2b/2s read
+it off the same `i`, so the callback admits them; they have not been routed
+through yet, which is a rollout step rather than a design question.
 
 ### Sponge
 

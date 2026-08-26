@@ -404,10 +404,11 @@ def sha256_bytes(buf: Array, length: Array) -> Array:
     ) -> Array:
         words = _runtime_padded_words(msg, ln)
         live = _PAD.nblocks(ln)
+        state = fnp.broadcast_to(h0, (msg.shape[0], 8))
         state = masked_chain(
-            h0,
-            words,
-            compress_block=lambda s, b: _compress(s, b, k),
+            state,
+            count=words.shape[1],
+            compress_block=lambda s, i: _compress(s, words[:, i], k),
             live=live,
         )
         return serialize_digest(state)
