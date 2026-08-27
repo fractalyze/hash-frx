@@ -74,8 +74,6 @@ def hkdf_expand(
     blocks = []
     for i in range(1, n + 1):
         ctr = fnp.full((*batch, 1), i, dtype=fnp.uint8)
-        t = fnp.asarray(
-            mac.mac(prk, fnp.concatenate([t, info, ctr], axis=1)), dtype=fnp.uint8
-        )
+        t = mac.mac(prk, fnp.concatenate([t, info, ctr], axis=1))
         blocks.append(t)
     return fnp.concatenate(blocks, axis=1)[:, :length]

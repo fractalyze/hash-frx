@@ -87,7 +87,7 @@ class Hmac(Row):
         if key.ndim != 2:
             raise ValueError(f"key must be [K] or [B, K], got shape {key.shape}")
         if key.shape[1] > self.block_size:
-            key = fnp.asarray(self.byte_hash.digest(key), dtype=fnp.uint8)
+            key = self.byte_hash.digest(key)
         if key.shape[1] < self.block_size:
             pad = fnp.zeros(
                 (key.shape[0], self.block_size - key.shape[1]), dtype=fnp.uint8
@@ -108,9 +108,7 @@ class Hmac(Row):
             fnp.concatenate([k0 ^ fnp.uint8(_IPAD), msg], axis=1)
         )
         return self.byte_hash.digest(
-            fnp.concatenate(
-                [k0 ^ fnp.uint8(_OPAD), fnp.asarray(inner, dtype=fnp.uint8)], axis=1
-            )
+            fnp.concatenate([k0 ^ fnp.uint8(_OPAD), inner], axis=1)
         )
 
     def _parameters(self) -> tuple[object, ...]:

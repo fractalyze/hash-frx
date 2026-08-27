@@ -151,7 +151,7 @@ class Mgf1(Row):
             ],
             axis=1,
         )
-        stream = fnp.asarray(self._byte_hash.digest(message), dtype=fnp.uint8)
+        stream = self._byte_hash.digest(message)
         return stream.reshape(batch, blocks * h_len)[:, : self.digest_size]
 
 
