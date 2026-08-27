@@ -142,13 +142,9 @@ class Ripemd160MarkerTest(absltest.TestCase):
         eqn = _composite(ripemd160.digest, msg)
         self.assertEqual(eqn.params["name"], ripemd160.RIPEMD160_MARKER)
         self.assertEqual(eqn.params["version"], ripemd160.RIPEMD160_MARKER_VERSION)
-        # The `primitive` attribute is the OTHER half of the operation-name
-        # migration and the reason the flip is a rename and nothing else: the
-        # plugin resolves the family through it once the name stops carrying
-        # one. Pinned here, while the marker still rides its own spelling,
-        # because a family that quietly stopped emitting it would keep passing
-        # every test above and then decline into its decomposition at flip time
-        # rather than fail (`markers.bytes_in_digest_marker`).
+        # Pinned while the marker still rides its own spelling: a family that
+        # quietly stopped emitting `primitive` would pass every assertion above
+        # and then decline into its decomposition at flip time rather than fail.
         attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
         self.assertEqual(attrs["primitive"], "ripemd160")
         self.assertLen(eqn.invars, 3)

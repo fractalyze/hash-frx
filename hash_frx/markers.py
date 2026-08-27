@@ -159,55 +159,37 @@ STREAM_FINALIZE_MARKER_VERSION = 1
 
 # The operation-named RAW-BYTES Merkle-Damgard digest marker: one name for every
 # family whose message arrives UNPADDED, with the primitive carried in the
-# `primitive` composite attribute exactly as `MD_DIGEST_MARKER` carries it.
+# `primitive` composite attribute.
 #
-# A separate operation from `MD_DIGEST_MARKER` rather than a version of it,
-# because the two are different WIRE ABIs and not different parameterizations of
-# one: words-in hands the kernel pre-padded blocks, raw-bytes hands it the
-# message and a zero tail and the padding happens inside the region. An emitter
-# reading one as the other reads a message where a block count should be.
+# A separate operation from `MD_DIGEST_MARKER`, not a version of it: words-in
+# hands the kernel pre-padded blocks, raw-bytes hands it the message and a zero
+# tail. An emitter reading one as the other reads a message where a block count
+# should be.
 #
-# **Flat, not `hash_frx.digest.bytes`.** The dotted spelling would put a LIVE
-# operation name inside `DIGEST_NAMESPACE`, which is where the RETIRING
-# per-family spellings live and is slated for deletion as a group -- and it
-# would read as "digest of a family called bytes". `hash_frx.permute` and
-# `hash_frx.digest` are flat for the same reason: an operation name is a sibling
-# of the other operations, not a child of one.
+# Flat for the reason `PERMUTE_MARKER` and `MD_DIGEST_MARKER` are: an operation
+# name is a sibling of the other operations, not a child of one. The dotted
+# spelling would also put a LIVE name inside `DIGEST_NAMESPACE`, which holds the
+# retiring per-family spellings and is slated for deletion as a group.
 BYTES_DIGEST_MARKER = "hash_frx.digest_bytes"
 
 # One name, one wire ABI, so one version -- it tracks the raw-bytes SCHEMA
 # (`[h0, consts..., msg, tail] -> digest bytes`), not any family's parameters.
-# `consts...` is zero or more: RIPEMD-160 carries none at all, where the BLAKE2
-# pair each carry an IV, so the count is the registry entry's and not the
-# schema's.
+# `consts...` is zero or more: RIPEMD-160 carries none, the BLAKE2 pair one each.
 BYTES_DIGEST_MARKER_VERSION = 1
 
 # Emitted only where the pinned plugin recognizes it. The recognizer landed in
-# fractalyze/xla#635 over the #632 envelope, and the registry entries it
-# resolves through in #636 (RIPEMD-160), #639 (BLAKE2s) and #642 (BLAKE2b);
-# this stays False until the `frx>=` floor moves to a wheel carrying them.
+# fractalyze/xla#635 over the #632 envelope, and the entries it resolves through
+# in #636 (RIPEMD-160), #639 (BLAKE2s) and #642 (BLAKE2b); this stays False
+# until the `frx>=` floor moves to a wheel carrying them.
 #
-# **The reason this is gated differs from BOTH its siblings', and copying either
-# rationale would be wrong.** Flipping the permute name early loses fusion the
-# old spellings already have. Flipping the words-in name early would have left
-# `fusion_path` reporting `GENERIC` over a real kernel. Flipping THIS one early
-# does neither -- and does nothing at all: the three families emit
-# `hash_frx.digest.ripemd160` / `...blake2s` / `...blake2b`, no recognizer
-# matches those, and an old plugin does not match the operation name either, so
-# they inline before and after.
-#
-# So this flag is not what makes the flip safe; the ORDERING is, and the hazard
-# lives on the family gates rather than here. Turning a family's
-# `_DEDICATED_EMITTER_AVAILABLE` on before the floor carries its entry makes
-# `fusion_path` advertise a dedicated kernel over a body that still inlines --
-# metadata lying about what it describes, which is what `fusion_path_test`'s
-# matrix law exists to catch. This rides with those gates so the rename and the
-# routing claim land together: floor first, then this and the gates in one
-# commit.
-#
-# What is already in place is the `primitive` composite attribute, which the
-# three families emit under BOTH spellings -- inert while each carries its own
-# name, so the flip is a rename and nothing else.
+# **Unlike both siblings, flipping this early would do nothing at all** -- the
+# three families emit names no recognizer matches, and an old plugin matches the
+# operation name no better, so they inline either way. So the flag is not what
+# makes the flip safe; the ORDERING is, and the hazard sits on the family
+# `_DEDICATED_EMITTER_AVAILABLE` gates: turning one on before the floor carries
+# its entry makes `fusion_path` advertise a kernel over a body that still
+# inlines, which is what `fusion_path_test`'s matrix law catches. This rides
+# with those gates so the rename and the routing claim land in one commit.
 _OPERATION_NAMED_BYTES_DIGEST = False
 
 
@@ -251,28 +233,18 @@ def bytes_in_digest_marker(name: str, version: int) -> tuple[str, int]:
     spelling and returns either it or the operation-named one, so the choice is
     made in one place rather than once per family.
 
-    Only the STATIC-length raw-bytes schema belongs here — `[h0, consts..., msg,
-    tail]`, where the block count is a shape property.
+    Only the STATIC-length schema belongs here — `[h0, consts..., msg, tail]`,
+    where the block count is a shape property. The runtime-LENGTH forms carry a
+    scalar length operand instead, which makes it a runtime value; both
+    `sha256.SHA256_BYTES_MARKER` and `grostl.GROSTL256_MARKER` are in that group
+    and neither is a caller. **Grostl is the live trap** — it walks
+    `masked_chain` exactly as RIPEMD-160 does, and it is routed on the pinned
+    plugin today, so wiring it here would be a no-op until the flip moved a live
+    marker onto an envelope with no length operand.
 
-    **The runtime-LENGTH forms are a different schema and keep their own names.**
-    They carry a scalar length operand and synthesize their padding from it, so
-    their block count is a runtime value. Two families are in that group and
-    both are easy to mis-wire here, for opposite reasons:
-    `sha256.SHA256_BYTES_MARKER`, because SHA-256 is the family the raw-bytes
-    envelope was lifted out of; and `grostl.GROSTL256_MARKER`, because Grøstl
-    walks `masked_chain` exactly as RIPEMD-160 does and so reads like a
-    raw-bytes MD digest. Grøstl is the more dangerous of the two — it is
-    RECOGNIZED and routed on the pinned plugin today, so wiring it here would be
-    a perfect no-op while the flag is off and would move a live marker onto an
-    envelope with no length operand the moment it flips.
-
-    The `primitive` composite attribute is this migration's other half, and the
-    three callers emit it alongside their own names rather than only after the
-    flip. That is what makes the flip a rename and nothing else: the plugin
-    resolves the family through the attribute once the name stops carrying it,
-    so a caller that stopped emitting it would silently decline into its
-    decomposition instead of failing. `extension/md.py`'s `chain` states the
-    same arrangement for the words-in schema.
+    Callers emit the `primitive` attribute alongside their own name, not only
+    after the flip — that is what makes the flip a rename and nothing else
+    (`extension/md.py`'s `chain` states the same arrangement words-in).
     """
     if _OPERATION_NAMED_BYTES_DIGEST:
         return BYTES_DIGEST_MARKER, BYTES_DIGEST_MARKER_VERSION

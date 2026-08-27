@@ -190,14 +190,10 @@ class OperationNamedBytesDigestTest(absltest.TestCase):
     resolves through (#636/#639/#642).
     """
 
-    # The three families that ride `bytes_in_digest_marker`: the STATIC-length
-    # raw-bytes schema. Membership is hand-listed because nothing in `MARKERS`
-    # distinguishes the schemas -- but the SPELLINGS come off the modules, so a
-    # family renaming its marker cannot strand a literal here. It would not be
-    # caught otherwise: the resolver returns its argument verbatim while the
-    # flag is off and ignores it when on, so any three strings pass both tests.
-    # SHA-256 and Grostl are deliberately absent -- they are the runtime-LENGTH
-    # schema (`markers.bytes_in_digest_marker` says why).
+    # Membership is hand-listed -- nothing in `MARKERS` distinguishes the
+    # schemas -- but the SPELLINGS come off the modules: the resolver returns
+    # its argument verbatim when off and ignores it when on, so a stranded
+    # literal would pass both tests below.
     _FAMILIES = (
         (ripemd160.RIPEMD160_MARKER, ripemd160.RIPEMD160_MARKER_VERSION),
         (blake2s.BLAKE2S_MARKER, blake2s.BLAKE2S_MARKER_VERSION),
@@ -205,10 +201,8 @@ class OperationNamedBytesDigestTest(absltest.TestCase):
     )
 
     def test_off_reports_the_familys_own_spelling(self) -> None:
-        # The shipped state, so this runs unpatched: while the flag is off every
-        # family must get its own spelling back VERBATIM. A fallback that
-        # altered the name would silently change the wire on a pin that still
-        # reads the old one.
+        # Unpatched -- the shipped state. A fallback that altered the name
+        # would silently change the wire on a pin still reading the old one.
         for name, version in self._FAMILIES:
             with self.subTest(marker=name):
                 self.assertEqual(
@@ -216,8 +210,8 @@ class OperationNamedBytesDigestTest(absltest.TestCase):
                 )
 
     def test_on_reports_the_operation_name_for_every_family(self) -> None:
-        # One name and one version whatever the family was; the primitive
-        # reaches the plugin as the `primitive` attribute instead.
+        # One name and version whatever the family was; the plugin resolves
+        # it through the `primitive` attribute instead.
         with mock.patch.object(markers, "_OPERATION_NAMED_BYTES_DIGEST", True):
             for name, version in self._FAMILIES:
                 with self.subTest(marker=name):
@@ -230,10 +224,9 @@ class OperationNamedBytesDigestTest(absltest.TestCase):
                     )
 
     def test_the_flag_is_off_until_the_pin_carries_the_recognizer(self) -> None:
-        # The gate itself. Flipping this before the floor moves does not fail --
-        # the families swap one unrecognized name for another and keep inlining,
-        # which is a green suite with no kernel. So the constant is pinned here
-        # and moves in the same commit as the floor.
+        # Flipping early does not fail -- the families swap one unrecognized
+        # name for another and keep inlining. Pinned so it moves in the same
+        # commit as the floor and the routing gates.
         self.assertFalse(markers._OPERATION_NAMED_BYTES_DIGEST)
 
 
