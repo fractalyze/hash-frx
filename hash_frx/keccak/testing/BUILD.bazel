@@ -31,7 +31,17 @@ py_test(
     # the eager sweeps are cheap however many shapes they cover. Compile is what
     # costs, and it scales with absorb-block count because `inline=True` splices
     # the 24 rounds in per block — which is why the traced cases stay sub-rate.
+    #
+    # `timeout = "long"` rather than `size = "large"`: the footprint is one
+    # ordinary Python process, so what this needs is wall clock, not a bigger
+    # resource class — `blake3_test` spells the same distinction the same way.
+    # It earned it by growing: the two FIPS 202 rows added in #350 join a case
+    # table every sweep runs over, and nothing re-sized the target. Measured on
+    # the CI executor it takes 173-272 s against `medium`'s 300 s ceiling, and
+    # that spread is the same test on different workers — so a cache miss on a
+    # slow one times out, which is what it did.
     size = "medium",
+    timeout = "long",
     srcs = ["byte_hashes_test.py"],
     deps = [
         "//hash_frx:byte_hash",
@@ -134,7 +144,11 @@ py_test(
 # expensive edit here, adding a message length is nearly free.
 py_test(
     name = "cshake_test",
+    # Same headroom as `byte_hashes_test` above, for the same measured reason:
+    # 176 s on the CI executor, and the observed worker-to-worker spread on this
+    # family is wide enough to carry that past 300 s.
     size = "medium",
+    timeout = "long",
     srcs = ["cshake_test.py"],
     deps = [
         ":reference",
