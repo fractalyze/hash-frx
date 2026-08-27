@@ -112,7 +112,7 @@ _VECTORS = (
         free=kmac128,
         key=_KEY,
         customization=b"",
-        data=bytes.fromhex("00010203"),
+        data=_DATA_4,
         outval=bytes.fromhex(
             "E5780B0D3EA6F7D3A429C5706AA43A00FADBD7D49628839E3187243F456EE14E"
         ),
@@ -123,7 +123,7 @@ _VECTORS = (
         free=kmac128,
         key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex("00010203"),
+        data=_DATA_4,
         outval=bytes.fromhex(
             "3B1FBA963CD8B0B59E8C1A6D71888B7143651AF8BA0A7070C0979E2811324AA5"
         ),
@@ -145,7 +145,7 @@ _VECTORS = (
         free=kmac256,
         key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex("00010203"),
+        data=_DATA_4,
         outval=bytes.fromhex(
             "20C570C31346F703C9AC36C61C03CB64C3970D0CFC787E9B79599D273A68D2F7"
             "F69D4CC3DE9D104A351689F27CF6F5951F0103F33F4F24871024D9C27773A8DD"
@@ -181,7 +181,7 @@ _VECTORS = (
         free=kmac_xof128,
         key=_KEY,
         customization=b"",
-        data=bytes.fromhex("00010203"),
+        data=_DATA_4,
         outval=bytes.fromhex(
             "CD83740BBD92CCC8CF032B1481A0F4460E7CA9DD12B08A0C4031178BACD6EC35"
         ),
@@ -192,7 +192,7 @@ _VECTORS = (
         free=kmac_xof128,
         key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex("00010203"),
+        data=_DATA_4,
         outval=bytes.fromhex(
             "31A44527B4ED9F5C6101D11DE6D26F0620AA5C341DEF41299657FE9DF1A3B16C"
         ),
@@ -214,7 +214,7 @@ _VECTORS = (
         free=kmac_xof256,
         key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex("00010203"),
+        data=_DATA_4,
         outval=bytes.fromhex(
             "1755133F1534752AAD0748F2C706FB5C784512CAB835CD15676B16C0C6647FA9"
             "6FAA7AF634A0BF8FF6DF39374FA00FAD9A39E322A7C92065A64EB1FB0801EB2B"
@@ -288,12 +288,10 @@ class XofDistinctionTest(parameterized.TestCase):
         # Not one function truncated two ways. `right_encode(8 * L)` against
         # `right_encode(0)` changes the final absorbed bytes, so the streams
         # diverge from the first byte out.
-        for out in (32,):
-            self.assertNotEqual(
-                _digest(plain(_KEY, output_size=out), b"msg"),
-                _digest(xof(_KEY, output_size=out), b"msg"),
-                f"out={out}",
-            )
+        self.assertNotEqual(
+            _digest(plain(_KEY, output_size=32), b"msg"),
+            _digest(xof(_KEY, output_size=32), b"msg"),
+        )
 
     def test_the_published_pairs_share_inputs_and_differ(self) -> None:
         # The strongest form of the claim: NIST publishes both functions over
@@ -319,11 +317,7 @@ class ConstructionTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_the_trailing_length_is_encoded_in_bits(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         # `right_encode(8 * output_size)`, not `right_encode(output_size)`.
         # Both are legal encodings of a plausible number, so the wrong one is a
@@ -346,11 +340,7 @@ class ConstructionTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_the_domain_byte_is_cshakes_whatever_the_customization(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         # KMAC's `N` is the literal "KMAC" (SP 800-185 section 4.3), so section
         # 3.3's both-empty fallback cannot fire and the domain byte is 0x04 even
@@ -375,11 +365,7 @@ class ConstructionTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_an_empty_customization_is_not_a_missing_one(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         # Different customizations separate, and the empty one is just another
         # value rather than a way to opt out.
@@ -395,13 +381,13 @@ class KeyTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_the_two_surfaces_agree(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
-        data = bytes(range(200))
+        # `_DATA_4`, not a fresh length: at both rates this shares the fused
+        # sponge's trace key with the four-byte published vectors above, and a
+        # 200-byte body here would restate what KMAC3/5/6 already run through
+        # BOTH surfaces at a key of its own.
+        data = _DATA_4
         bound = _digest(row(_KEY, b"S", output_size=32), data)
         operand = free(
             fnp.asarray(np.frombuffer(_KEY, dtype=np.uint8)), _batch(data), 32, b"S"
@@ -410,11 +396,7 @@ class KeyTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_one_program_serves_every_key(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         # The point of the operand form, and the evidence that only the key's
         # LENGTH reaches the encodings: two different key values, one trace.
@@ -431,11 +413,7 @@ class KeyTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_a_per_message_key_matches_one_message_at_a_time(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         # `[B, K]` keys, the shape `Hmac.mac` also takes.
         # Four rows rather than two, so this shares a trace key with
@@ -453,11 +431,7 @@ class KeyTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_a_different_key_is_a_different_tag(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         self.assertNotEqual(
             _digest(row(_KEY, output_size=32), b"msg"),
@@ -466,11 +440,7 @@ class KeyTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_a_malformed_operand_key_is_rejected(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         with self.assertRaisesRegex(ValueError, r"key must be \[K\] or \[B, K\]"):
             free(np.zeros((2, 2, 2), dtype=np.uint8), _batch(b"msg"), 32)
@@ -481,23 +451,14 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_digest_size_matches_what_digest_returns(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
-        for out in (32,):
-            instance = row(_KEY, output_size=out)
-            self.assertLen(_digest(instance, b"msg"), instance.digest_size)
+        instance = row(_KEY, output_size=32)
+        self.assertLen(_digest(instance, b"msg"), instance.digest_size)
 
     @parameterized.named_parameters(*_CASES)
     def test_batched_equals_per_row(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         instance = row(_KEY, b"S", output_size=32)
         messages = [bytes([i] * 40) for i in range(4)]
@@ -509,11 +470,7 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_digest_accepts_a_tracer(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         instance = row(_KEY, b"S", output_size=32)
         data = bytes(range(80))
@@ -522,11 +479,7 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_value_identity_covers_every_parameter(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         # Each parameter varied alone. The key especially: two rows that compare
         # equal share a compiled program, and for a MAC that is the key leaking
@@ -549,11 +502,7 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_the_output_length_is_required(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_Kmac], free: Callable[..., object], rate: int, xof: bool
     ) -> None:
         # An XOF names no output length, so the family refuses a default, and
         # keyword-only stops a positional length being read as a customization.

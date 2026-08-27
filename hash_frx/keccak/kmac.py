@@ -53,18 +53,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import frx.numpy as fnp
-import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import device_message
 from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE256_RATE, _KeccakHash
-from hash_frx.keccak.cshake import CSHAKE_SUFFIX, _prefix_block
+from hash_frx.keccak.cshake import CSHAKE_SUFFIX, const_rows, derived_framing
 from hash_frx.keccak.encodings import (
     bytepad,
     bytepad_encoded_split,
     encode_string,
-    right_encode,
 )
 from hash_frx.keccak.sponge import KeccakSponge
 
@@ -74,42 +72,6 @@ if TYPE_CHECKING:
 # Section 4.3's `N`. Fixed, and reserved to NIST by section 3.4 — this is one of
 # the four names that section exists to allocate.
 KMAC_NAME = b"KMAC"
-
-
-def _framing(
-    rate: int, output_size: int, customization: bytes, xof: bool
-) -> tuple[bytes, bytes]:
-    """§4.3's two constants: the cSHAKE prefix that opens the absorb, and the
-    `right_encode(L)` that closes it.
-
-    `N` is the constant "KMAC", so the prefix is never cSHAKE's empty-`N`-and-`S`
-    fallback — the domain byte is `0x04` whatever the customization is. The tail
-    is `right_encode(0)` for the XOF form, which is the whole of §4.3.1 and the
-    whole difference between the two functions.
-
-    `L` is in BITS. A byte count is another legal encoding of a plausible number,
-    so the wrong unit is a self-consistent different hash (`encodings.py`).
-    """
-    return (
-        _prefix_block(KMAC_NAME, customization, rate),
-        right_encode(0 if xof else 8 * output_size),
-    )
-
-
-def _const(data: bytes, rows: int) -> Array:
-    """Host bytes as one broadcast device row."""
-    return fnp.broadcast_to(
-        fnp.asarray(np.frombuffer(data, dtype=np.uint8)), (rows, len(data))
-    )
-
-
-def _bound_message(head: bytes, message: Array, tail: bytes) -> Array:
-    """§4.3's `newX` when the key is known on the host: the whole head — cSHAKE
-    prefix and key block together — collapses into one constant, so this is a
-    single three-way concatenate that XLA constant-folds through the first rate
-    block's permutation."""
-    rows = message.shape[0]
-    return fnp.concatenate([_const(head, rows), message, _const(tail, rows)], axis=-1)
 
 
 def _operand_message(
@@ -132,13 +94,13 @@ def _operand_message(
     operand = fnp.broadcast_to(operand, (rows, operand.shape[1]))
     framing, fill = bytepad_encoded_split(operand.shape[1], rate)
 
-    parts = [_const(prefix + framing, rows), operand]
+    parts = [const_rows(prefix + framing, rows), operand]
     # A key whose framed block already lands on a rate boundary asks for no
     # fill; emitting a zero-width operand would put a dead broadcast in the
     # lowered module for XLA to drop.
     if fill:
         parts.append(fnp.zeros((rows, fill), dtype=fnp.uint8))
-    parts += [message, _const(tail, rows)]
+    parts += [message, const_rows(tail, rows)]
     return fnp.concatenate(parts, axis=-1)
 
 
@@ -165,7 +127,7 @@ def _kmac_with_operand_key(
             "re-compile per key, which is what this surface exists to avoid"
         )
     message = device_message(msg)
-    prefix, tail = _framing(rate, output_size, customization, xof)
+    prefix, tail = derived_framing(KMAC_NAME, customization, rate, output_size, xof)
     return KeccakSponge(rate=rate, suffix=CSHAKE_SUFFIX, output_size=output_size).hash(
         _operand_message(prefix, key, message, tail, rate)
     )
@@ -257,8 +219,8 @@ class _Kmac(_KeccakHash):
         self._key = bytes(key)
         self._customization = bytes(customization)
         super().__init__(output_size)
-        prefix, self._tail = _framing(
-            self._rate, output_size, self._customization, self._xof
+        prefix, self._tail = derived_framing(
+            KMAC_NAME, self._customization, self._rate, output_size, self._xof
         )
         # `bytepad(encode_string(K), rate)` straight from `encodings`, not
         # re-derived: the operand path reaches the same bytes through
@@ -266,8 +228,16 @@ class _Kmac(_KeccakHash):
         self._head = prefix + bytepad(encode_string(self._key), self._rate)
 
     def digest(self, msg: ArrayLike) -> Array:
+        # The whole head — cSHAKE prefix and key block together — is one
+        # constant, so this is a single three-way concatenate whose first rate
+        # blocks XLA folds through the permutation.
+        message = device_message(msg)
+        rows = message.shape[0]
         return self._sponge.hash(
-            _bound_message(self._head, device_message(msg), self._tail)
+            fnp.concatenate(
+                [const_rows(self._head, rows), message, const_rows(self._tail, rows)],
+                axis=-1,
+            )
         )
 
     def _parameters(self) -> tuple[object, ...]:

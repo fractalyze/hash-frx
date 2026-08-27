@@ -341,10 +341,34 @@ offset still traced. So the structural half is smaller than it looked, and the
 lesson stands in a different form: measure the schedule before crediting the
 marker, and check that the schedule is the one you think it is.
 
+### ParallelHash is declined
+
+SP 800-185 defines four functions; three are here
+([`keccak/cshake.py`](../../hash_frx/keccak/cshake.py),
+[`keccak/kmac.py`](../../hash_frx/keccak/kmac.py),
+[`keccak/tuple_hash.py`](../../hash_frx/keccak/tuple_hash.py)) and §6's is not.
+That is a decision, and these are its three reasons — each would have to change:
+
+- It is a *tree* hash with a block-size parameter, so it is a new schedule
+  rather than another layer over the encodings. The other three are the same
+  cSHAKE absorb with different bytes in front; nothing ParallelHash needs is
+  written yet.
+- BLAKE3 already occupies the fast-tree-hash slot here, with a native keyed mode
+  and an in-tree implementation consumers reach for.
+- It has essentially no deployment, and no consumer of this package has asked.
+
+The encodings it would need — `left_encode(B)`, `right_encode(n)` — are already
+present and pinned, so reopening this is the tree schedule and its marker, not
+the layer under it. Reopening it also means naming the consumer.
+
 ## One implementation of one standard
 
-Every row is a device row: `digest` takes a tracer, returns an `Array`, and
-hashes a `[B, L]` batch where a single message is `B = 1`. `fusion_path` says
+Every row is a device row: its hashing call takes a tracer and returns an
+`Array`. For a `ByteHash` that call is `digest`, over a `[B, L]` batch where a
+single message is `B = 1`. A construction whose input is not one flat message
+keeps the device row and names its call differently — TupleHash
+([`keccak/tuple_hash.py`](../../hash_frx/keccak/tuple_hash.py)) takes a
+*sequence*, because flattening it is the ambiguity that construction removes. `fusion_path` says
 whether the marker is routed on this backend — `DEDICATED` or `GENERIC` — and
 nothing else. There is no substrate to branch on.
 
