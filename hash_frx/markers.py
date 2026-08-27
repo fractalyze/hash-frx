@@ -157,6 +157,49 @@ STREAM_FINALIZE_MARKER = "hash_frx.stream_finalize"
 # not any family's parameters.
 STREAM_FINALIZE_MARKER_VERSION = 1
 
+# The operation-named RAW-BYTES Merkle-Damgard digest marker: one name for every
+# family whose message arrives UNPADDED, with the primitive carried in the
+# `primitive` composite attribute exactly as `MD_DIGEST_MARKER` carries it.
+#
+# A separate operation from `MD_DIGEST_MARKER` rather than a version of it,
+# because the two are different WIRE ABIs and not different parameterizations of
+# one: words-in hands the kernel pre-padded blocks, raw-bytes hands it the
+# message and a zero tail and the padding happens inside the region. An emitter
+# reading one as the other reads a message where a block count should be.
+#
+# **Flat, not `hash_frx.digest.bytes`.** The dotted spelling would put a LIVE
+# operation name inside `DIGEST_NAMESPACE`, which is where the RETIRING
+# per-family spellings live and is slated for deletion as a group -- and it
+# would read as "digest of a family called bytes". `hash_frx.permute` and
+# `hash_frx.digest` are flat for the same reason: an operation name is a sibling
+# of the other operations, not a child of one.
+BYTES_DIGEST_MARKER = "hash_frx.digest_bytes"
+
+# One name, one wire ABI, so one version -- it tracks the raw-bytes SCHEMA
+# (`[h0, constants, msg, tail] -> digest bytes`), not any family's parameters.
+BYTES_DIGEST_MARKER_VERSION = 1
+
+# Emitted only where the pinned plugin recognizes it. The recognizer landed in
+# fractalyze/xla#635, and the registry entries it resolves through in #632/#636/
+# #639/#642 (RIPEMD-160, BLAKE2s, BLAKE2b); this stays False until the `frx>=`
+# floor moves to a wheel carrying them.
+#
+# **The failure this gate prevents is silent, which is why it is a gate.** The
+# families below emit `hash_frx.digest.ripemd160` / `...blake2s` / `...blake2b`,
+# and NO recognizer matches those names -- they inline today. Flipping this
+# early swaps them for a name that an old plugin also does not match, so they
+# would keep inlining: a green suite, no kernel, and nothing to notice. The
+# `primitive` attribute below is what makes the flip a rename and nothing else,
+# so it is emitted under BOTH spellings and is inert until this flips.
+#
+# Unlike `_OPERATION_NAMED_MD_DIGEST`, this one does NOT ship with the families'
+# `_DEDICATED_EMITTER_AVAILABLE` in one commit -- it CANNOT lie the way that one
+# could. That flag went on together with the routing gates because the name
+# alone would have left `fusion_path` reporting `GENERIC` over a real kernel.
+# Here the name alone routes nothing on an old pin, so the ordering is the plain
+# one: floor first, then this and the routing gates together.
+_OPERATION_NAMED_BYTES_DIGEST = False
+
 
 def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:
     """The `(name, version)` a DEDICATED permute marker rides today.
@@ -182,12 +225,32 @@ def words_in_digest_marker(name: str, version: int) -> tuple[str, int]:
 
     Only the words-in schema belongs here. A raw-bytes digest is a DIFFERENT
     wire ABI — its message operand is unpadded and the padding happens inside
-    the region — so it keeps its own name rather than joining this one behind a
-    flag, and `hash_frx.digest.sha256_bytes` states why that is a new name and
-    not a version bump.
+    the region — so it does not join this name; `bytes_in_digest_marker` is its
+    own sibling behind its own flag, and `hash_frx.digest.sha256_bytes` states
+    why that is a new name and not a version bump.
     """
     if _OPERATION_NAMED_MD_DIGEST:
         return MD_DIGEST_MARKER, MD_DIGEST_MARKER_VERSION
+    return name, version
+
+
+def bytes_in_digest_marker(name: str, version: int) -> tuple[str, int]:
+    """The `(name, version)` a raw-bytes Merkle-Damgard digest rides today.
+
+    `words_in_digest_marker`'s sibling one schema over: takes the family's own
+    spelling and returns either it or the operation-named one, so the choice is
+    made in one place rather than once per family.
+
+    Only the STATIC-length raw-bytes schema belongs here — `[h0, constants, msg,
+    tail]`, where the block count is a shape property. The runtime-LENGTH forms
+    carry a scalar length operand and synthesize their padding from it, which
+    makes the block count a runtime value; that is a third schema and keeps its
+    own name. `sha256.SHA256_BYTES_MARKER` is one, which is why SHA-256 is not a
+    caller here even though it is the family the raw-bytes envelope was lifted
+    out of.
+    """
+    if _OPERATION_NAMED_BYTES_DIGEST:
+        return BYTES_DIGEST_MARKER, BYTES_DIGEST_MARKER_VERSION
     return name, version
 
 
@@ -248,6 +311,15 @@ MARKERS: tuple[Marker, ...] = (
     Marker(
         STREAM_FINALIZE_MARKER,
         STREAM_FINALIZE_MARKER_VERSION,
+        MarkerKind.DIGEST,
+        MarkerNaming.OPERATION,
+    ),
+    # The operation-named RAW-BYTES Merkle-Damgard digest. Its own row rather
+    # than a version of the one above because the two are different wire ABIs:
+    # words-in takes pre-padded blocks, this takes the message and a zero tail.
+    Marker(
+        BYTES_DIGEST_MARKER,
+        BYTES_DIGEST_MARKER_VERSION,
         MarkerKind.DIGEST,
         MarkerNaming.OPERATION,
     ),

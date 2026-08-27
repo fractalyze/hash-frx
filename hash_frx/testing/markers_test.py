@@ -82,7 +82,20 @@ _MODULE_CONSTANTS = {
     # `extension/md.py` for every MD family, so the constant lives here for the
     # same reason -- no single family owns an operation name.
     markers.STREAM_FINALIZE_MARKER: markers.STREAM_FINALIZE_MARKER_VERSION,
+    # And the raw-bytes one beside it, for the same reason: three families emit
+    # it, so its constant lives with the choice rather than with any of them.
+    markers.BYTES_DIGEST_MARKER: markers.BYTES_DIGEST_MARKER_VERSION,
 }
+
+
+# The three families that ride `bytes_in_digest_marker`: the STATIC-length
+# raw-bytes schema. SHA-256's raw-bytes form is deliberately absent -- it is the
+# runtime-LENGTH schema, a third wire ABI that keeps its own name.
+_BYTES_IN_FAMILIES = (
+    "hash_frx.digest.ripemd160",
+    "hash_frx.digest.blake2s",
+    "hash_frx.digest.blake2b",
+)
 
 
 class MarkerRegistryTest(absltest.TestCase):
@@ -176,6 +189,58 @@ class OperationNamedMdDigestTest(absltest.TestCase):
         # `hash_frx.digest.*` row look operation-named.
         self.assertEqual(markers.MD_DIGEST_MARKER, DIGEST_NAMESPACE.rstrip("."))
         self.assertNotStartsWith(markers.MD_DIGEST_MARKER, DIGEST_NAMESPACE)
+
+
+class OperationNamedBytesDigestTest(absltest.TestCase):
+    """The raw-bytes flip, still OFF.
+
+    `OperationNamedMdDigestTest`'s sibling one schema over, and currently in the
+    opposite state: that flag ships ON, this one waits for a `frx>=` floor
+    carrying the recognizer (fractalyze/xla#635) and the registry entries it
+    resolves through (#636/#639/#642).
+    """
+
+    def test_off_reports_the_familys_own_spelling(self) -> None:
+        # The shipped state, so this runs unpatched: while the flag is off every
+        # family must get its own spelling back VERBATIM. A fallback that
+        # altered the name would silently change the wire on a pin that still
+        # reads the old one.
+        for name in _BYTES_IN_FAMILIES:
+            with self.subTest(marker=name):
+                self.assertEqual(markers.bytes_in_digest_marker(name, 1), (name, 1))
+
+    def test_on_reports_the_operation_name_for_every_family(self) -> None:
+        # One name and one version whatever the family was; the primitive
+        # reaches the plugin as the `primitive` attribute instead.
+        with mock.patch.object(markers, "_OPERATION_NAMED_BYTES_DIGEST", True):
+            for name in _BYTES_IN_FAMILIES:
+                with self.subTest(marker=name):
+                    self.assertEqual(
+                        markers.bytes_in_digest_marker(name, 1),
+                        (
+                            markers.BYTES_DIGEST_MARKER,
+                            markers.BYTES_DIGEST_MARKER_VERSION,
+                        ),
+                    )
+
+    def test_the_flag_is_off_until_the_pin_carries_the_recognizer(self) -> None:
+        # The gate itself. Flipping this before the floor moves does not fail --
+        # the families swap one unrecognized name for another and keep inlining,
+        # which is a green suite with no kernel. So the constant is pinned here
+        # and moves in the same commit as the floor.
+        self.assertFalse(markers._OPERATION_NAMED_BYTES_DIGEST)
+
+    def test_it_is_a_separate_operation_from_the_words_in_one(self) -> None:
+        # Two schemas, two names. Collapsing them would hand a raw-bytes region
+        # to an envelope expecting pre-padded blocks -- it would read the
+        # message where a block count belongs.
+        self.assertNotEqual(markers.BYTES_DIGEST_MARKER, markers.MD_DIGEST_MARKER)
+
+    def test_the_operation_name_is_not_inside_the_digest_namespace(self) -> None:
+        # Flat, like `hash_frx.permute` and `hash_frx.digest`. The dotted
+        # spelling would put a LIVE name inside the namespace the RETIRING
+        # per-family spellings live in, which is slated for deletion as a group.
+        self.assertNotStartsWith(markers.BYTES_DIGEST_MARKER, DIGEST_NAMESPACE)
 
 
 class OperationNamedPermuteTest(absltest.TestCase):
