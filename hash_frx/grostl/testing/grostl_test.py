@@ -35,6 +35,7 @@ from hash_frx.grostl.grostl import Grostl256
 from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS, grostl256
 from hash_frx.testing.jit_cache import assert_single_trace, assert_trace_growth
 from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.oracle import oracle_digest
 
 # Whether this leg can actually reach the Grøstl emitter. Read off the shipped
 # condition rather than restated, so a backend gaining an arm lifts the cases
@@ -53,16 +54,6 @@ def _message(length: int, seed: int = 0) -> np.ndarray:
     return rng.integers(0, 256, size=(4, length), dtype=np.uint8)
 
 
-def _oracle(msgs: np.ndarray) -> np.ndarray:
-    """The reference digest of every row, in order. The device call is
-    data-parallel over the batch and this is not, so the equality below is the
-    bulk-parallel claim as much as the value one."""
-    return np.array(
-        [np.frombuffer(grostl256(bytes(row)), dtype=np.uint8) for row in msgs],
-        dtype=np.uint8,
-    ).reshape(len(msgs), 32)
-
-
 class Grostl256KatTest(parameterized.TestCase):
     @parameterized.parameters(*((len(m), m, d) for m, d in KAT_VECTORS))
     def test_matches_the_final_round_kat(
@@ -79,7 +70,7 @@ class Grostl256KatTest(parameterized.TestCase):
         # batch — not one convenient length.
         msgs = _message(length)
         np.testing.assert_array_equal(
-            np.asarray(Grostl256().digest(msgs)), _oracle(msgs)
+            np.asarray(Grostl256().digest(msgs)), oracle_digest(grostl256, 32, msgs)
         )
 
 
@@ -96,7 +87,7 @@ class Grostl256CapacityTest(parameterized.TestCase):
         # padded at `LMAX` instead of `len`, would agree on a zero fill by
         # accident on at least the block-aligned cases.
         msgs = _message(length)
-        want = _oracle(msgs)
+        want = oracle_digest(grostl256, 32, msgs)
         # Exact fit and one far-wider buffer. The two middle widths this swept
         # before (`length + 1`, `length + 64`) made no claim these two do not,
         # and each distinct width is a fresh compile of the unrolled body — the
@@ -273,7 +264,7 @@ class Grostl256TracedTest(absltest.TestCase):
 
 
 class Grostl256ByteHashTest(absltest.TestCase):
-    """The two `ByteHash` implementations, against the seam."""
+    """The `ByteHash` row, against the seam."""
 
     def test_impls_satisfy_the_seam(self) -> None:
         h = Grostl256()
@@ -290,7 +281,6 @@ class Grostl256ByteHashTest(absltest.TestCase):
         msg = np.zeros((1, 1), dtype=np.uint8)
         device = Grostl256()
         self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER))
-        self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
@@ -313,11 +303,9 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(grostl.Grostl256(), 32)]
-        for hasher, size in rows:
-            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-            self.assertEqual(got.shape, (0, size))
-            self.assertEqual(got.dtype, np.uint8)
+        got = np.asarray(grostl.Grostl256().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+        self.assertEqual(got.shape, (0, 32))
+        self.assertEqual(got.dtype, np.uint8)
 
 
 class MessageRankTest(absltest.TestCase):

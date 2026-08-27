@@ -41,8 +41,8 @@ def _u8(data: bytes) -> np.ndarray:
     return np.frombuffer(data, dtype=np.uint8)
 
 
-def _host(msg: bytes, out_len: int = DIGEST_LEN) -> bytes:
-    return blake3_py.blake3(bytes(msg)).digest(out_len)
+def _oracle(msg: bytes, out_len: int = DIGEST_LEN) -> bytes:
+    return blake3_py.blake3(msg).digest(out_len)
 
 
 def _device(pieces: list[bytes], out_len: int = DIGEST_LEN) -> bytes:
@@ -94,7 +94,7 @@ class Blake3StreamTest(absltest.TestCase):
         rng = np.random.default_rng(0)
         for n in self.LENGTHS:
             msg = rng.integers(0, 256, size=n, dtype=np.uint8).tobytes()
-            want = _host(msg)
+            want = _oracle(msg)
             for pieces in _splits(msg):
                 with self.subTest(n=n, pieces=[len(p) for p in pieces]):
                     self.assertEqual(_device(pieces).hex(), want.hex())
@@ -108,7 +108,7 @@ class Blake3StreamTest(absltest.TestCase):
         for out_len in (1, 16, 31, 32, 33, 64, 96):
             with self.subTest(out_len=out_len):
                 self.assertEqual(
-                    _device([msg], out_len).hex(), _host(msg, out_len).hex()
+                    _device([msg], out_len).hex(), _oracle(msg, out_len).hex()
                 )
 
     def test_finalize_does_not_consume_the_state(self) -> None:
@@ -118,14 +118,14 @@ class Blake3StreamTest(absltest.TestCase):
         head, tail = b"the first half..", b"..and the second"
         state = blake3_stream_init().absorb(frx.device_put(_u8(head)))
         first = bytes(np.asarray(state.finalize(DIGEST_LEN)))
-        self.assertEqual(first.hex(), _host(head).hex())
+        self.assertEqual(first.hex(), _oracle(head).hex())
         self.assertEqual(
             bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), first.hex()
         )
         resumed = state.absorb(frx.device_put(_u8(tail)))
         self.assertEqual(
             bytes(np.asarray(resumed.finalize(DIGEST_LEN))).hex(),
-            _host(head + tail).hex(),
+            _oracle(head + tail).hex(),
         )
 
 
@@ -159,7 +159,7 @@ class PytreeThreadingTest(absltest.TestCase):
             return state.finalize(DIGEST_LEN)
 
         got = bytes(np.asarray(run(frx.device_put(piece))))
-        self.assertEqual(got.hex(), _host(piece.tobytes() * 10).hex())
+        self.assertEqual(got.hex(), _oracle(piece.tobytes() * 10).hex())
 
     def test_the_state_is_a_jit_boundary_argument(self) -> None:
         # A state built outside a zone and absorbed into inside it, which is the
@@ -171,7 +171,7 @@ class PytreeThreadingTest(absltest.TestCase):
         msg = b"handed across the boundary"
         state = step(blake3_stream_init(), frx.device_put(_u8(msg)))
         self.assertEqual(
-            bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), _host(msg).hex()
+            bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), _oracle(msg).hex()
         )
 
     def test_the_node_finishing_hops_are_marked(self) -> None:

@@ -6,8 +6,7 @@ the one place the *facts* those switches encode — which backends carry which
 dedicated emitters — are spelled together, independently of the production
 tuples, so a tuple edit is a conscious two-place change rather than a silent
 routing move. The states themselves are pinned with the cells: an absent
-backend reads GENERIC (device, traceable, un-routed), never HOST, and a host
-row reads HOST on every leg.
+backend reads GENERIC (traceable, un-routed) rather than losing its cell.
 
 Per-family derivation mechanics (pin veto, backend veto, marker agreement) live
 with each family — `keccak.testing.permutation_test.EmitterGateTest` is the
@@ -109,10 +108,10 @@ class MatrixFactsTest(absltest.TestCase):
 
     def test_the_enum_property_table(self) -> None:
         # Pinned once; the per-impl cases below assert only the member, since
-        # `is_one_kernel` / `is_traceable` are functions of the enum alone.
+        # `is_one_kernel` is a function of the enum alone.
         self.assertEqual(
-            [(p.is_one_kernel, p.is_traceable) for p in FusionPath],
-            [(True, True), (False, True), (False, False)],
+            [p.is_one_kernel for p in FusionPath],
+            [True, False],
         )
 
 
@@ -127,7 +126,7 @@ class DeviceCellTest(absltest.TestCase):
             (Blake3(), _MATRIX[blake3_rows]),
             (Grostl256(), _MATRIX[grostl_mod]),
             # The empty rows: GENERIC on every leg, by the same derivation as
-            # an absent backend — never HOST.
+            # an absent backend.
             (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
             (Sha512(), _MATRIX[sha512_mod]),
             # The truncated variants read the sha512 module's switch — one
@@ -148,10 +147,9 @@ class DeviceCellTest(absltest.TestCase):
                 )
                 self.assertIs(impl.fusion_path, expected)
 
-    def test_an_absent_backend_reads_generic_not_host(self) -> None:
-        # The Metal-shaped cell: a device hash on a backend without the arm is
-        # still a device hash — traceable, un-fused — and collapsing it into
-        # HOST is the exact conflation the three-state enum retires. Keccak is
+    def test_an_absent_backend_reads_generic(self) -> None:
+        # The Metal-shaped cell: a hash on a backend without the arm is still
+        # traceable and un-fused rather than unavailable. Keccak is
         # absent from the loop: its family gate test
         # (`keccak.testing.permutation_test.EmitterGateTest`) already owns the
         # backend-veto mock, in combinations this loop cannot express; these

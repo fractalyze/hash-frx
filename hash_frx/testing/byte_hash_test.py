@@ -17,7 +17,6 @@ from frx.typing import ArrayLike
 from hash_frx.byte_hash import (
     ByteHash,
     device_message,
-    host_digest,
     message_length,
 )
 from hash_frx.fusion import FusionPath
@@ -30,10 +29,15 @@ class _ByteHashDouble:
     cases that pin a concrete hash against its standard live with that hash.
     Computing a real digest here would duplicate a concrete row and imply a
     fidelity nothing in this file checks.
+
+    It returns `np.ndarray` where a shipped row returns an `Array`: this target
+    carries no device plugin, so reaching `frx.numpy` here fails the GPU leg
+    (`docs/reference/conventions.md`). The Protocol's shape is what is under
+    test, and that is substrate-free.
     """
 
     digest_size = 32
-    fusion_path = FusionPath.HOST
+    fusion_path = FusionPath.GENERIC
 
     def digest(self, msg: ArrayLike) -> np.ndarray:
         return np.zeros((np.asarray(msg).shape[0], self.digest_size), dtype=np.uint8)
@@ -54,10 +58,12 @@ class ByteHashProtocolTest(absltest.TestCase):
         msgs = np.zeros((4, 13), dtype=np.uint8)  # L is static
         self.assertEqual(np.asarray(h.digest(msgs)).shape, (4, h.digest_size))
 
-    def test_fusion_flag_is_the_substrate_axis(self) -> None:
-        # The seam's whole point: substrate lives on the hash as a value, not in a
-        # class name a consumer would have to branch on.
+    def test_fusion_path_is_a_value_on_the_hash(self) -> None:
+        # The seam's whole point: routing lives on the hash as a value, not in a
+        # class name a consumer would have to branch on, so `is_one_kernel` is
+        # readable without knowing which hash this is.
         self.assertIsInstance(_ByteHashDouble().fusion_path, FusionPath)
+        self.assertFalse(_ByteHashDouble().fusion_path.is_one_kernel)
 
     def test_value_identity_keeps_the_seam_re_trace_safe(self) -> None:
         # A param-free hash compares by type, so two freshly built instances are
@@ -93,11 +99,6 @@ class DeviceMessageTest(absltest.TestCase):
             with self.subTest(ndim=np.ndim(bad)):
                 with self.assertRaisesRegex(ValueError, "2-D uint8"):
                     device_message(bad)
-                # The host door has to answer the same call the same way (#235),
-                # and this is the cheap backend-free target to say so in — the
-                # all-rows suite covers it too, at `size = "large"`.
-                with self.assertRaisesRegex(ValueError, "2-D uint8"):
-                    host_digest(lambda b: b"", 1, bad)
 
 
 class MessageLengthTest(absltest.TestCase):

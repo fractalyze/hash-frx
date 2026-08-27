@@ -1,5 +1,5 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""BLAKE2s (RFC 7693), host and device rows — BLAKE2b's 32-bit
+"""BLAKE2s (RFC 7693) — BLAKE2b's 32-bit
 sibling, byte-identical to the standard (and any conforming implementation,
 e.g. Python's `hashlib.blake2s`). The construction is the same HAIFA shape the
 `blake2b` package documents — Merkle–Damgård plus a byte counter and a
@@ -79,8 +79,6 @@ from hash_frx.word import pack_le, roll, rotr, unpack_le
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
-
-    pass
 
 U32 = fnp.uint32
 

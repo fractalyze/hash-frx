@@ -309,8 +309,7 @@ class Sha512TracedTest(parameterized.TestCase):
 
 
 class Sha512ByteHashTest(parameterized.TestCase):
-    """The two `ByteHash` implementations, against the seam and against each
-    other.
+    """The `ByteHash` row, against the seam and against `hashlib`.
 
     `byte_hash_test.py` stays seam-only — a double, so it runs on a branch
     where no concrete hash exists — which leaves the real classes untested by
@@ -330,7 +329,6 @@ class Sha512ByteHashTest(parameterized.TestCase):
         msg = np.zeros((1, 1), dtype=np.uint8)
         device = Sha512()
         self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_SHA512_EMITTER))
-        self.assertTrue(device.fusion_path.is_traceable)
         self.assertNotIsInstance(device.digest(msg), np.ndarray)
 
     @parameterized.parameters(*_LENGTHS)
@@ -503,7 +501,6 @@ class Sha2VariantByteHashTest(parameterized.TestCase):
                 self.assertIs(
                     device.fusion_path, FusionPath.from_routing(_HAS_SHA512_EMITTER)
                 )
-                self.assertTrue(device.fusion_path.is_traceable)
                 self.assertNotIsInstance(device.digest(msg), np.ndarray)
 
     @parameterized.parameters(*_LENGTHS)

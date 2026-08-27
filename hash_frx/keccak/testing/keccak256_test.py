@@ -38,6 +38,7 @@ from hash_frx.keccak.byte_hashes import (
     Sha3_256,
 )
 from hash_frx.keccak.testing.reference import sponge
+from hash_frx.testing.oracle import oracle_digest
 
 # Published Keccak-256 vectors — the values every EVM implementation agrees on.
 _VECTORS = (
@@ -61,23 +62,6 @@ def _message(length: int) -> np.ndarray:
     return (np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)).reshape(1, length)
 
 
-def _oracle(msgs: np.ndarray) -> np.ndarray:
-    """Keccak-256 of every row through the plain-Python reference sponge, which
-    `reference_test` anchors against `hashlib` on SHA3-256 and SHAKE — so it
-    carries the permutation, the absorb, the multi-rate padding and the squeeze,
-    and only the domain byte rests on the published vectors above."""
-    return np.array(
-        [
-            np.frombuffer(
-                sponge(bytes(row), KECCAK256_RATE, KECCAK256_SUFFIX, 32),
-                dtype=np.uint8,
-            )
-            for row in msgs
-        ],
-        dtype=np.uint8,
-    ).reshape(len(msgs), 32)
-
-
 class Keccak256Test(parameterized.TestCase):
     @parameterized.parameters(*_VECTORS)
     def test_matches_the_published_vectors(self, msg: bytes, expected: str) -> None:
@@ -90,8 +74,17 @@ class Keccak256Test(parameterized.TestCase):
         # No published vector fills a rate block (136 B), so the boundaries the
         # padding is most likely to get wrong are covered here rather than by
         # the vectors above.
+        # The reference sponge is the oracle: `reference_test` anchors it
+        # against `hashlib` on SHA3-256 and SHAKE, so it carries the
+        # permutation, the absorb, the multi-rate padding and the squeeze —
+        # only the domain byte rests on the published vectors above.
         msg = _message(length)
-        np.testing.assert_array_equal(np.asarray(Keccak256().digest(msg)), _oracle(msg))
+        np.testing.assert_array_equal(
+            np.asarray(Keccak256().digest(msg)),
+            oracle_digest(
+                lambda b: sponge(b, KECCAK256_RATE, KECCAK256_SUFFIX, 32), 32, msg
+            ),
+        )
 
     def test_sha3_and_keccak_disagree(self) -> None:
         # Diagnostic: names the cause when the domain byte is wrong, where the

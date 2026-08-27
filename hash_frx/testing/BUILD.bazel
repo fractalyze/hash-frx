@@ -108,7 +108,7 @@ py_library(
     deps = ["//hash_frx"],
 )
 
-# The seam's contract, asserted against all thirty-two rows at once rather than
+# The seam's contract, asserted against every shipped row at once rather than
 # family by family — which is how the #211 and #215 sweeps came to miss SM3 and
 # BLAKE2s. The equality cases are the load-bearing ones: a row's __eq__/__hash__
 # is its jit cache key.
@@ -430,7 +430,10 @@ py_test(
 py_library(
     name = "oracle",
     testonly = True,
-    srcs = ["oracle.py"],
+    srcs = [
+        "__init__.py",
+        "oracle.py",
+    ],
     visibility = ["//hash_frx:__subpackages__"],
     deps = [requirement("numpy")],
 )

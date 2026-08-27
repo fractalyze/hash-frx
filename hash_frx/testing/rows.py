@@ -64,7 +64,6 @@ from hash_frx import (
     Shake256,
     Sm3,
 )
-from hash_frx.byte_hash import DeviceRow
 
 _KEY_A = bytes(range(32))
 _KEY_B = bytes(range(1, 33))
@@ -78,10 +77,9 @@ class RowCase(NamedTuple):
     variants: tuple[Callable[[], Any], ...] = ()
 
 
-# Every shipped row, in one table. Which of the buckets below a row lands in is
-# NOT restated here: each derives from the row itself, so the conformance suite
-# asserts "a `DeviceRow` returns an `Array`" — the actual law — rather than "the
-# rows I happened to label device do".
+# Every shipped row, in one table. The conformance suite asserts the law over
+# it — every row returns an `Array` — rather than over a list of rows anyone
+# labelled by hand.
 ALL_ROWS: tuple[RowCase, ...] = (
     RowCase("Sha256", Sha256),
     RowCase("Sha512", Sha512),
@@ -172,11 +170,4 @@ ALL_ROWS: tuple[RowCase, ...] = (
 # on the Protocol would make that case assert its own selection criterion.
 BYTE_HASH_ROWS: tuple[RowCase, ...] = tuple(
     c for c in ALL_ROWS if hasattr(c.make(), "digest")
-)
-
-# Device rows: traceable, `digest` returns an `Array`, `fusion_path` derived per
-# (row, backend). Read off the class rather than restated here, so a row cannot
-# be filed under the wrong one and a row on neither base lands in neither.
-DEVICE_ROWS: tuple[RowCase, ...] = tuple(
-    c for c in ALL_ROWS if issubclass(c.make().__class__, DeviceRow)
 )

@@ -45,8 +45,8 @@ _OPAD = 0x5C
 class Hmac(Row):
     """HMAC over a `ByteHash` — FIPS 198-1, byte-identical to the standard.
 
-    byte_hash : the underlying byte hash `H` (any `ByteHash`; a host row works
-        eagerly, a device row also inside a consumer's `@jit`).
+    byte_hash : the underlying byte hash `H` (any `ByteHash`; it takes a tracer,
+        so this works inside a consumer's `@jit`).
     block_size : `H`'s input block size in bytes — FIPS 198-1's `B`
         (SHA-256: 64). Must be at least `H`'s digest size, because §4 replaces
         a longer-than-block key by its digest and zero-pads the result to one

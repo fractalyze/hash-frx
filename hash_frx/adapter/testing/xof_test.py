@@ -109,7 +109,7 @@ class ReachedThroughAPartialTest(absltest.TestCase):
 
 class FixedOutputRowsTest(absltest.TestCase):
     def test_a_fixed_output_family_takes_no_length(self) -> None:
-        # The other half of the claim, and the reason `Dual` hands back a row
+        # The other half of the claim, and the reason a family is handed back
         # type rather than an `Xof`: a fixed-output family is built with no
         # arguments, so there is nothing to hand a length to.
         with self.assertRaises(TypeError):

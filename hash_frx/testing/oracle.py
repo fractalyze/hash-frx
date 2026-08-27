@@ -21,9 +21,12 @@ def oracle_digest(
     digest_size: int,
     msgs: np.ndarray,
 ) -> np.ndarray:
-    """`hash_one` per row of `msgs`, as uint8 `[B, digest_size]`."""
-    rows = np.asarray(msgs)
-    return np.array(
-        [np.frombuffer(hash_one(bytes(row)), dtype=np.uint8) for row in rows],
-        dtype=np.uint8,
-    ).reshape(len(rows), digest_size)
+    """`hash_one` per row of `msgs`, as uint8 `[B, digest_size]`.
+
+    Preallocated rather than built from a list, so a zero-row batch returns the
+    right shape without a reshape to rescue it.
+    """
+    out = np.empty((len(msgs), digest_size), dtype=np.uint8)
+    for i, row in enumerate(msgs):
+        out[i] = np.frombuffer(hash_one(bytes(row)), dtype=np.uint8)
+    return out

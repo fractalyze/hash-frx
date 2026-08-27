@@ -55,8 +55,6 @@ from hash_frx.word import pack_be, rotl, unpack_be
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-    pass
-
 U32 = fnp.uint32
 
 SM3_MARKER = "hash_frx.digest.sm3"

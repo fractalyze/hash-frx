@@ -66,8 +66,6 @@ from hash_frx.word64 import Pair, add64, rotr64, xor64
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-    pass
-
 SHA512_MARKER = "hash_frx.digest.sha512"
 # Marker revision riding as `composite.version`; version 1 is the operand ABI in
 # `sha512_merkle_damgard`. XLA recognizes a marker by name + attributes and
@@ -587,12 +585,8 @@ def sha512_stream_finalize(state: Sha512State, extras: Array) -> Array:
 
 
 # ---------------------------------------------------------------------------
-# ByteHash seam implementations (SHA-512). Both hash to the identical FIPS 180-4
-# bytes and differ only in substrate — `fusion_path` is the type-level signal.
-# Param-free, so value identity is by type (no jit re-trace). The split names
-# the same workloads as the SHA-256 pair: batched device hashing vs a
-# strictly-sequential host caller (the crossover measured there; this family is
-# un-fused today, so its device batch case starts from the GENERIC path).
+# The ByteHash seam implementations (SHA-512 and its truncated variants).
+# Param-free, so value identity is by type (no jit re-trace).
 # ---------------------------------------------------------------------------
 class Sha512(DeviceRow):
     """`ByteHash` for device SHA-512 — `digest` runs the batch on the

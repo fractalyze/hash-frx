@@ -51,8 +51,6 @@ from hash_frx.word import pack_be, rotr, unpack_be
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-    pass
-
 U32 = fnp.uint32
 
 SHA256_MARKER = "hash_frx.digest.sha256"
@@ -547,16 +545,9 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 
 
 # ---------------------------------------------------------------------------
-# ByteHash seam implementations (SHA-256). Both hash to the identical FIPS 180-4
-# bytes and differ only in substrate — `fusion_path` is the type-level signal.
-# Param-free, so value identity is by type (no jit re-trace).
-#
-# Two implementations of one function is a cost, so each names the workload it
-# exists for. The split is by batch shape, not by machine: device latency is flat
-# out to B=64 because it is dispatch-bound, and the crossover sits near B=48 on
-# the CPU backend too. A sequential caller pays roughly 22x at B=1 for choosing
-# the device path; a batched one pays roughly 5.5x at B=1024 for choosing the
-# host path.
+# The ByteHash seam implementation (SHA-256). Param-free, so value identity is
+# by type (no jit re-trace). What a strictly-sequential caller pays for reaching
+# it rather than `hashlib` is measured in `docs/blocks/hash.md`.
 # ---------------------------------------------------------------------------
 class Sha256(DeviceRow):
     """`ByteHash` for device SHA-256 — `digest` runs the batch on the

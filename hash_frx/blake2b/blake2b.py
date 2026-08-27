@@ -2,9 +2,12 @@
 """BLAKE2b over `(lo, hi)` uint32 half pairs, authored in frx —
 byte-identical to RFC 7693 (and any conforming implementation, e.g. Python's
 `hashlib.blake2b`).
-its docstring carries the family taxonomy (HAIFA: Merkle–Damgård plus a byte
-counter and a finalization flag threaded into every compression), why the
-family is a `ByteHash` rather than a `Permutation`, and why the host row led.
+
+BLAKE2b is HAIFA — Merkle–Damgård plus a byte counter and a finalization flag
+threaded into every compression — which is why the family is a `ByteHash`
+rather than a `Permutation`: the counter and the flag make the compression call
+site construction-bound, so there is no free-standing fixed-width permutation
+for `Sponge`/`Compression` to drive.
 
 A BLAKE2b word is 64 bits, so every word rides as a pair of `uint32` halves
 (`keccak/lane.py` states the toolchain law), and the compression's arithmetic

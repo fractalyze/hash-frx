@@ -50,9 +50,7 @@ class Permutation(Protocol):
     # commit) by reading this hash's marker, and consumers gate that wrapping on
     # `fusion_path.is_one_kernel` without naming a concrete hash. `GENERIC` —
     # the generic region marker, or a dedicated name this backend does not
-    # recognize; same bytes, no expandable marker. Never `HOST`: a permutation
-    # is a device function by construction (the host state of the taxonomy
-    # exists only on the `ByteHash` seam). Derived per (hash, backend) at
+    # recognize; same bytes, no expandable marker. Derived per (hash, backend) at
     # construction, because the emitter switch is a property of the pin and the
     # backend rather than of the hash.
     fusion_path: FusionPath

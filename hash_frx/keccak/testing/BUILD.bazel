@@ -91,6 +91,7 @@ py_test(
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx/keccak",
+        "//hash_frx/testing:oracle",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

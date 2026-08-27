@@ -157,7 +157,7 @@ class Sha256TracedTest(parameterized.TestCase):
 
 
 class Sha256ByteHashTest(parameterized.TestCase):
-    """The two `ByteHash` implementations, against the seam and against each other.
+    """The `ByteHash` row, against the seam and against `hashlib`.
 
     `byte_hash_test.py` stays seam-only — a double, so it runs on a branch where
     no concrete hash exists — which leaves the real class untested by it. This
@@ -422,13 +422,9 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [
-            (sha256.Sha256(), 32),
-        ]
-        for hasher, size in rows:
-            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-            self.assertEqual(got.shape, (0, size))
-            self.assertEqual(got.dtype, np.uint8)
+        got = np.asarray(sha256.Sha256().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+        self.assertEqual(got.shape, (0, 32))
+        self.assertEqual(got.dtype, np.uint8)
 
 
 class MessageRankTest(absltest.TestCase):

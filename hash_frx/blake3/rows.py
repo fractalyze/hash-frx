@@ -35,25 +35,19 @@ compilers (fractalyze/xla#499, #507) — so the rows read `DEDICATED` on both le
 and hardcoding the answer instead is exactly how the flag went stale for two pins
 after the emitter shipped. A backend without the arm — Metal today — inlines the
 marker: same bytes, no kernel, `GENERIC`, yet still a device function a consumer
-may call inside its own `@jit`. Keeping that state distinct from `HOST` is what
-the seam's three-state `FusionPath` is for ([`byte_hash.py`](../byte_hash.py));
+may call inside its own `@jit` ([`byte_hash.py`](../byte_hash.py));
 `blake3.testing.emitter` reads the same switch rather than spelling its own, so
 the caps it gates lift with the pin.
 
-**These rows are device rows.** A strictly-sequential caller wanting concrete
-bytes uses the `blake3` binding directly; this package no longer wraps one. They
-are the right choice for a
-strictly-sequential caller that reads each digest back immediately, where a
-device dispatch per short message costs more than a native hash does, and they
-are the differential partner the published vectors cannot be: agreement with the
-reference implementation at a random length is a check no table of 35 lengths
-performs. They read `HOST` everywhere — a host loop cannot stop being one, so
-this is the one row class attribute in the taxonomy — and their `np.ndarray`
-return type stays the authority on why they may never see a tracer.
+**A strictly-sequential caller wanting concrete bytes uses the `blake3` binding
+directly**; this package does not wrap one. The binding is also the differential
+partner the published vectors cannot be — agreement with the reference
+implementation at a random length is a check no table of 35 lengths performs —
+which is what the suites hash against.
 
-The narrowing worth knowing before reaching for one: the binding takes a
-derive-key context as a `str`, so the binding refuses a context that is
-not valid UTF-8 where the device row would hash it.
+The narrowing worth knowing before reaching for it: the binding takes a
+derive-key context as a `str`, so it refuses a context that is not valid UTF-8
+where the device row hashes it as bytes.
 """
 
 from __future__ import annotations
@@ -86,8 +80,6 @@ from hash_frx.fusion import FusionPath, fused_region, routing
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
-
-    pass
 
 BLAKE3_MARKER = "hash_frx.digest.blake3"
 # Marker revision riding as `composite.version`, the way `hash_frx.digest.sha256`
