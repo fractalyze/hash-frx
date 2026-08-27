@@ -45,14 +45,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import frx.numpy as fnp
-import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
 from hash_frx.byte_hash import DeviceRow, device_message
 from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE256_RATE
-from hash_frx.keccak.cshake import CSHAKE_SUFFIX, _prefix_block
-from hash_frx.keccak.encodings import left_encode, right_encode
+from hash_frx.keccak.cshake import CSHAKE_SUFFIX, const_rows, derived_framing
+from hash_frx.keccak.encodings import left_encode
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.keccak.sponge import KeccakSponge
 
@@ -60,14 +59,7 @@ from hash_frx.keccak.sponge import KeccakSponge
 TUPLE_HASH_NAME = b"TupleHash"
 
 
-def _const(data: bytes, rows: int) -> Array:
-    """Host bytes as one broadcast device row."""
-    return fnp.broadcast_to(
-        fnp.asarray(np.frombuffer(data, dtype=np.uint8)), (rows, len(data))
-    )
-
-
-def _tuple_message(strings: Sequence[ArrayLike], tail: bytes, prefix: bytes) -> Array:
+def _tuple_message(prefix: bytes, strings: Sequence[ArrayLike], tail: bytes) -> Array:
     """Section 5.3's `newX`, prefixed by cSHAKE's own block.
 
     Each element contributes `left_encode(8 * len)` — a host constant read off
@@ -90,11 +82,11 @@ def _tuple_message(strings: Sequence[ArrayLike], tail: bytes, prefix: bytes) -> 
                 f"{batch.shape[0]} rows, element 0 has {rows}"
             )
 
-    parts: list[Array] = [_const(prefix, rows)]
+    parts: list[Array] = [const_rows(prefix, rows)]
     for batch in batches:
-        parts.append(_const(left_encode(8 * batch.shape[1]), rows))
+        parts.append(const_rows(left_encode(8 * batch.shape[1]), rows))
         parts.append(batch)
-    parts.append(_const(tail, rows))
+    parts.append(const_rows(tail, rows))
     return fnp.concatenate(parts, axis=-1)
 
 
@@ -122,8 +114,9 @@ class _TupleHash(DeviceRow):
     def __init__(self, customization: bytes = b"", *, output_size: int) -> None:
         self.digest_size = output_size
         self._customization = bytes(customization)
-        self._prefix = _prefix_block(TUPLE_HASH_NAME, self._customization, self._rate)
-        self._tail = right_encode(0 if self._xof else 8 * output_size)
+        self._prefix, self._tail = derived_framing(
+            TUPLE_HASH_NAME, self._customization, self._rate, output_size, self._xof
+        )
         self._sponge = KeccakSponge(
             rate=self._rate, suffix=CSHAKE_SUFFIX, output_size=output_size
         )
@@ -136,7 +129,7 @@ class _TupleHash(DeviceRow):
         Named `hash` rather than `digest` because it is not the seam's shape —
         the argument is a sequence, and that is the whole construction.
         """
-        message = _tuple_message(strings, self._tail, self._prefix)
+        message = _tuple_message(self._prefix, strings, self._tail)
         return self._sponge.hash(message)
 
     def _parameters(self) -> tuple[object, ...]:
@@ -144,7 +137,7 @@ class _TupleHash(DeviceRow):
         # as much as the output length. The tuple's shape is not a parameter of
         # the row — it belongs to the call, and reaches the trace through the
         # operand avals.
-        return (self.digest_size, self._customization)
+        return (*super()._parameters(), self._customization)
 
 
 def _tuple_hash(
@@ -159,11 +152,10 @@ def _tuple_hash(
     Builds its own `KeccakSponge` because there is no row to hang one on, which
     is the arrangement `kmac.py` states for the same reason.
     """
-    message = _tuple_message(
-        strings,
-        right_encode(0 if xof else 8 * output_size),
-        _prefix_block(TUPLE_HASH_NAME, customization, rate),
+    prefix, tail = derived_framing(
+        TUPLE_HASH_NAME, customization, rate, output_size, xof
     )
+    message = _tuple_message(prefix, strings, tail)
     return KeccakSponge(rate=rate, suffix=CSHAKE_SUFFIX, output_size=output_size).hash(
         message
     )

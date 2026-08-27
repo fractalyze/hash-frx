@@ -129,7 +129,14 @@ class Row:
 
 
 class DeviceRow(Row):
-    """A row whose `digest` returns a device `Array`.
+    """A row whose one hashing call returns a device `Array`.
+
+    Usually that call is `digest` and the row is a `ByteHash`. It need not be:
+    `keccak/tuple_hash.py` hashes a *sequence* of strings, so its call is
+    `hash(strings)` and it deliberately implements no seam — but it lowers
+    through the same sponge as every other Keccak row and so has a real
+    `fusion_path` to report, which is what this base is for. A construction
+    with no path at all stays a plain `Row` (`adapter/hmac.py`).
 
     Takes the resolved `FusionPath` rather than a routing gate, because a row
     has more than one honest way to reach one: most read their family's
@@ -201,6 +208,18 @@ def padded_batch(msg: Array, tail: Array) -> Array:
     It is not an MD step and not a sponge step; it is the last thing that
     happens to a message before whichever schedule reads it, which is why it
     sits next to `device_message` on the seam.
+
+    **There is no head-side twin, and that is a decision.** A
+    `framed_batch(head, msg, tail)` looks earned — the prepend is written out in
+    several families — but the sites do not share a shape: the SP 800-185 heads
+    are host `bytes` concatenated OUTSIDE a marker, while Ascon-CXOF's are 1-D
+    `Array` operands broadcast INSIDE a marked body, where op count is a
+    correctness property and `ascon.py` declines the helper in its own comment
+    for exactly that reason. KMAC's operand-key path puts a `[B, K]` key and a
+    conditional zero-fill between head and message, and TupleHash's arity is a
+    call parameter. One signature over that would encode the accidents of
+    whichever site it was shaped against. What the SP 800-185 layer does share
+    is the bytes-to-row step, which lives in `keccak/cshake.py::const_rows`.
 
     What each caller does NEXT is genuinely its own: SHA-2 and SM3 pack the
     result big-endian, RIPEMD-160 and BLAKE2 little-endian, and the sponges read

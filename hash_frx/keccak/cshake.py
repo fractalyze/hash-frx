@@ -60,7 +60,7 @@ from hash_frx.keccak.byte_hashes import (
     SHAKE_SUFFIX,
     _KeccakHash,
 )
-from hash_frx.keccak.encodings import bytepad, encode_string
+from hash_frx.keccak.encodings import bytepad, encode_string, right_encode
 
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
@@ -70,6 +70,51 @@ if TYPE_CHECKING:
 # from SHAKE in this one byte and in the prefix block, and in nothing else.
 # `validate_sponge_params` already admits it by name.
 CSHAKE_SUFFIX = 0x04
+
+
+def const_rows(data: bytes, rows: int) -> Array:
+    """Host bytes as one broadcast device row: `bytes[T]` -> uint8 `[rows, T]`.
+
+    Every SP 800-185 construction frames its message with constants — cSHAKE's
+    prefix, KMAC's key block, TupleHash's per-element lengths, all three tails —
+    and each is one row, a property of the hash that every row of a batch
+    shares. So it is broadcast rather than built per row, which is
+    `byte_hash.padded_batch`'s arrangement at the other end of the message.
+
+    It lives here rather than on the seam because it takes host `bytes`, and
+    `padded_batch` takes an `Array`: one idea with two argument conventions on
+    `byte_hash.py` would be worse than one function in the layer that has the
+    bytes. The layer is this one — `kmac.py` and `tuple_hash.py` already inherit
+    `_prefix_block` and `CSHAKE_SUFFIX` from it.
+    """
+    return fnp.broadcast_to(
+        fnp.asarray(np.frombuffer(data, dtype=np.uint8)), (rows, len(data))
+    )
+
+
+def derived_framing(
+    name: bytes, customization: bytes, rate: int, output_size: int, xof: bool
+) -> tuple[bytes, bytes]:
+    """The two constants every fixed-name derived function frames its message
+    with: SP 800-185 §3.3's cSHAKE prefix, and §4.3/§5.3's `right_encode(L)`.
+
+    `name` is never empty for the functions that use this — KMAC's is "KMAC",
+    TupleHash's is "TupleHash" — so the prefix is never §3.3's empty-`N`-and-`S`
+    fallback and the domain byte is `0x04` whatever the customization is.
+
+    `xof` selects §4.3.1/§5.3.1's `right_encode(0)` over the length actually
+    requested, which is what makes KMAC and KMACXOF (and TupleHash and its XOF)
+    two functions rather than one read to different lengths.
+
+    **`L` is in BITS.** `right_encode(8 * output_size)`. A byte count is another
+    legal encoding of a plausible number, so the wrong unit is a
+    self-consistent different hash — the failure mode `encodings.py` documents.
+    Spelled once here rather than in each construction, so the two cannot drift.
+    """
+    return (
+        _prefix_block(name, bytes(customization), rate),
+        right_encode(0 if xof else 8 * output_size),
+    )
 
 
 def _prefix_block(name: bytes, customization: bytes, rate: int) -> bytes:
@@ -140,10 +185,7 @@ class _CShake(_KeccakHash):
         # arrangement `byte_hash.padded_batch` uses at the other end of the
         # message. Both concatenates stay outside the marked region, so the
         # whole hash is still the one `keccak_sponge` kernel the plain row is.
-        head = fnp.broadcast_to(
-            fnp.asarray(np.frombuffer(self._prefix, dtype=np.uint8)),
-            (message.shape[0], len(self._prefix)),
-        )
+        head = const_rows(self._prefix, message.shape[0])
         return self._sponge.hash(fnp.concatenate([head, message], axis=-1))
 
     def _parameters(self) -> tuple[object, ...]:

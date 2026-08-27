@@ -49,6 +49,11 @@ bits. The bound is not a policy choice about how long a string may be, it is the
 largest integer the encoding can describe — so it is checked here rather than
 assumed, and the two boundary values are pinned by test.
 
+SP 800-185's fourth function, ParallelHash, is not built on these — it is
+declined, and `docs/blocks/hash.md` carries the reason under "What may live here
+at all". The encodings it would need are already here and pinned, so what is
+missing is the tree schedule rather than this layer.
+
 Host `bytes` throughout, and no frx import: these operate on lengths and
 parameters, never on batch data, so the whole module resolves at trace time and
 puts nothing on a backend. That is `blake2_params.py`'s property, kept here for

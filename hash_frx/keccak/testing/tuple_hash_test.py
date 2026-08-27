@@ -32,7 +32,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.byte_hash import ByteHash
-from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE256_RATE
+from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE256_RATE, Shake128
 from hash_frx.keccak.cshake import CSHAKE_SUFFIX
 from hash_frx.keccak.encodings import bytepad, encode_string, right_encode
 from hash_frx.keccak.testing.reference import sponge
@@ -49,10 +49,12 @@ from hash_frx.keccak.tuple_hash import (
 )
 
 _CASES = (
-    ("tuplehash128", TupleHash128, tuple_hash128, SHAKE128_RATE, False),
-    ("tuplehash256", TupleHash256, tuple_hash256, SHAKE256_RATE, False),
-    ("tuplehash_xof128", TupleHashXof128, tuple_hash_xof128, SHAKE128_RATE, True),
-    ("tuplehash_xof256", TupleHashXof256, tuple_hash_xof256, SHAKE256_RATE, True),
+    # No free-function slot: the free functions are covered through `_VECTORS`,
+    # and a parameter no body reads is weight every reader has to check.
+    ("tuplehash128", TupleHash128, SHAKE128_RATE, False),
+    ("tuplehash256", TupleHash256, SHAKE256_RATE, False),
+    ("tuplehash_xof128", TupleHashXof128, SHAKE128_RATE, True),
+    ("tuplehash_xof256", TupleHashXof256, SHAKE256_RATE, True),
 )
 
 
@@ -62,6 +64,15 @@ def _batch(data: bytes) -> np.ndarray:
 
 def _hash(row: _TupleHash, strings: Sequence[bytes]) -> bytes:
     return bytes(np.asarray(row.hash([_batch(s) for s in strings]))[0])
+
+
+# The published tuple elements: every sample draws its strings from these three,
+# so they are transcribed once rather than per vector.
+_S1 = bytes.fromhex("000102")
+_S2 = bytes.fromhex("101112131415")
+_S3 = bytes.fromhex("202122232425262728")
+_PAIR = (_S1, _S2)
+_TRIPLE = (_S1, _S2, _S3)
 
 
 @dataclass(frozen=True)
@@ -82,10 +93,7 @@ _VECTORS = (
         name="TupleHash1",
         row=TupleHash128,
         free=tuple_hash128,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"",
         outval=bytes.fromhex(
             "C5D8786C1AFB9B82111AB34B65B2C0048FA64E6D48E263264CE1707D3FFC8ED1"
@@ -95,10 +103,7 @@ _VECTORS = (
         name="TupleHash2",
         row=TupleHash128,
         free=tuple_hash128,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "75CDB20FF4DB1154E841D758E24160C54BAE86EB8C13E7F5F40EB35588E96DFB"
@@ -108,11 +113,7 @@ _VECTORS = (
         name="TupleHash3",
         row=TupleHash128,
         free=tuple_hash128,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-            bytes.fromhex("202122232425262728"),
-        ),
+        strings=_TRIPLE,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "E60F202C89A2631EDA8D4C588CA5FD07F39E5151998DECCF973ADB3804BB6E84"
@@ -122,10 +123,7 @@ _VECTORS = (
         name="TupleHash4",
         row=TupleHash256,
         free=tuple_hash256,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"",
         outval=bytes.fromhex(
             "CFB7058CACA5E668F81A12A20A2195CE97A925F1DBA3E7449A56F82201EC6073"
@@ -136,10 +134,7 @@ _VECTORS = (
         name="TupleHash5",
         row=TupleHash256,
         free=tuple_hash256,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "147C2191D5ED7EFD98DBD96D7AB5A11692576F5FE2A5065F3E33DE6BBA9F3AA1"
@@ -150,11 +145,7 @@ _VECTORS = (
         name="TupleHash6",
         row=TupleHash256,
         free=tuple_hash256,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-            bytes.fromhex("202122232425262728"),
-        ),
+        strings=_TRIPLE,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "45000BE63F9B6BFD89F54717670F69A9BC763591A4F05C50D68891A744BCC6E7"
@@ -165,10 +156,7 @@ _VECTORS = (
         name="TupleHashXOF1",
         row=TupleHashXof128,
         free=tuple_hash_xof128,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"",
         outval=bytes.fromhex(
             "2F103CD7C32320353495C68DE1A8129245C6325F6F2A3D608D92179C96E68488"
@@ -178,10 +166,7 @@ _VECTORS = (
         name="TupleHashXOF2",
         row=TupleHashXof128,
         free=tuple_hash_xof128,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "3FC8AD69453128292859A18B6C67D7AD85F01B32815E22CE839C49EC374E9B9A"
@@ -191,11 +176,7 @@ _VECTORS = (
         name="TupleHashXOF3",
         row=TupleHashXof128,
         free=tuple_hash_xof128,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-            bytes.fromhex("202122232425262728"),
-        ),
+        strings=_TRIPLE,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "900FE16CAD098D28E74D632ED852F99DAAB7F7DF4D99E775657885B4BF76D6F8"
@@ -205,10 +186,7 @@ _VECTORS = (
         name="TupleHashXOF4",
         row=TupleHashXof256,
         free=tuple_hash_xof256,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"",
         outval=bytes.fromhex(
             "03DED4610ED6450A1E3F8BC44951D14FBC384AB0EFE57B000DF6B6DF5AAE7CD5"
@@ -219,10 +197,7 @@ _VECTORS = (
         name="TupleHashXOF5",
         row=TupleHashXof256,
         free=tuple_hash_xof256,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-        ),
+        strings=_PAIR,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "6483CB3C9952EB20E830AF4785851FC597EE3BF93BB7602C0EF6A65D741AECA7"
@@ -233,11 +208,7 @@ _VECTORS = (
         name="TupleHashXOF6",
         row=TupleHashXof256,
         free=tuple_hash_xof256,
-        strings=(
-            bytes.fromhex("000102"),
-            bytes.fromhex("101112131415"),
-            bytes.fromhex("202122232425262728"),
-        ),
+        strings=_TRIPLE,
         customization=b"My Tuple App",
         outval=bytes.fromhex(
             "0C59B11464F2336C34663ED51B2B950BEC743610856F36C28D1D088D8A244628"
@@ -330,11 +301,7 @@ class XofDistinctionTest(parameterized.TestCase):
 class ConstructionTest(parameterized.TestCase):
     @parameterized.named_parameters(*_CASES)
     def test_it_is_cshake_over_the_encoded_tuple(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         # Section 5.3 rebuilt over the plain-Python sponge, spelled as the
         # standard states it. The domain byte is cSHAKE's 0x04 -- `N` is the
@@ -353,11 +320,7 @@ class ConstructionTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_different_customizations_disagree(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         digests = {
             _hash(row(s, output_size=32), (b"a", b"bc"))
@@ -367,29 +330,25 @@ class ConstructionTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_elements_may_have_different_lengths(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         # Each element's `encode_string` prefix is read off its own shape, so a
-        # ragged tuple is the ordinary case rather than a special one.
+        # ragged tuple is the ordinary case rather than a special one. Thirty-two
+        # bytes is the SHORTEST element whose `left_encode(8 * len)` needs two
+        # value bytes, so it covers the multi-byte prefix while the padded total
+        # still lands on the trace key the rest of this file already pays for --
+        # a longer element buys a second encoding of nothing and a fresh trace.
         instance = row(output_size=32)
-        self.assertLen(_hash(instance, (b"", b"a", b"bb" * 100, b"ccc")), 32)
+        self.assertLen(_hash(instance, (b"", b"a", b"b" * 32, b"ccc")), 32)
 
 
-class RejectionTest(parameterized.TestCase):
-    @parameterized.named_parameters(*_CASES)
-    def test_an_empty_sequence_is_rejected(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
-    ) -> None:
+class RejectionTest(absltest.TestCase):
+    def test_an_empty_sequence_is_rejected(self) -> None:
+        # Not swept: the check is in `_tuple_message`, reached identically by all
+        # four rows before any device work -- the arrangement the two rejection
+        # tests below already use.
         with self.assertRaisesRegex(ValueError, "non-empty"):
-            row(output_size=32).hash([])
+            TupleHash128(output_size=32).hash([])
 
     def test_mismatched_batch_sizes_are_rejected(self) -> None:
         # A tuple is hashed per row, so every element must carry the same batch.
@@ -408,11 +367,7 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_it_is_deliberately_not_a_byte_hash(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         # The module's central claim, asserted rather than left to the
         # docstring: a `ByteHash` takes one flat message, and flattening a
@@ -423,23 +378,20 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_it_reports_a_fusion_path(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         # It lowers through the same sponge as every other Keccak row, so it
         # answers the routing question even though it is not a `ByteHash`.
-        self.assertIsNotNone(row(output_size=32).fusion_path)
+        #
+        # Compared against a plain SHAKE row rather than asserted non-None:
+        # `FusionPath` is an Enum, so `assertIsNotNone` holds whatever the
+        # derivation does. This row re-implements that derivation, so the
+        # comparison is the only thing pinning it to the sponge it runs on.
+        self.assertEqual(row(output_size=32).fusion_path, Shake128(32).fusion_path)
 
     @parameterized.named_parameters(*_CASES)
     def test_batched_equals_per_row(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         instance = row(b"S", output_size=32)
         first = np.array([[i] * 4 for i in range(4)], dtype=np.uint8)
@@ -451,11 +403,7 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_hash_accepts_tracers(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         # Every length is a shape, so nothing here reads an element byte.
         instance = row(b"S", output_size=32)
@@ -469,11 +417,7 @@ class SeamTest(parameterized.TestCase):
 
     @parameterized.named_parameters(*_CASES)
     def test_value_identity_covers_every_parameter(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         base = row(b"s", output_size=32)
         self.assertEqual(base, row(b"s", output_size=32))
@@ -483,17 +427,13 @@ class SeamTest(parameterized.TestCase):
 
     def test_the_four_rows_are_four_different_hashes(self) -> None:
         digests = {
-            _hash(r(b"S", output_size=32), (b"a", b"bc")) for _, r, _, _, _ in _CASES
+            _hash(r(b"S", output_size=32), (b"a", b"bc")) for _, r, _, _ in _CASES
         }
         self.assertLen(digests, 4)
 
     @parameterized.named_parameters(*_CASES)
     def test_the_output_length_is_required(
-        self,
-        row: type[_TupleHash],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
+        self, row: type[_TupleHash], rate: int, xof: bool
     ) -> None:
         with self.assertRaises(TypeError):
             row()  # type: ignore[call-arg]
