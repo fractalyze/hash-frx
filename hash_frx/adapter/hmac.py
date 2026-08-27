@@ -16,6 +16,13 @@ constructions — BLAKE3, whose keyed mode is native, has no block size for HMAC
 to read. The same line keeps `DuplexSponge`'s `+`-merge on the construction
 rather than on `Permutation`.
 
+**KMAC is not this construction and cannot be built from it**, and it is not an
+adapter — `bytepad(encode_string(K), rate)` reads the sponge's rate, below
+`digest`, so it lives with its family in
+[`keccak/kmac.py`](../keccak/kmac.py). The layering reason is recorded once in
+`docs/blocks/hash.md`; the point here is only that no parameterization of `Hmac`
+reaches it, so `Hmac(Shake128(...))` is a construction no standard names.
+
 Batch-parallel like the seam it consumes: `mac(key, msg)` takes uint8 `[B, L]`
 messages with a shared `[K]` or per-message `[B, K]` key and returns uint8
 `[B, digest_size]`. `K` and `L` are static, so the longer-than-block key

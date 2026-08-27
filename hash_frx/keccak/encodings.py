@@ -144,3 +144,25 @@ def bytepad(x: bytes, w: int) -> bytes:
         raise ValueError(f"w ({w}) must be positive (§2.3.3)")
     z = left_encode(w) + x
     return z + bytes(-len(z) % w)
+
+
+def bytepad_encoded_split(payload_size: int, w: int) -> tuple[bytes, int]:
+    """`bytepad(encode_string(S), w)` for an `S` known only by its LENGTH: the
+    host bytes that come before it, and how many zero bytes follow.
+
+    A caller whose payload is a device *operand* rather than host `bytes` — a
+    KMAC key that varies per call — cannot hand it to `bytepad`, but it does not
+    need to: only the payload's length reaches either encoding, and a length is
+    a shape. So the framing resolves here on the host and the payload stays an
+    operand between the two halves.
+
+    Reassembly is exact by construction, which is why this lives beside
+    `bytepad` rather than in the construction that wanted it: `head ‖ S ‖ 0*fill`
+    is `bytepad(encode_string(S), w)` for every `S` of that length, and
+    `encodings_test` pins that rather than leaving the two spellings of §2.3.3's
+    fill to drift apart in separate modules.
+    """
+    if payload_size < 0:
+        raise ValueError(f"payload_size ({payload_size}) must be non-negative")
+    head = left_encode(w) + left_encode(8 * payload_size)
+    return head, -(len(head) + payload_size) % w

@@ -55,6 +55,10 @@ from hash_frx import (
     Grostl256,
     Hmac,
     Keccak256,
+    Kmac128,
+    Kmac256,
+    KmacXof128,
+    KmacXof256,
     Mgf1,
     Ripemd160,
     Sha3_224,
@@ -155,6 +159,45 @@ ALL_ROWS: tuple[RowCase, ...] = (
             lambda: CShake256(b"t", b"n", output_size=64),
             lambda: CShake256(b"s", b"m", output_size=64),
             lambda: CShake256(b"s", b"n", output_size=32),
+        ),
+    ),
+    # The key is varied alone alongside the other two: two KMAC rows that
+    # compare equal share a compiled program, and for a MAC that is a key
+    # crossing a cache hit.
+    RowCase(
+        "Kmac128",
+        lambda: Kmac128(_KEY_A, b"s", output_size=32),
+        (
+            lambda: Kmac128(_KEY_B, b"s", output_size=32),
+            lambda: Kmac128(_KEY_A, b"t", output_size=32),
+            lambda: Kmac128(_KEY_A, b"s", output_size=64),
+        ),
+    ),
+    RowCase(
+        "Kmac256",
+        lambda: Kmac256(_KEY_A, b"s", output_size=64),
+        (
+            lambda: Kmac256(_KEY_B, b"s", output_size=64),
+            lambda: Kmac256(_KEY_A, b"t", output_size=64),
+            lambda: Kmac256(_KEY_A, b"s", output_size=32),
+        ),
+    ),
+    RowCase(
+        "KmacXof128",
+        lambda: KmacXof128(_KEY_A, b"s", output_size=32),
+        (
+            lambda: KmacXof128(_KEY_B, b"s", output_size=32),
+            lambda: KmacXof128(_KEY_A, b"t", output_size=32),
+            lambda: KmacXof128(_KEY_A, b"s", output_size=64),
+        ),
+    ),
+    RowCase(
+        "KmacXof256",
+        lambda: KmacXof256(_KEY_A, b"s", output_size=64),
+        (
+            lambda: KmacXof256(_KEY_B, b"s", output_size=64),
+            lambda: KmacXof256(_KEY_A, b"t", output_size=64),
+            lambda: KmacXof256(_KEY_A, b"s", output_size=32),
         ),
     ),
     RowCase("Blake3", Blake3, (lambda: Blake3(16),)),
