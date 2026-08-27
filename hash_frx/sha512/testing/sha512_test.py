@@ -22,6 +22,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
+from hash_frx import markers
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.sha256.sha256 import Sha256
@@ -32,6 +33,10 @@ from hash_frx.sha512.sha512 import (
     Sha512_256,
 )
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import (
+    assert_marker_recognized,
+    emitted_composites,
+)
 from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 111/112 (the one-block/two-block
@@ -167,23 +172,50 @@ def _composite(fn: Any, *args: Any) -> Any:
     return eqns[0]
 
 
+_HAS_SHA512_EMITTER = sha512._routes_to_dedicated_emitter()
+
+
 class Sha512MarkerTest(absltest.TestCase):
-    def test_no_leg_routes_a_sha512_marker_yet(self) -> None:
-        # The pre-emitter pin (the vision arrangement): both module flags
-        # say "no emitter", so every unpatched instance reads GENERIC on every
-        # backend. When an emitter lands these flip with the frx floor and this
-        # case flips to the keccak-style backend gate, the way grostl's did.
-        self.assertFalse(sha512._DEDICATED_EMITTER_AVAILABLE)
-        self.assertEqual(sha512._EMITTER_BACKENDS, ())
-        self.assertIs(Sha512().fusion_path, FusionPath.GENERIC)
+    def test_routing_is_the_pin_and_the_backend(self) -> None:
+        # The conjunction the keccak family's gate test states. Both halves are
+        # pinned because they move together with the `frx>=` floor, and both
+        # backends are here because the envelope that routes this is shared
+        # rather than per-family — it arrived with both arms at once.
+        self.assertTrue(sha512._DEDICATED_EMITTER_AVAILABLE)
+        self.assertEqual(sha512._EMITTER_BACKENDS, ("cpu", "gpu"))
+        self.assertIs(
+            Sha512().fusion_path, FusionPath.from_routing(_HAS_SHA512_EMITTER)
+        )
 
     def test_digest_emits_one_composite_with_the_digest_name(self) -> None:
         # The contract's unit: an absent or split marker still computes the
         # right bytes, so only the lowered module shows it.
+        #
+        # The name is the OPERATION one now — the family moved off its own
+        # spelling when the plugin grew a shared words-in envelope, and rides
+        # the `primitive` attribute instead. Matched whole, and the list length
+        # is the composite count, so this pins both which marker is on the wire
+        # and that there is exactly one.
         msg = np.zeros((2, 100), dtype=np.uint8)
-        txt = frx.jit(sha512.digest).lower(msg).as_text()
-        self.assertIn(sha512.SHA512_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
+        self.assertEqual(
+            emitted_composites(sha512.digest, msg), [markers.MD_DIGEST_MARKER]
+        )
+
+    def test_the_digest_compiles_to_a_custom_fusion(self) -> None:
+        # What the routing flags CLAIM, checked against what the pinned plugin
+        # actually does. The bytes cannot show it — an unrecognized marker
+        # inlines and computes the same digest — so this asserts the compiled
+        # module, which is where a recognized marker becomes a kCustom fusion.
+        #
+        # `md_digest` is the envelope: SHA-512 has no emitter of its own, so
+        # the instruction is named for the shared one and the family is pinned
+        # by the `primitive` its config names.
+        if not _HAS_SHA512_EMITTER:
+            self.skipTest(f"no SHA-512 emitter on {frx.default_backend()}")
+        msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
+        assert_marker_recognized(
+            self, "sha512", sha512.digest, msg, envelope_key="md_digest"
+        )
 
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         # The wire surface an emitter will read: name, version, and the
@@ -194,8 +226,12 @@ class Sha512MarkerTest(absltest.TestCase):
         # docs/reference/conventions.md).
         msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
         eqn = _composite(sha512.digest, msg)
-        self.assertEqual(eqn.params["name"], sha512.SHA512_MARKER)
-        self.assertEqual(eqn.params["version"], sha512.SHA512_MARKER_VERSION)
+        # One name for every words-in family; SHA-512 is named by the attribute
+        # the plugin resolves through, not by a suffix.
+        self.assertEqual(eqn.params["name"], markers.MD_DIGEST_MARKER)
+        self.assertEqual(eqn.params["version"], markers.MD_DIGEST_MARKER_VERSION)
+        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(attrs["primitive"], "sha512")
         self.assertLen(eqn.invars, 3)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
         # L = 100: one block once padded (100 + 17 ≤ 128).
@@ -289,12 +325,11 @@ class Sha512ByteHashTest(parameterized.TestCase):
         self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # GENERIC (pre-emitter, every backend), and the traceability tie to
-        # the return type: the row returns an `Array` and takes a tracer
-        # (`byte_hash.py`'s rule).
+        # The routing gate, and the traceability tie to the return type: the
+        # row returns an `Array` and takes a tracer (`byte_hash.py`'s rule).
         msg = np.zeros((1, 1), dtype=np.uint8)
         device = Sha512()
-        self.assertIs(device.fusion_path, FusionPath.GENERIC)
+        self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_SHA512_EMITTER))
         self.assertTrue(device.fusion_path.is_traceable)
         self.assertNotIsInstance(device.digest(msg), np.ndarray)
 
@@ -413,16 +448,21 @@ class Sha2VariantTest(parameterized.TestCase):
         self.assertEqual(got, hashlib.new("sha512_256", bytes(msg)).digest())
 
     def test_variants_ride_the_sha512_marker_with_truncation_outside(self) -> None:
-        # The #199 acceptance pin: ONE composite carrying the sha512 name and
-        # version, whose output is the FULL [B, 64] serialized state — the
+        # The #199 acceptance pin: ONE composite naming sha512 (by attribute,
+        # since the family rides the shared words-in marker), whose output is
+        # the FULL [B, 64] serialized state — the
         # truncation is the caller's slice, outside the marker, so the wire
         # contract a recognizer reads is byte-for-byte SHA-512's.
         msg = fnp.asarray(np.zeros((1, 1), dtype=np.uint8))
         for variant, (fn, size, _) in _VARIANTS.items():
             with self.subTest(variant=variant):
                 eqn = _composite(fn, msg)
-                self.assertEqual(eqn.params["name"], sha512.SHA512_MARKER)
-                self.assertEqual(eqn.params["version"], sha512.SHA512_MARKER_VERSION)
+                self.assertEqual(eqn.params["name"], markers.MD_DIGEST_MARKER)
+                self.assertEqual(
+                    eqn.params["version"], markers.MD_DIGEST_MARKER_VERSION
+                )
+                attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+                self.assertEqual(attrs["primitive"], "sha512")
                 self.assertEqual(tuple(eqn.outvars[0].aval.shape), (1, 64))
                 self.assertEqual(np.asarray(fn(msg)).shape, (1, size))
 
@@ -455,10 +495,14 @@ class Sha2VariantByteHashTest(parameterized.TestCase):
                 self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
+        # The variants are IV rows over the same marker, so they inherit the
+        # family's routing rather than having one of their own.
         msg = np.zeros((1, 1), dtype=np.uint8)
         for device in (Sha384(), Sha512_256()):
             with self.subTest(variant=type(device).__name__):
-                self.assertIs(device.fusion_path, FusionPath.GENERIC)
+                self.assertIs(
+                    device.fusion_path, FusionPath.from_routing(_HAS_SHA512_EMITTER)
+                )
                 self.assertTrue(device.fusion_path.is_traceable)
                 self.assertNotIsInstance(device.digest(msg), np.ndarray)
 
