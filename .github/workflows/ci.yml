@@ -57,6 +57,57 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - uses: actions/checkout@v4
+
+      # The pinned plugin is `frx-cuda12-*` and version-checks the CUDA runtime
+      # at import, so on a box whose system CUDA is 13 the `cuda` backend never
+      # registers and every device-touching target dies at init. Reading that
+      # requirement as "a `gpu` box carries a system CUDA 12" puts the leg at
+      # the mercy of machine state the tree cannot see: a leg that passes or
+      # fails on which runner picked it up is not a gate. So the leg brings its
+      # own runtime instead, and a `gpu` box needs only a driver.
+      #
+      # `with-cuda` is exactly the set of `nvidia-*-cu12` wheels the plugin
+      # resolves by soname. pip is asked for the cp311 wheels rather than
+      # whatever the box's own python resolves, because cp311 is the
+      # interpreter bazel runs the tests under, so the versions staged here are
+      # the ones the pinned plugin declares. Only the libraries are used —
+      # bazel supplies the plugin itself from the lock.
+      #
+      # The stash is keyed by the pin and its siblings are pruned, so each pin
+      # downloads once per box and the dev-release cadence does not accumulate
+      # copies of several GB.
+      - name: Stage the CUDA 12 runtime the plugin loads
+        if: ${{ matrix.backend == 'gpu' }}
+        run: |
+          set -euo pipefail
+          pin=$(grep -oP '(?<=^frx-cuda12-plugin==).*' requirements.in)
+          root="$HOME/.cache/hash-frx/cuda12"
+          nv="$root/$pin/nvidia"
+          if [ ! -d "$nv" ]; then
+            # Staged aside and renamed, so an interrupted download leaves no
+            # half-populated stash for the next run to trust.
+            mkdir -p "$root"
+            staging=$(mktemp -d "$root/.staging.XXXXXX")
+            python3 -m pip install --disable-pip-version-check --no-cache-dir \
+              --target "$staging" \
+              --extra-index-url https://fractalyze.github.io/pypi/simple/ \
+              --only-binary=:all: --python-version 3.11 --implementation cp \
+              --abi cp311 --platform manylinux_2_27_x86_64 \
+              --platform manylinux2014_x86_64 \
+              "frx-cuda12-plugin[with-cuda]==$pin"
+            mv "$staging" "$root/$pin"
+          fi
+          find "$root" -mindepth 1 -maxdepth 1 ! -name "$pin" -exec rm -rf {} +
+          libs=$(find "$nv" -mindepth 2 -maxdepth 2 -type d -name lib | sort |
+                   paste -sd:)
+          # `ptxas` is named separately because it ships under `cuda_nvcc/bin`
+          # rather than any `lib` directory, so `LD_LIBRARY_PATH` does not reach
+          # it. Without the flag XLA takes the system's `ptxas` — the wrong
+          # major on such a box, and found rather than reported missing.
+          nvcc="--xla_gpu_cuda_data_dir=$nv/cuda_nvcc"
+          echo "CUDA12_FLAGS=--test_env=LD_LIBRARY_PATH=$libs --test_env=XLA_FLAGS=$nvcc" \
+            >> "$GITHUB_ENV"
+
       # No setup-bazel: it clobbers the box's ~/.bazelrc, and the self-hosted
       # runners already persist bazel and its caches. `.bazelrc.ci` is passed
       # explicitly because it is not auto-imported — it drops the `local_only`
@@ -64,7 +115,10 @@ jobs:
       - name: Run bazel test
         run: |
           set -euo pipefail
-          bazel --bazelrc=.bazelrc.ci test ${{ matrix.flags }} \
+          # CUDA12_FLAGS is two flags and is meant to split into two words;
+          # it is empty on the CPU leg, whose staging step does not run.
+          # shellcheck disable=SC2086
+          bazel --bazelrc=.bazelrc.ci test ${{ matrix.flags }} ${CUDA12_FLAGS:-} \
             --test_env=FRX_PLATFORMS=${{ matrix.platforms }} -- //...
 
       # Capture the runner-local test.log a failed test leaves behind — the CI

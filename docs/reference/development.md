@@ -76,6 +76,14 @@ rather than reported missing.
 [`requirements.in`](../../requirements.in) pins the plugin without that extra,
 so the lock carries none and the path has to be supplied per run.
 
+CI does not assume a `gpu` runner carries a system CUDA 12 either: the GPU leg
+stages the same wheels itself, keyed by the plugin pin, and passes the two
+`--test_env` flags above ([`ci.yml`](../../.github/workflows/ci.yml)). What the
+`gpu` label claims is therefore a working driver, not a CUDA major, and a box
+that fails the `ldconfig` check above still serves the leg. A leg that depended
+on the box instead would pass or fail on which runner picked it up, which is not
+a gate.
+
 **A green GPU leg is evidence only against a control.** `cuda` is strict here —
 it does not fall back — so the same target under
 `--test_env=LD_LIBRARY_PATH=/nonexistent` must *fail*, and the line proving it
