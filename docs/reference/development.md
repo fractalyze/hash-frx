@@ -89,6 +89,29 @@ A stale plugin against newer Python surfaces as
 marker seam every primitive here lowers through is exactly what a mismatched
 plugin fails to recognize.
 
+## Which XLA a pinned wheel carries
+
+A wheel's `devYYYYMMDDHHMMSS` suffix is the timestamp of the Dev Release run that
+built it. It orders wheels; it says nothing about what is in one. When a change
+on the XLA side is what you are waiting for — a new emitter, a fixed lowering —
+resolve the wheel back to its source and check:
+
+```sh
+# The release tag matching the wheel's dev suffix names the jax commit built.
+gh api repos/fractalyze/jax/git/ref/tags/dev-<YYYYMMDDHHMMSS> --jq .object.sha
+# That commit pins the XLA the wheel carries.
+gh api "repos/fractalyze/jax/contents/third_party/xla/revision.bzl?ref=<sha>" \
+    --jq .content | base64 -d | grep XLA_COMMIT
+# Finally, in an XLA checkout: is the commit you need an ancestor of that one?
+git merge-base --is-ancestor <commit-you-need> <XLA_COMMIT> && echo present
+```
+
+The ancestor check is the part worth not skipping: the pinned XLA moves on, so
+the answer is rarely the exact commit you are looking for. Two wheels published
+47 minutes apart once straddled an emitter merge, and the later-numbered of the
+two did not contain it — a bump to it would have looked like progress and
+changed nothing.
+
 ## `bazel test` is one leg, not both
 
 `.bazelrc` pins `test --test_env=FRX_PLATFORMS=cpu`, so a plain `bazel test
