@@ -35,7 +35,7 @@ from hash_frx.fusion import FusionPath
 from hash_frx.grostl import grostl as grostl_mod
 from hash_frx.grostl.grostl import Grostl256
 from hash_frx.keccak import permutation as keccak_perm_mod
-from hash_frx.keccak.byte_hashes import Sha3_224, Sha3_256, Sha3_384
+from hash_frx.keccak.byte_hashes import Sha3_256
 from hash_frx.keccak.permutation import KeccakF1600
 from hash_frx.poseidon import poseidon as poseidon_mod
 from hash_frx.poseidon import sparse as sparse_mod
@@ -122,9 +122,7 @@ class DeviceCellTest(absltest.TestCase):
             (KeccakF1600(), _MATRIX[keccak_perm_mod]),
             (koalabear16_perm(), _MATRIX[poseidon2_mod]),
             (Sha256(), _MATRIX[sha256_mod]),
-            (Sha3_224(), _MATRIX[keccak_perm_mod]),
             (Sha3_256(), _MATRIX[keccak_perm_mod]),
-            (Sha3_384(), _MATRIX[keccak_perm_mod]),
             (Blake3(), _MATRIX[blake3_rows]),
             (Grostl256(), _MATRIX[grostl_mod]),
             # The empty rows: GENERIC on every leg, by the same derivation as

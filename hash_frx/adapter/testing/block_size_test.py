@@ -21,17 +21,10 @@ from hash_frx.blake2s import blake2s
 from hash_frx.blake2s.blake2s import Blake2sKeyed
 from hash_frx.blake3.rows import Blake3, Blake3Keyed
 from hash_frx.grostl import grostl
+from hash_frx.keccak import byte_hashes
 from hash_frx.keccak.byte_hashes import (
-    KECCAK256_RATE,
-    SHA3_256_RATE,
-    SHA3_512_RATE,
-    SHAKE128_RATE,
-    SHAKE256_RATE,
-    Keccak256,
-    Sha3_256,
-    Sha3_512,
-    Shake128,
     Shake256,
+    _KeccakHash,
 )
 from hash_frx.ripemd160 import ripemd160
 from hash_frx.sha256 import sha256 as sha256_mod
@@ -69,15 +62,27 @@ class KnownWidthsTest(absltest.TestCase):
         # width, so it is read from there.
         self.assertEqual(block_size(grostl.Grostl256()), grostl._BLOCK)
 
-    def test_the_sponge_rows_agree_with_their_own_rate_constants(self) -> None:
+    def test_every_sponge_row_agrees_with_its_own_rate(self) -> None:
         # The entry a typo would survive: 136 and 72 are easy to transpose, and
-        # nothing downstream errors on a wrong B. Held against the constants
-        # the family already exports rather than against literals here.
-        self.assertEqual(block_size(Sha3_256()), SHA3_256_RATE)
-        self.assertEqual(block_size(Sha3_512()), SHA3_512_RATE)
-        self.assertEqual(block_size(Keccak256()), KECCAK256_RATE)
-        self.assertEqual(block_size(Shake128(32)), SHAKE128_RATE)
-        self.assertEqual(block_size(Shake256(32)), SHAKE256_RATE)
+        # nothing downstream errors on a wrong B. Held against `_rate`, which
+        # the row already carries, rather than against literals here.
+        #
+        # Enumerated from the module rather than listed, which closes the
+        # direction `TableNamesRealRowsTest` deliberately leaves open: that test
+        # pins entry -> shipped row, and for the sponge family the reverse is
+        # derivable, so a new row arriving without an entry fails here instead
+        # of at the first `Hmac` a caller builds over it.
+        rows = {
+            name: cls
+            for name, cls in vars(byte_hashes).items()
+            if isinstance(cls, type)
+            and issubclass(cls, _KeccakHash)
+            and cls is not _KeccakHash
+        }
+        self.assertNotEmpty(rows)
+        for name, cls in rows.items():
+            with self.subTest(row=name):
+                self.assertEqual(_BLOCK_SIZES.get(name), cls._rate)
 
     def test_output_length_does_not_change_the_block(self) -> None:
         # The width is the family's, not the instance's — which is why the

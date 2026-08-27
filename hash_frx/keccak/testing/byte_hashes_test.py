@@ -7,10 +7,11 @@ without sharing a line with this tree, so agreement is agreement with the
 standard rather than with a second copy of one reading of it. The Keccak-f[1600]
 oracle under `reference_test` is anchored the same way and for the same reason.
 
-The four functions ride one case table so that every sweep runs on all of them.
-Written as a test per function instead, a sweep ends up covering whichever one it
-was written against — the lengths straddling 168 were added for SHAKE128's rate
-and would otherwise never have run on SHAKE128.
+The six functions ride one case table so that every sweep runs on all of them,
+and the seam sweeps take their rows from it too. Written as a test per function
+instead, a sweep ends up covering whichever one it was written against — the
+lengths straddling 168 were added for SHAKE128's rate and would otherwise never
+have run on SHAKE128.
 
 The lengths and output sizes are chosen for the boundaries the sponge can get
 wrong rather than for coverage: a message that ends exactly on a rate boundary
@@ -19,8 +20,10 @@ the domain suffix and the `10*1` closing bit land on the same byte), and outputs
 that cross a rate boundary (so the squeeze has to permute again).
 
 Every rate in the family needs its own three lengths, because a boundary is a
-property of the rate and not of the function. SHA3-512's 72 is the narrowest,
-and the only rate under which the 136- and 168-byte lengths land mid-block.
+property of the rate and not of the function — so `_LENGTHS` is derived from
+`_RATES` rather than listed, and a row arrives with its boundaries or not at
+all. SHA3-512's 72 is the narrowest; the four rates between it and SHAKE128's
+168 each own three lengths that land mid-block under every other one.
 """
 
 from __future__ import annotations
@@ -53,20 +56,25 @@ from hash_frx.keccak.byte_hashes import (
 )
 from hash_frx.keccak.sponge import KeccakSponge
 
-# Absorb boundaries for a 136-byte rate: empty, tiny, one short of a block (the
-# single-byte pad), exactly a block (a whole extra padding block), one past it,
-# and multi-block. 167/168/169 do the same for SHAKE128's 168-byte rate,
-# 71/72/73 for SHA3-512's 72-byte one, 103/104/105 for SHA3-384's 104 and
-# 143/144/145 for SHA3-224's 144.
-#
-# Every rate needs its own three, which is the module docstring's rule and not a
-# formality: SHA3-224's 144 and SHA3-384's 104 are shared with no other row, so
-# before those six lengths existed nothing in this file landed on either
-# boundary.
-_LENGTHS = (
-    0, 1, 71, 72, 73, 103, 104, 105, 135, 136, 137,
-    143, 144, 145, 167, 168, 169, 300,
-)  # fmt: skip
+# Every rate in the family, so the boundaries below can be DERIVED from them
+# rather than listed. The module docstring states the rule — a boundary is a
+# property of the rate, so every rate needs its own three lengths — and a
+# hand-kept list leaves that rule to whoever adds the next row: SHA3-224's 144
+# and SHA3-384's 104 are shared with no other row, so a row arriving without
+# its three lengths is a rate nothing lands on.
+_RATES = (
+    SHA3_224_RATE,
+    SHA3_256_RATE,
+    SHA3_384_RATE,
+    SHA3_512_RATE,
+    SHAKE128_RATE,
+    SHAKE256_RATE,
+)
+
+# One short of a block (the domain suffix and the closing bit share a byte),
+# exactly a block (the padding takes a whole extra one), and one past it — for
+# each rate — plus the three that belong to no rate: empty, tiny, multi-block.
+_LENGTHS = tuple(sorted({0, 1, 300} | {r + d for r in _RATES for d in (-1, 0, 1)}))
 
 # Output sizes for the XOFs: under a rate, exactly a rate, and over it (which
 # forces a second squeeze block), plus a length that is not a lane multiple.
@@ -115,6 +123,16 @@ _XOF_CASES = (
 _CASES = _SHA3_CASES + _XOF_CASES
 
 _Case = tuple[str, Callable[[int], ByteHash], Callable]
+
+
+def _rows(output_size: int) -> list[ByteHash]:
+    """Every row this module ships, at `output_size` where the row takes one.
+
+    Derived from `_CASES` for the reason that table exists: a hand-written list
+    covers whichever rows it was written against, and these three sweeps had
+    fallen a family behind it once already.
+    """
+    return [device(output_size) for _name, device, _ref in _CASES] + [Keccak256()]
 
 
 def _message(length: int) -> np.ndarray:
@@ -223,13 +241,7 @@ class TracedDigestTest(parameterized.TestCase):
 
 class SeamConformanceTest(absltest.TestCase):
     def test_every_implementation_satisfies_the_byte_hash_protocol(self) -> None:
-        for h in (
-            Sha3_256(),
-            Sha3_512(),
-            Shake128(32),
-            Shake256(32),
-            Keccak256(),
-        ):
+        for h in _rows(32):
             with self.subTest(hash=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
 
@@ -247,13 +259,7 @@ class SeamConformanceTest(absltest.TestCase):
         # `permutation_test.EmitterGateTest`, which asserts the pin as its
         # premise and then holds the backend to it.
         expected = permutation_mod._routes_to_dedicated_emitter()
-        for device in (
-            Sha3_256(),
-            Sha3_512(),
-            Shake128(32),
-            Shake256(32),
-            Keccak256(),
-        ):
+        for device in _rows(32):
             with self.subTest(device=type(device).__name__):
                 self.assertIs(
                     device.fusion_path,
@@ -262,12 +268,7 @@ class SeamConformanceTest(absltest.TestCase):
 
     def test_digest_size_matches_what_digest_returns(self) -> None:
         msg = _message(64)
-        for h in (
-            Sha3_256(),
-            Sha3_512(),
-            Shake128(48),
-            Shake256(48),
-        ):
+        for h in _rows(48):
             with self.subTest(hash=type(h).__name__):
                 out = np.asarray(h.digest(msg))
                 self.assertEqual(out.shape, (1, h.digest_size))
@@ -370,22 +371,25 @@ class XofSizeTest(absltest.TestCase):
 # and 104 for SHA3-384 — so the "message ends on a block boundary, padding
 # takes a whole further one" case has published evidence here rather than only
 # a differential. One past the rate does not, and stays the sweeps'.
-_CAVP_VECTORS: tuple[tuple[str, str, str], ...] = (
-    # SHA3-224, 0 B — empty.
+_CAVP_VECTORS: tuple[tuple[str, type[ByteHash], str, str], ...] = (
+    # empty.
     (
-        "sha3_224",
+        "sha3_224_0b",
+        Sha3_224,
         "",
         "6b4e03423667dbb73b6e15454f0eb1abd4597f9a1b078e3f5b5a6bc7",
     ),
-    # SHA3-224, 1 B — one byte.
+    # one byte.
     (
-        "sha3_224",
+        "sha3_224_1b",
+        Sha3_224,
         "01",
         "488286d9d32716e5881ea1ee51f36d3660d70f0db03b3f612ce9eda4",
     ),
-    # SHA3-224, 143 B — one short of the rate.
+    # one short of the rate.
     (
-        "sha3_224",
+        "sha3_224_143b",
+        Sha3_224,
         "0eef947f1e4f01cdb5481ca6eaa25f2caca4c401612888fecef52e283748c8df"
         "c7b47259322c1f4f985f98f6ad44c13117f51e0517c0974d6c7b78af7419bcce"
         "957b8bc1db8801c5e280312ef78d6aa47a9cb98b866aaec3d5e26392dda6bbde"
@@ -393,9 +397,10 @@ _CAVP_VECTORS: tuple[tuple[str, str, str], ...] = (
         "8fae90dc0f5c3329cb86dcf743bbae",
         "98ec52c21cb988b1434b1653dd4ac806d118de6af1bb471c16577c34",
     ),
-    # SHA3-224, 144 B — exactly the rate.
+    # exactly the rate.
     (
-        "sha3_224",
+        "sha3_224_144b",
+        Sha3_224,
         "e65de91fdcb7606f14dbcfc94c9c94a57240a6b2c31ed410346c4dc011526559"
         "e44296fc988cc589de2dc713d0e82492d4991bd8c4c5e6c74c753fc09345225e"
         "1db8d565f0ce26f5f5d9f404a28cf00bd655a5fe04edb682942d675b86235f23"
@@ -403,9 +408,10 @@ _CAVP_VECTORS: tuple[tuple[str, str, str], ...] = (
         "5ff1267b9238f5602adc06764f775d3c",
         "26ec9df54d9afe11710772bfbeccc83d9d0439d3530777c81b8ae6a3",
     ),
-    # SHA3-224, 289 B — multi-block.
+    # multi-block.
     (
-        "sha3_224",
+        "sha3_224_289b",
+        Sha3_224,
         "31c82d71785b7ca6b651cb6c8c9ad5e2aceb0b0633c088d33aa247ada7a594ff"
         "4936c023251319820a9b19fc6c48de8a6f7ada214176ccdaadaeef51ed43714a"
         "c0c8269bbd497e46e78bb5e58196494b2471b1680e2d4c6dbd249831bd83a4d3"
@@ -418,23 +424,26 @@ _CAVP_VECTORS: tuple[tuple[str, str, str], ...] = (
         "78",
         "aab23c9e7fb9d7dacefdfd0b1ae85ab1374abff7c4e3f7556ecae412",
     ),
-    # SHA3-384, 0 B — empty.
+    # empty.
     (
-        "sha3_384",
+        "sha3_384_0b",
+        Sha3_384,
         "",
         "0c63a75b845e4f7d01107d852e4c2485c51a50aaaa94fc61995e71bbee983a2a"
         "c3713831264adb47fb6bd1e058d5f004",
     ),
-    # SHA3-384, 1 B — one byte.
+    # one byte.
     (
-        "sha3_384",
+        "sha3_384_1b",
+        Sha3_384,
         "80",
         "7541384852e10ff10d5fb6a7213a4a6c15ccc86d8bc1068ac04f69277142944f"
         "4ee50d91fdc56553db06b2f5039c8ab7",
     ),
-    # SHA3-384, 103 B — one short of the rate.
+    # one short of the rate.
     (
-        "sha3_384",
+        "sha3_384_103b",
+        Sha3_384,
         "6c36147652e71b560becbca1e7656c81b4f70bece26321d5e55e67a3db9d89e2"
         "6f2f2a38fd0f289bf7fa22c2877e38d9755412794cef24d7b855303c332e0cb5"
         "e01aa50bb74844f5e345108d6811d5010978038b699ffaa370de8473f0cda38b"
@@ -442,9 +451,10 @@ _CAVP_VECTORS: tuple[tuple[str, str, str], ...] = (
         "b1319192df11faa00d3c4b068becc8f1ba3b00e0d1ff1f93c11a3663522fdb92"
         "ab3cca389634687c632e0a4b5a26ce92",
     ),
-    # SHA3-384, 104 B — exactly the rate.
+    # exactly the rate.
     (
-        "sha3_384",
+        "sha3_384_104b",
+        Sha3_384,
         "92c41d34bd249c182ad4e18e3b856770766f1757209675020d4c1cf7b6f7686c"
         "8c1472678c7c412514e63eb9f5aee9f5c9d5cb8d8748ab7a5465059d9cbbb8a5"
         "6211ff32d4aaa23a23c86ead916fe254cc6b2bff7a9553df1551b531f95bb41c"
@@ -452,9 +462,10 @@ _CAVP_VECTORS: tuple[tuple[str, str, str], ...] = (
         "71307eec1355f73e5b726ed9efa1129086af81364e30a291f684dfade693cc4b"
         "c3d6ffcb7f3b4012a21976ff9edcab61",
     ),
-    # SHA3-384, 209 B — multi-block.
+    # multi-block.
     (
-        "sha3_384",
+        "sha3_384_209b",
+        Sha3_384,
         "5fe35923b4e0af7dd24971812a58425519850a506dfa9b0d254795be785786c3"
         "19a2567cbaa5e35bcf8fe83d943e23fa5169b73adc1fcf8b607084b15e6a013d"
         "f147e46256e4e803ab75c110f77848136be7d806e8b2f868c16c3a90c1446340"
@@ -472,18 +483,12 @@ class Sha3CavpVectorTest(parameterized.TestCase):
     """The published vectors, under the `hashlib` sweeps rather than instead of
     them."""
 
-    _ROWS = {"sha3_224": Sha3_224, "sha3_384": Sha3_384}
-
-    @parameterized.parameters(
-        *((name, len(msg) // 2, msg, md) for name, msg, md in _CAVP_VECTORS)
-    )
+    @parameterized.named_parameters(*_CAVP_VECTORS)
     def test_matches_the_cavp_vector(
-        self, name: str, _length: int, msg_hex: str, md_hex: str
+        self, row: type[ByteHash], msg_hex: str, md_hex: str
     ) -> None:
-        msg = np.frombuffer(bytes.fromhex(msg_hex), dtype=np.uint8).reshape(
-            1, len(msg_hex) // 2
-        )
-        got = np.asarray(self._ROWS[name]().digest(msg))[0]
+        msg = np.frombuffer(bytes.fromhex(msg_hex), dtype=np.uint8)[None, :]
+        got = np.asarray(row().digest(msg))[0]
         self.assertEqual(bytes(got).hex(), md_hex)
 
 

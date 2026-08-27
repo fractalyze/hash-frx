@@ -74,10 +74,10 @@ from hash_frx.keccak.sponge import KeccakSponge
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-# FIPS 202 section 6.1: SHA3-256(M) = KECCAK[512](M ‖ 01, 256) and
-# SHA3-512(M) = KECCAK[1024](M ‖ 01, 512), and section B.2 packs the `01` domain
-# bits with the opening `1` of `pad10*1` into one byte. The two rows differ in
-# capacity alone, so the suffix is shared exactly as the SHAKEs' is below.
+# FIPS 202 section 6.1: SHA3-n(M) = KECCAK[2n](M ‖ 01, n), and section B.2 packs
+# the `01` domain bits with the opening `1` of `pad10*1` into one byte. The four
+# rows differ in capacity alone — 2n, which fixes the rate at 200 - 2n/8 bytes —
+# so the suffix is shared across them exactly as the SHAKEs' is below.
 SHA3_SUFFIX = 0x06
 SHA3_224_RATE = 144
 SHA3_224_DIGEST_SIZE = 28
