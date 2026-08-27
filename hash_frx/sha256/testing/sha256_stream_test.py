@@ -24,7 +24,10 @@ from hash_frx.sha256.sha256 import (
     sha256_stream_init,
 )
 from hash_frx.sha512 import sha512
-from hash_frx.testing.marker_recognized import emitted_composites
+from hash_frx.testing.marker_recognized import (
+    assert_marker_recognized,
+    emitted_composites,
+)
 
 
 def _u8(data: bytes) -> fnp.ndarray:
@@ -156,9 +159,9 @@ class FinalizeMarkerTest(parameterized.TestCase):
     `MdStream.finalize` emits both padding-block candidates and selects between
     them, because the live block count depends on `pending_len`, which is
     traced. The marker exists so a recognizing emitter runs the one block count
-    the runtime position implies instead. Until the pinned plugin carries the
-    recognizer it inlines, so this asserts what the repo controls: which names
-    reach the wire, and with which primitive.
+    the runtime position implies instead. This asserts the half the repo
+    controls -- which names reach the wire, and with which primitive;
+    `FinalizeRoutedTest` below asserts what the pinned plugin does with them.
 
     Byte-neutrality is not re-asserted here -- every finalize call in this file
     already goes through the marked region, so `Sha256StreamTest` and
@@ -194,6 +197,74 @@ class FinalizeMarkerTest(parameterized.TestCase):
             .lower(state, fnp.zeros((4, 8), dtype=fnp.uint8))
             .as_text()
             .count(f'primitive = "{primitive}"')
+        )
+
+
+class FinalizeRoutedTest(absltest.TestCase):
+    """The hop is RECOGNIZED, and stays so one call frame down.
+
+    `FinalizeMarkerTest` above asserts what this repo puts on the wire.
+    This asserts what the PINNED plugin does with it, which is the property the
+    marker exists for and a different question: an unrecognized name is not an
+    error, it inlines to the decomposition and computes identical bytes, so
+    every value-level test in this file passes either way.
+
+    SHA-256 only. SHA-512 emits the same marker and the plugin declines it
+    today for want of a registered padding rule, which is the designed
+    behaviour rather than a gap to assert against -- it routes with no change
+    here on the day it gains one.
+    """
+
+    def _state(self) -> Sha256State:
+        return frx.jit(sha256_stream_absorb)(
+            sha256_stream_init(), fnp.zeros(100, dtype=fnp.uint8)
+        )
+
+    def test_the_hop_is_one_recognized_kernel(self) -> None:
+        # `md_stream_finalize` is a SHARED envelope -- one routing key for every
+        # MD family, with the family in the fusion's config -- so the
+        # instruction is named for the envelope and `%sha256 =` never appears.
+        assert_marker_recognized(
+            self,
+            "sha256",
+            sha256_stream_finalize,
+            self._state(),
+            fnp.zeros((4, 8), dtype=fnp.uint8),
+            envelope_key="md_stream_finalize",
+        )
+
+    def test_the_hop_stays_routed_inside_a_scan(self) -> None:
+        # Inside a `lax.scan` the marked region survives as a real call rather
+        # than being spliced into the enclosing trace, so an operand the
+        # recognizer validates arrives a frame from what produced it. A
+        # recognizer that asked for an opcode would decline here and the region
+        # would inline -- silently, with identical bytes, on both backends.
+        # That is fractalyze/xla#633, which sat unnoticed for months because
+        # every assertion of this kind was written at top level only.
+        extras = fnp.zeros((1, 8), dtype=fnp.uint8)
+
+        @frx.jit
+        def run(xs: fnp.ndarray) -> fnp.ndarray:
+            def step(
+                state: Sha256State, chunk: fnp.ndarray
+            ) -> tuple[Sha256State, None]:
+                return sha256_stream_absorb(state, chunk), None
+
+            state, _ = frx.lax.scan(step, sha256_stream_init(), xs)
+            return sha256_stream_finalize(state, extras)
+
+        compiled = run.lower(fnp.zeros((6, 16), dtype=fnp.uint8)).compile().as_text()
+        # Named, not merely counted. The declined path leaves the
+        # decomposition's OWN `md_digest` fusions behind -- two of them, one per
+        # padding candidate -- so "some kCustom exists" is satisfied by an
+        # inlined marker and would assert nothing.
+        routed = [
+            line
+            for line in compiled.splitlines()
+            if "kind=kCustom" in line and "%md_stream_finalize" in line
+        ]
+        self.assertLen(
+            routed, 1, f"stream_finalize was not routed in a scan:\n{compiled[:2000]}"
         )
 
 
