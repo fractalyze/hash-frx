@@ -110,15 +110,25 @@ class _KeccakHash(DeviceRow):
     plus a fixed output where the standard fixes one. Splitting by constants into
     separate *types* rather than taking them as arguments is the family-wide rule
     (`docs/reference/conventions.md`).
+
+    `suffix` may instead be passed per instance, which is what an SP 800-185
+    derived function needs: cSHAKE's domain byte is a function of its *arguments*
+    rather than of its type, because empty `N` and `S` make it plain SHAKE
+    (`cshake.py`). The rate stays a class attribute either way — that one really
+    is the type — and the sponge and `fusion_path` wiring stays written once
+    here, so a derived function cannot drift from the routing `KeccakSponge.hash`
+    actually takes.
     """
 
     _rate: int
     _suffix: int
 
-    def __init__(self, output_size: int) -> None:
+    def __init__(self, output_size: int, suffix: int | None = None) -> None:
         self.digest_size = output_size
         self._sponge = KeccakSponge(
-            rate=self._rate, suffix=self._suffix, output_size=output_size
+            rate=self._rate,
+            suffix=self._suffix if suffix is None else suffix,
+            output_size=output_size,
         )
         # Derived rather than declared, so it cannot disagree with the routing
         # `KeccakSponge.hash` actually takes — the same arrangement

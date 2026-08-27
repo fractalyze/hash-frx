@@ -125,3 +125,21 @@ py_test(
         requirement("absl_py"),
     ],
 )
+
+# cSHAKE against SP 800-185 section 3. Medium rather than small: the reference
+# sweeps run a plain-Python Keccak-f[1600] over every absorb and squeeze
+# boundary at both rates, which is where the seconds go.
+py_test(
+    name = "cshake_test",
+    size = "medium",
+    srcs = ["cshake_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx:byte_hash",
+        "//hash_frx/keccak",
+        "//hash_frx/keccak:encodings",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

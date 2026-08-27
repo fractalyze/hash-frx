@@ -16,6 +16,7 @@ py_library(
     srcs = [
         "__init__.py",
         "byte_hashes.py",
+        "cshake.py",
         "lane.py",
         "params.py",
         "permutation.py",
@@ -24,6 +25,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":encodings",
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx:permutation",

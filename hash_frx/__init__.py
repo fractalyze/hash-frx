@@ -117,6 +117,8 @@ _EXPORTS: dict[str, str] = {
     "Blake3": "hash_frx.blake3.rows",
     "Blake3DeriveKey": "hash_frx.blake3.rows",
     "Blake3Keyed": "hash_frx.blake3.rows",
+    "CShake128": "hash_frx.keccak.cshake",
+    "CShake256": "hash_frx.keccak.cshake",
     "Grostl256": "hash_frx.grostl.grostl",
     "Keccak256": "hash_frx.keccak.byte_hashes",
     "Ripemd160": "hash_frx.ripemd160.ripemd160",
@@ -242,6 +244,8 @@ if TYPE_CHECKING:
     from hash_frx.keccak.byte_hashes import Sha3_512 as Sha3_512
     from hash_frx.keccak.byte_hashes import Shake128 as Shake128
     from hash_frx.keccak.byte_hashes import Shake256 as Shake256
+    from hash_frx.keccak.cshake import CShake128 as CShake128
+    from hash_frx.keccak.cshake import CShake256 as CShake256
     from hash_frx.keccak.permutation import KeccakF1600 as KeccakF1600
     from hash_frx.keccak.sponge import KeccakSponge as KeccakSponge
     from hash_frx.keccak.streaming import ShakeAbsorb as ShakeAbsorb
