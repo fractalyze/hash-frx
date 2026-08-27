@@ -108,6 +108,7 @@ _EXPORTS: dict[str, str] = {
     # -- rows --------------------------
     "AsconHash256": "hash_frx.ascon.ascon",
     "AsconXof128": "hash_frx.ascon.ascon",
+    "AsconCxof128": "hash_frx.ascon.ascon",
     "Blake2b": "hash_frx.blake2b.blake2b",
     "Blake2bKeyed": "hash_frx.blake2b.blake2b",
     "Blake2s": "hash_frx.blake2s.blake2s",
@@ -195,6 +196,7 @@ if TYPE_CHECKING:
     from hash_frx.adapter.mgf1 import Mgf1 as Mgf1
     from hash_frx.adapter.pbkdf2 import pbkdf2 as pbkdf2
     from hash_frx.adapter.xof import Xof as Xof
+    from hash_frx.ascon.ascon import AsconCxof128 as AsconCxof128
     from hash_frx.ascon.ascon import AsconHash256 as AsconHash256
     from hash_frx.ascon.ascon import AsconXof128 as AsconXof128
     from hash_frx.ascon.permutation import AsconP as AsconP

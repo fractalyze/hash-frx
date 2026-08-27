@@ -40,6 +40,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from hash_frx import (
+    AsconCxof128,
     AsconHash256,
     AsconXof128,
     Blake2b,
@@ -90,6 +91,11 @@ ALL_ROWS: tuple[RowCase, ...] = (
     RowCase("Grostl256", Grostl256),
     RowCase("AsconHash256", AsconHash256),
     RowCase("AsconXof128", lambda: AsconXof128(32), (lambda: AsconXof128(64),)),
+    RowCase(
+        "AsconCxof128",
+        lambda: AsconCxof128(b"", 32),
+        (lambda: AsconCxof128(b"z", 32), lambda: AsconCxof128(b"", 64)),
+    ),
     RowCase(
         "Blake2s", Blake2s, (lambda: Blake2s(20), lambda: Blake2s(32, person=b"p"))
     ),
