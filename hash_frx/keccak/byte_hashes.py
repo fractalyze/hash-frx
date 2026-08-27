@@ -1,19 +1,28 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""The Keccak byte hashes — SHA3-256, SHA3-512, SHAKE128, SHAKE256, Keccak-256.
+"""The Keccak byte hashes — the four SHA-3 rows, both SHAKEs, and Keccak-256.
 
 Each is one `KeccakSponge` row: a rate, a domain-separation byte, and an output
-length. FIPS 202 section 6 fixes the first two for the four it standardises;
+length. FIPS 202 section 6 fixes the first two for the six it standardises;
 the third is fixed for SHA-3 and a caller's choice for the SHAKEs.
 
 | | rate | suffix | capacity | output |
 |---|---|---|---|---|
+| `Sha3_224` | 144 B | `0x06` | 448 bits | 28 B |
 | `Sha3_256` | 136 B | `0x06` | 512 bits | 32 B |
+| `Sha3_384` | 104 B | `0x06` | 768 bits | 48 B |
 | `Sha3_512` | 72 B | `0x06` | 1024 bits | 64 B |
 | `Shake128` | 168 B | `0x1F` | 256 bits | caller's |
 | `Shake256` | 136 B | `0x1F` | 512 bits | caller's |
 | `Keccak256` | 136 B | `0x01` | 512 bits | 32 B |
 
-**Four of the five are FIPS 202; `Keccak256` is not.** It is the original
+**All four fixed-output SHA-3 rows are here.** FIPS 202 defines exactly these
+four, and a module claiming to implement it needs all of them whether or not a
+consumer has asked — CAVP validation of a SHA-3 implementation requires the set.
+SHA3-224's 144 bytes is the widest SHA-3 rate, second in the table only to
+SHAKE128's 168, so it absorbs more message per permutation than any other row
+that fixes its output.
+
+**Six of the seven are FIPS 202; `Keccak256` is not.** It is the original
 Keccak submission, whose padding NIST changed on standardisation, so it and
 `Sha3_256` differ in exactly one byte — `0x01` against `0x06` — and in nothing
 else. That is why the module is named for what its contents *are* rather than
@@ -65,13 +74,17 @@ from hash_frx.keccak.sponge import KeccakSponge
 if TYPE_CHECKING:
     from hash_frx.byte_hash import ByteHash
 
-# FIPS 202 section 6.1: SHA3-256(M) = KECCAK[512](M ‖ 01, 256) and
-# SHA3-512(M) = KECCAK[1024](M ‖ 01, 512), and section B.2 packs the `01` domain
-# bits with the opening `1` of `pad10*1` into one byte. The two rows differ in
-# capacity alone, so the suffix is shared exactly as the SHAKEs' is below.
+# FIPS 202 section 6.1: SHA3-n(M) = KECCAK[2n](M ‖ 01, n), and section B.2 packs
+# the `01` domain bits with the opening `1` of `pad10*1` into one byte. The four
+# rows differ in capacity alone — 2n, which fixes the rate at 200 - 2n/8 bytes —
+# so the suffix is shared across them exactly as the SHAKEs' is below.
 SHA3_SUFFIX = 0x06
+SHA3_224_RATE = 144
+SHA3_224_DIGEST_SIZE = 28
 SHA3_256_RATE = 136
 SHA3_256_DIGEST_SIZE = 32
+SHA3_384_RATE = 104
+SHA3_384_DIGEST_SIZE = 48
 SHA3_512_RATE = 72
 SHA3_512_DIGEST_SIZE = 64
 
@@ -118,6 +131,22 @@ class _KeccakHash(DeviceRow):
         return self._sponge.hash(msg)
 
 
+class Sha3_224(_KeccakHash):
+    """`ByteHash` for device SHA3-224 — the standard fixes its output at 28 B.
+
+    The widest SHA-3 rate at 144 bytes, because capacity is twice the digest and
+    this is the shortest digest FIPS 202 defines. So it absorbs the most message
+    per permutation of the four, and it is the only row here whose rate no other
+    row shares.
+    """
+
+    _rate = SHA3_224_RATE
+    _suffix = SHA3_SUFFIX
+
+    def __init__(self) -> None:
+        super().__init__(SHA3_224_DIGEST_SIZE)
+
+
 class Sha3_256(_KeccakHash):
     """`ByteHash` for device SHA3-256 — the standard fixes its output at 32 B."""
 
@@ -126,6 +155,21 @@ class Sha3_256(_KeccakHash):
 
     def __init__(self) -> None:
         super().__init__(SHA3_256_DIGEST_SIZE)
+
+
+class Sha3_384(_KeccakHash):
+    """`ByteHash` for device SHA3-384 — the standard fixes its output at 48 B.
+
+    The row the X.509 and CMS object identifiers name, and the one an IETF
+    profile asking for a 384-bit SHA-3 digest means. Its 104-byte rate sits
+    between SHA3-512's 72 and SHA3-256's 136 and is shared with nothing.
+    """
+
+    _rate = SHA3_384_RATE
+    _suffix = SHA3_SUFFIX
+
+    def __init__(self) -> None:
+        super().__init__(SHA3_384_DIGEST_SIZE)
 
 
 class Sha3_512(_KeccakHash):
@@ -180,7 +224,9 @@ class Keccak256(_KeccakHash):
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md). Named individually
     # because mypy rejects re-annotating one name.
+    _bh_sha3_224: type[ByteHash] = Sha3_224
     _bh_sha3_256: type[ByteHash] = Sha3_256
+    _bh_sha3_384: type[ByteHash] = Sha3_384
     _bh_sha3_512: type[ByteHash] = Sha3_512
     _bh_shake128: type[ByteHash] = Shake128
     _bh_shake256: type[ByteHash] = Shake256
