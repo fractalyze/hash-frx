@@ -130,7 +130,7 @@ class Mgf1(Row):
         # other's.
         return (*super()._parameters(), self._byte_hash)
 
-    def digest(self, seed: ArrayLike) -> Array | np.ndarray:
+    def digest(self, seed: ArrayLike) -> Array:
         """The mask: uint8 `[B, S]` -> `[B, output_size]`."""
         seed = device_message(seed)
         batch, seed_len = seed.shape
@@ -155,7 +155,7 @@ class Mgf1(Row):
         return stream.reshape(batch, blocks * h_len)[:, : self.digest_size]
 
 
-def mgf1(byte_hash: ByteHash, seed: ArrayLike, length: int) -> Array | np.ndarray:
+def mgf1(byte_hash: ByteHash, seed: ArrayLike, length: int) -> Array:
     """The MGF1 mask, in RFC 8017's own `MGF(mgfSeed, maskLen)` call shape.
 
     `Mgf1(byte_hash, length).digest(seed)` — the same construction, spelled the

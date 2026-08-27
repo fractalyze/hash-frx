@@ -16,6 +16,7 @@ import hmac as stdlib_hmac
 import frx
 import numpy as np
 from absl.testing import absltest, parameterized
+from frx import Array
 
 from hash_frx.adapter.hkdf import hkdf_expand, hkdf_extract
 from hash_frx.adapter.hmac import Hmac
@@ -139,6 +140,16 @@ class HkdfTest(parameterized.TestCase):
     def test_length_bounds_rejected(self, length: int) -> None:
         with self.assertRaises(ValueError):
             hkdf_expand(_hmac_sha256(), np.zeros(32, np.uint8), None, length)
+
+    def test_extract_and_expand_return_device_arrays(self) -> None:
+        # Both front doors inherit the seam's `Array` law through `Hmac.mac`,
+        # and a PRK that came back host-side would be caught here rather than
+        # wherever it was next concatenated. Neither is a byte hash, so
+        # `row_conformance_test`'s registry sweep does not reach them.
+        mac = _hmac_sha256()
+        prk = hkdf_extract(mac, np.zeros(13, np.uint8), np.zeros((2, 22), np.uint8))
+        self.assertIsInstance(prk, Array)
+        self.assertIsInstance(hkdf_expand(mac, prk, None, 42), Array)
 
     def test_traced_matches_eager(self) -> None:
         rng = np.random.default_rng(2)

@@ -25,9 +25,7 @@ from frx.typing import ArrayLike
 from hash_frx.adapter.hmac import Hmac
 
 
-def hkdf_extract(
-    mac: Hmac, salt: ArrayLike | None, ikm: ArrayLike
-) -> Array | np.ndarray:
+def hkdf_extract(mac: Hmac, salt: ArrayLike | None, ikm: ArrayLike) -> Array:
     """`PRK = HMAC(salt, ikm)` — RFC 5869 §2.2.
 
     ikm : uint8 `[B, I]` input keying material.
@@ -42,7 +40,7 @@ def hkdf_extract(
 
 def hkdf_expand(
     mac: Hmac, prk: ArrayLike, info: ArrayLike | None, length: int
-) -> Array | np.ndarray:
+) -> Array:
     """`OKM = first `length` bytes of T(1) ‖ T(2) ‖ …` — RFC 5869 §2.3, with
     `T(i) = HMAC(prk, T(i-1) ‖ info ‖ i)`.
 
