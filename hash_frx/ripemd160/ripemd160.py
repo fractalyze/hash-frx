@@ -251,14 +251,14 @@ def ripemd160_bytes(msg: Array) -> Array:
     Python-unrolled regardless, the count being static. A RIPEMD-160 registry
     entry landed in fractalyze/xla#636, but the PINNED plugin does not carry it yet
     (`_DEDICATED_EMITTER_AVAILABLE`), so today the marker inlines its
-    decomposition on every backend — identical bytes, no dedicated kernel — and
-    moving the `frx>=` floor changes the lowering, never the value.
+    decomposition on every backend — identical bytes, no dedicated kernel.
 
-    The `primitive` attribute is the entry's key in the plugin's primitive
-    registry — what an operation-named marker resolves through instead of a name
-    suffix. It is emitted under BOTH spellings: inert while this family still
-    carries its own name, already in place when `markers.bytes_in_digest_marker`
-    flips to `hash_frx.digest_bytes`, so that flip is a rename and nothing else.
+    **The floor moving is not on its own what changes that.** This name reaches
+    no recognizer even in a wheel carrying the entry — the entry is reachable
+    through `hash_frx.digest_bytes` plus the `primitive` attribute below. The
+    lowering changes when the floor moves AND this family's gates flip with it;
+    `markers.bytes_in_digest_marker` states that ordering and why `primitive` is
+    already emitted. Either way the value is unchanged.
 
     Operands are explicit in the recognizer's positional ABI order:
 

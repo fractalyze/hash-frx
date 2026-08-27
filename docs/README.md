@@ -157,19 +157,29 @@ both (fractalyze/xla#616), and hash-frx keeps emitting the old ones until the
 `frx>=` floor carries that recognizer — emitting a name the pinned plugin does
 not know costs the fusion silently rather than failing, so the flip follows the
 pin instead of leading it. The other operation names the relayering adds
-(`digest`, `stream_*`, `duplex`) arrive with the envelopes that consume them.
+(`digest`, `digest_bytes`, `stream_*`, `duplex`) arrive with the envelopes that
+consume them.
 
 The Merkle–Damgård operation names are one per **wire-ABI schema**, not one per
-family. There are two, and a third schema that stays primitive-named:
+family. There are three, and a fourth schema that stays primitive-named:
 
 | name | operands | the message is |
 | --- | --- | --- |
 | `hash_frx.digest` | `[h0, consts…, blocks W[…, nblocks, w]]` | already padded and packed by the producer |
+| `hash_frx.digest_bytes` | `[h0, consts…, msg u8[…, L], tail u8[P]]` | unpadded: the padding runs inside the region, and `L` is a shape |
 | `hash_frx.stream_finalize` | `[h, consts…, pending u8[block], counts s32[2], extras u8[…, E]]` | a stream POSITION: `pending[:counts[0]] ‖ extras` |
 
-`hash_frx.digest.sha256_bytes` is the third — raw bytes with the length as an
-operand — and it keeps its per-family name because its recognizer dispatches on
-operands rather than on the name, which is what lets two ABIs ride under it.
+The fourth is the **runtime-length** raw-bytes form, which carries the length as
+a scalar operand and synthesizes its padding from it — so its block count is a
+runtime value rather than a shape property. `hash_frx.digest.sha256_bytes` and
+`hash_frx.digest.grostl256` are both in it and both keep their per-family names,
+the SHA-256 one because its recognizer dispatches on operands rather than on the
+name, which is what lets two ABIs ride under it.
+
+Note `digest_bytes` and that fourth schema are both "raw bytes" — what separates
+them is **static versus runtime length**, not padded versus unpadded. Wiring a
+runtime-length family behind `digest_bytes` would hand it an envelope with no
+length operand.
 
 What makes `stream_finalize` its own schema is that `counts` —
 `[pending_len, total_len]` — is a **runtime operand**. The strengthening field

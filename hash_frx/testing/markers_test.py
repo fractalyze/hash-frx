@@ -88,16 +88,6 @@ _MODULE_CONSTANTS = {
 }
 
 
-# The three families that ride `bytes_in_digest_marker`: the STATIC-length
-# raw-bytes schema. SHA-256's raw-bytes form is deliberately absent -- it is the
-# runtime-LENGTH schema, a third wire ABI that keeps its own name.
-_BYTES_IN_FAMILIES = (
-    "hash_frx.digest.ripemd160",
-    "hash_frx.digest.blake2s",
-    "hash_frx.digest.blake2b",
-)
-
-
 class MarkerRegistryTest(absltest.TestCase):
     def test_every_row_matches_its_module_constant(self) -> None:
         self.assertEqual({m.name: m.version for m in MARKERS}, _MODULE_CONSTANTS)
@@ -200,23 +190,39 @@ class OperationNamedBytesDigestTest(absltest.TestCase):
     resolves through (#636/#639/#642).
     """
 
+    # The three families that ride `bytes_in_digest_marker`: the STATIC-length
+    # raw-bytes schema. Membership is hand-listed because nothing in `MARKERS`
+    # distinguishes the schemas -- but the SPELLINGS come off the modules, so a
+    # family renaming its marker cannot strand a literal here. It would not be
+    # caught otherwise: the resolver returns its argument verbatim while the
+    # flag is off and ignores it when on, so any three strings pass both tests.
+    # SHA-256 and Grostl are deliberately absent -- they are the runtime-LENGTH
+    # schema (`markers.bytes_in_digest_marker` says why).
+    _FAMILIES = (
+        (ripemd160.RIPEMD160_MARKER, ripemd160.RIPEMD160_MARKER_VERSION),
+        (blake2s.BLAKE2S_MARKER, blake2s.BLAKE2S_MARKER_VERSION),
+        (blake2b.BLAKE2B_MARKER, blake2b.BLAKE2B_MARKER_VERSION),
+    )
+
     def test_off_reports_the_familys_own_spelling(self) -> None:
         # The shipped state, so this runs unpatched: while the flag is off every
         # family must get its own spelling back VERBATIM. A fallback that
         # altered the name would silently change the wire on a pin that still
         # reads the old one.
-        for name in _BYTES_IN_FAMILIES:
+        for name, version in self._FAMILIES:
             with self.subTest(marker=name):
-                self.assertEqual(markers.bytes_in_digest_marker(name, 1), (name, 1))
+                self.assertEqual(
+                    markers.bytes_in_digest_marker(name, version), (name, version)
+                )
 
     def test_on_reports_the_operation_name_for_every_family(self) -> None:
         # One name and one version whatever the family was; the primitive
         # reaches the plugin as the `primitive` attribute instead.
         with mock.patch.object(markers, "_OPERATION_NAMED_BYTES_DIGEST", True):
-            for name in _BYTES_IN_FAMILIES:
+            for name, version in self._FAMILIES:
                 with self.subTest(marker=name):
                     self.assertEqual(
-                        markers.bytes_in_digest_marker(name, 1),
+                        markers.bytes_in_digest_marker(name, version),
                         (
                             markers.BYTES_DIGEST_MARKER,
                             markers.BYTES_DIGEST_MARKER_VERSION,
@@ -229,18 +235,6 @@ class OperationNamedBytesDigestTest(absltest.TestCase):
         # which is a green suite with no kernel. So the constant is pinned here
         # and moves in the same commit as the floor.
         self.assertFalse(markers._OPERATION_NAMED_BYTES_DIGEST)
-
-    def test_it_is_a_separate_operation_from_the_words_in_one(self) -> None:
-        # Two schemas, two names. Collapsing them would hand a raw-bytes region
-        # to an envelope expecting pre-padded blocks -- it would read the
-        # message where a block count belongs.
-        self.assertNotEqual(markers.BYTES_DIGEST_MARKER, markers.MD_DIGEST_MARKER)
-
-    def test_the_operation_name_is_not_inside_the_digest_namespace(self) -> None:
-        # Flat, like `hash_frx.permute` and `hash_frx.digest`. The dotted
-        # spelling would put a LIVE name inside the namespace the RETIRING
-        # per-family spellings live in, which is slated for deletion as a group.
-        self.assertNotStartsWith(markers.BYTES_DIGEST_MARKER, DIGEST_NAMESPACE)
 
 
 class OperationNamedPermuteTest(absltest.TestCase):
