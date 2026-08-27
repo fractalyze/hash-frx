@@ -23,7 +23,8 @@ kernel.
 `permute` marks itself with `hash_frx.perm.keccak_f` where that emitter can actually
 be reached and the generic `zorch.fused_region` where it cannot — which takes
 both `_DEDICATED_EMITTER_AVAILABLE` (does the pinned plugin carry it) and
-`_EMITTER_BACKENDS` (does this backend), since the Keccak emitters are GPU-only.
+`_EMITTER_BACKENDS` (does this backend), since an emitter is written per backend
+rather than once.
 `fusion_path` reports which of the two ran (`DEDICATED` vs `GENERIC`), and the
 two are not a fast and a slow kernel: **only the dedicated marker is one device
 unit.**
@@ -53,6 +54,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    permute_marker,
     routing,
 )
 from hash_frx.keccak import lane as lanes
@@ -98,26 +100,26 @@ KECCAK_F_MARKER_VERSION = 1
 _DEDICATED_EMITTER_AVAILABLE = True
 
 # Which backends have those emitters, which is a *different* question from the
-# pin and has to be asked alongside it. `gpu_compiler.cc` sets
-# `allow_keccak_f_fusion` and `allow_keccak_sponge_fusion`; the CPU compiler sets
-# neither and says why where it builds the options — "the zerocheck-URM,
-# constraint-pressure-group and Keccak emitters are GPU-only, so they stay false
-# and their markers inline here." There is no `keccak.cc` under
-# `xla/backends/cpu/codegen/emitters/` to set them from.
+# pin and has to be asked alongside it. Both compilers now enable both flags:
+# `gpu_compiler.cc` and `cpu_compiler.cc` each set `allow_keccak_f_fusion` and
+# `allow_keccak_sponge_fusion`, against `CpuKeccakFusion` and
+# `CpuKeccakSpongeFusion` under `xla/backends/cpu/codegen/emitters/`.
 #
-# Routing to a dedicated emitter that the backend does not have is not merely
-# neutral, which is why this cannot be left optimistic the way an unrecognized
-# name can. The whole-hash `KeccakSponge` marker traces the entire padded absorb
-# and squeeze chain into one composite; where it is honoured that is the win, and
-# where it is not it is pure cost. Measured on `enc-frx`'s ML-KEM-512 `decaps` at
-# `B = 32`: 6.84s of tracing against 0.40s for the per-permutation routing, for a
-# module that optimizes to the same 7645 loop fusions either way.
+# BOTH entries are load-bearing, and the second is the reason this tuple could
+# not move when only the permute emitter existed. Routing to a dedicated emitter
+# the backend does not have is not merely neutral: the whole-hash `KeccakSponge`
+# marker traces the entire padded absorb and squeeze chain into one composite,
+# and where it is not honoured that trace is pure cost. Measured on `enc-frx`'s
+# ML-KEM-512 `decaps` at `B = 32`: 6.84s of tracing against 0.40s for the
+# per-permutation routing, for a module that optimizes to the same 7645 loop
+# fusions either way. One tuple gates both markers, so a leg joins it only once
+# it can honour the coarser one.
 #
 # A list rather than `!= "unknown"`, and for the same reason
 # `blake3.testing.emitter` keeps one: a backend is on the generic path until an
 # emitter is *written* for it, so a leg that gains an arm joins this tuple and
 # nothing else here moves.
-_EMITTER_BACKENDS = ("gpu",)
+_EMITTER_BACKENDS = ("cpu", "gpu")
 
 
 def _routes_to_dedicated_emitter() -> bool:
@@ -315,12 +317,7 @@ class KeccakF1600:
         name = (
             KECCAK_F_MARKER if _routes_to_dedicated_emitter() else FUSED_REGION_MARKER
         )
-        # A generic region carries no version: the recognizer reads only the name
-        # there, so a version would claim a contract the marker does not have.
-        self.fused_region_marker = (
-            name,
-            KECCAK_F_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, KECCAK_F_MARKER_VERSION)
         self.fusion_path = FusionPath.from_marker(name)
 
     def __eq__(self, other: object) -> bool:

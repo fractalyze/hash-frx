@@ -52,10 +52,12 @@ _SHAKE128_LONG = KeccakSponge(
 def _routing(dedicated: bool) -> Iterator[None]:
     """Pin which marker the permutation picks, whatever this leg would pick.
 
-    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`: the
-    emitters are GPU-only, so on the CPU leg patching the pin alone leaves both
-    arms generic and the whole-hash assertions below stop testing anything. Every
-    case here reads the jaxpr, so neither arm needs the emitter to exist.
+    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`: on
+    a leg absent from `_EMITTER_BACKENDS`, patching the pin alone leaves both
+    arms generic and the whole-hash assertions below stop testing anything. That
+    holds whatever the tuple says, which is why the decision is patched rather
+    than one of its inputs. Every case here reads the jaxpr, so neither arm needs
+    the emitter to exist.
     """
     with mock.patch.object(
         permutation_mod, "_routes_to_dedicated_emitter", lambda: dedicated

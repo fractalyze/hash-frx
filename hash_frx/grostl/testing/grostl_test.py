@@ -11,9 +11,10 @@ every digest identically on both jit legs.
 
 The lowering assertions are the usual half that values cannot see: the digest
 must emit exactly one composite carrying the registered name, version, and
-the five-operand ABI with no captured constants. No backend routes the name
-yet, so recognition is not asserted — emission and the ABI are what an
-emitter will read, pinned before it exists (the Vision arrangement).
+the five-operand ABI with no captured constants. Recognition is a separate
+case read off the COMPILED module (`Grostl256MarkerRecognizedTest` states
+why), which reads the shipped routing condition and skips where the CPU-only
+arm is absent.
 """
 
 from __future__ import annotations
@@ -27,13 +28,19 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
-from hash_frx.byte_hash import ByteHash
+from hash_frx.byte_hash import ByteHash, capacity
 from hash_frx.fusion import FusionPath
 from hash_frx.grostl import grostl
 from hash_frx.grostl.grostl import Grostl256
-from hash_frx.grostl.testing.host_grostl256 import HostGrostl256
-from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS
-from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS, grostl256
+from hash_frx.testing.jit_cache import assert_single_trace, assert_trace_growth
+from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.oracle import oracle_digest
+
+# Whether this leg can actually reach the Grøstl emitter. Read off the shipped
+# condition rather than restated, so a backend gaining an arm lifts the cases
+# below with it and the two cannot drift.
+_HAS_GROSTL_EMITTER = grostl._routes_to_dedicated_emitter()
 
 # Padding-boundary lengths for the differential sweep: 0/1 (empty + tiny),
 # 55/56 (the one-vs-two-block cutoff — the 0x80 byte and the 8-byte block
@@ -59,16 +66,68 @@ class Grostl256KatTest(parameterized.TestCase):
     @parameterized.parameters(*_LENGTHS)
     def test_device_and_host_agree(self, length: int) -> None:
         # The differential partner issue #163 asks for: the device digest
-        # against the oracle-backed host row, across every padding boundary
-        # and a batch — not one convenient length. The host row loops the
-        # oracle per row (`byte_hash.host_digest`), so the batch equality is
-        # also the bulk-parallel claim: one data-parallel device call equals
-        # the per-message digests, in order.
+        # against the reference oracle, across every padding boundary and a
+        # batch — not one convenient length.
         msgs = _message(length)
         np.testing.assert_array_equal(
-            np.asarray(Grostl256().digest(msgs)),
-            np.asarray(HostGrostl256().digest(msgs)),
+            np.asarray(Grostl256().digest(msgs)), oracle_digest(grostl256, 32, msgs)
         )
+
+
+class Grostl256CapacityTest(parameterized.TestCase):
+    """The runtime-length form: `LMAX` sizes the buffer, `len` decides the
+    digest, and compilation keys on the first rather than the second."""
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_the_digest_is_the_message_not_the_buffer(self, length: int) -> None:
+        # The form's central claim, and the one a wrong `len` would break
+        # silently: the same message in buffers of several widths must digest
+        # identically, and equal what the oracle says. The slack is filled with
+        # 0xFF rather than zeros — a kernel that hashed the whole buffer, or
+        # padded at `LMAX` instead of `len`, would agree on a zero fill by
+        # accident on at least the block-aligned cases.
+        msgs = _message(length)
+        want = oracle_digest(grostl256, 32, msgs)
+        # Exact fit and one far-wider buffer. The two middle widths this swept
+        # before (`length + 1`, `length + 64`) made no claim these two do not,
+        # and each distinct width is a fresh compile of the unrolled body — the
+        # cost every other case in this file is annotated to avoid. `max(·, 1)`
+        # is the ABI's `LMAX >= 1` floor, which the empty message needs.
+        for width in (max(length, 1), 512):
+            with self.subTest(capacity=width):
+                buf = np.full((msgs.shape[0], width), 0xFF, dtype=np.uint8)
+                buf[:, :length] = msgs
+                got = grostl.grostl256_bytes(fnp.asarray(buf), np.int32(length))
+                np.testing.assert_array_equal(np.asarray(got), want)
+
+    def test_a_zero_width_buffer_is_refused(self) -> None:
+        # `LMAX >= 1` is an ABI term, not an emitter detail: the decomposition
+        # gathers the message through a clamp, which needs a byte in bounds to
+        # land on even when no byte is live.
+        with self.assertRaisesRegex(ValueError, "LMAX >= 1"):
+            grostl.grostl256_bytes(
+                fnp.asarray(np.zeros((1, 0), dtype=np.uint8)), np.int32(0)
+            )
+
+    def test_compilation_is_keyed_on_the_capacity_not_the_length(self) -> None:
+        # The acceptance criterion, measured rather than asserted: the zone's
+        # own compile cache is counted (`jit_cache.assert_trace_growth`, which
+        # carries why the bound is an inequality), not a stand-in for it. The
+        # range spans two rungs of the ladder — enough to show the collapse, and
+        # two Grøstl compiles is already seconds.
+        lengths = list(range(20, 128, 7))
+        widths = {
+            capacity(np.zeros((1, n), np.uint8), grostl._PAD.block_size)
+            for n in lengths
+        }
+        self.assertEqual(widths, {64, 128})
+
+        calls = [
+            functools.partial(grostl.digest, np.zeros((1, n), dtype=np.uint8))
+            for n in lengths
+        ]
+        # Sixteen lengths, at most two traces: the collapse itself.
+        assert_trace_growth(self, grostl.grostl256_bytes, calls, at_most=len(widths))
 
 
 class SboxCircuitTest(absltest.TestCase):
@@ -97,14 +156,16 @@ def _composite(fn: Any, *args: Any) -> Any:
 
 
 class Grostl256MarkerTest(absltest.TestCase):
-    def test_no_leg_routes_a_grostl_marker_yet(self) -> None:
-        # The pre-emitter pin (the Vision arrangement): both module flags say
-        # "no emitter", so every unpatched instance reads GENERIC on every
-        # backend. When an emitter lands these flip with the frx floor and
-        # this case flips to the keccak-style backend gate.
-        self.assertFalse(grostl._DEDICATED_EMITTER_AVAILABLE)
-        self.assertEqual(grostl._EMITTER_BACKENDS, ())
-        self.assertIs(Grostl256().fusion_path, FusionPath.GENERIC)
+    def test_routing_is_the_pin_and_the_backend(self) -> None:
+        # The conjunction the keccak family's gate test states, arriving here
+        # the other way round: this emitter is CPU-only, so the pin alone does
+        # not decide. Both halves are pinned because they move together with
+        # the `frx>=` floor.
+        self.assertTrue(grostl._DEDICATED_EMITTER_AVAILABLE)
+        self.assertEqual(grostl._EMITTER_BACKENDS, ("cpu",))
+        self.assertIs(
+            Grostl256().fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER)
+        )
 
     def test_digest_emits_one_composite_with_the_digest_name(self) -> None:
         # The contract's unit: an absent or split marker still computes the
@@ -116,7 +177,7 @@ class Grostl256MarkerTest(absltest.TestCase):
 
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         # The wire surface an emitter will read: name, version, and the
-        # documented [iv, rc_p, rc_q, msg, tail] operand order. Five invars
+        # documented [iv, rc_p, rc_q, buf, len] operand order. Five invars
         # exactly is the captured-constants-free property — an array the body
         # closed over would be lifted in AHEAD of these, one per call site
         # (the operand-ABI rule in docs/reference/conventions.md).
@@ -126,8 +187,43 @@ class Grostl256MarkerTest(absltest.TestCase):
         self.assertEqual(eqn.params["version"], grostl.GROSTL256_MARKER_VERSION)
         self.assertLen(eqn.invars, 5)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
-        # L = 100: two blocks once padded, so the tail is 28 bytes.
-        self.assertEqual(shapes, [(64,), (10, 8, 8), (10, 8, 8), (2, 100), (28,)])
+        # The message is already on the device, so it keeps its own extent as
+        # the capacity and nothing is widened (`byte_hash.capacity`).
+        self.assertEqual(shapes, [(64,), (10, 8, 8), (10, 8, 8), (2, 100), ()])
+        # Operand 4 is what tells the two forms apart, and it is disjoint from
+        # the retired `tail u8[P]` in element type AND rank — the discriminator
+        # the recognizer relies on (fractalyze/xla#581).
+        self.assertEqual(eqn.invars[4].aval.dtype, fnp.int32)
+        self.assertEqual(eqn.invars[3].aval.dtype, fnp.uint8)
+        # The version does not select the form: one name, both forms, and the
+        # rewriter never reads `composite.version`.
+        self.assertEqual(grostl.GROSTL256_MARKER_VERSION, 1)
+
+
+class Grostl256MarkerRecognizedTest(absltest.TestCase):
+    """`grostl256` reaches the emitter, read off the COMPILED module.
+
+    Every other lowering case here reads the jaxpr or the lowered module, which
+    proves this repo wrote the marker and nothing about whether the toolchain
+    accepts it. For this hash that gap is the whole cost: declined, the digest
+    inlines to a fusion per round boundary, each materializing the `[B, 8, 8]`
+    state, against the emitter's one kernel.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        if not _HAS_GROSTL_EMITTER:
+            self.skipTest(f"no Grøstl emitter on {frx.default_backend()}")
+
+    def test_the_digest_compiles_to_a_grostl256_custom_fusion(self) -> None:
+        # (1, 65) is the aval `Grostl256TracedTest` already drives through
+        # `frx.jit(grostl.digest)`, so the two share one compile. The batch
+        # dimension does not bear on recognition, and the shape reached
+        # through `Grostl256().digest` would not share: a bound method is a
+        # different function object, so it keys a fresh compile.
+        assert_marker_recognized(
+            self, "grostl256", grostl.digest, fnp.asarray(_message(65, seed=3)[:1])
+        )
 
 
 class Grostl256TracedTest(absltest.TestCase):
@@ -168,50 +264,38 @@ class Grostl256TracedTest(absltest.TestCase):
 
 
 class Grostl256ByteHashTest(absltest.TestCase):
-    """The two `ByteHash` implementations, against the seam."""
+    """The `ByteHash` row, against the seam."""
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h in (Grostl256(), HostGrostl256()):
-            with self.subTest(impl=type(h).__name__):
-                self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, 32)
-                self.assertIsInstance(h.fusion_path, FusionPath)
+        h = Grostl256()
+        self.assertIsInstance(h, ByteHash)
+        self.assertEqual(h.digest_size, 32)
+        self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # Device GENERIC (pre-emitter, every backend), host HOST (every
-        # backend) — and the traceability tie to the return type: the device
-        # row returns an `Array` and takes a tracer, the host row reads bytes
-        # and never can (`byte_hash.py`'s rule).
+        # DEDICATED where the emitter is reachable and GENERIC elsewhere, and
+        # the traceability tie to the return type: the row returns an `Array`
+        # and takes a tracer (`byte_hash.py`'s rule).
         # A (1, 1) message: the KAT already compiled that aval, so the
         # plumbing check costs no fresh compile of the digest body.
         msg = np.zeros((1, 1), dtype=np.uint8)
-        device, host = Grostl256(), HostGrostl256()
-        self.assertIs(device.fusion_path, FusionPath.GENERIC)
-        self.assertTrue(device.fusion_path.is_traceable)
+        device = Grostl256()
+        self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER))
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
-        self.assertIs(host.fusion_path, FusionPath.HOST)
-        self.assertFalse(host.fusion_path.is_traceable)
-        self.assertIsInstance(host.digest(msg), np.ndarray)
 
     def test_digest_shape_and_dtype(self) -> None:
         # (4, 1) rides the differential sweep's aval — no fresh compile.
-        for h in (Grostl256(), HostGrostl256()):
-            with self.subTest(impl=type(h).__name__):
-                out = np.asarray(h.digest(np.zeros((4, 1), dtype=np.uint8)))
-                self.assertEqual(out.shape, (4, 32))
-                self.assertEqual(out.dtype, np.uint8)
+        out = np.asarray(Grostl256().digest(np.zeros((4, 1), dtype=np.uint8)))
+        self.assertEqual(out.shape, (4, 32))
+        self.assertEqual(out.dtype, np.uint8)
 
     def test_value_identity_is_by_type(self) -> None:
         # Param-free, so every instance of a type is equal and hashes alike —
-        # what keeps the seam re-trace-safe as pytree aux. The two are never
-        # equal, or swapping substrate would not re-trace.
-        for cls in (Grostl256, HostGrostl256):
-            with self.subTest(impl=cls.__name__):
-                self.assertEqual(cls(), cls())
-                self.assertEqual(hash(cls()), hash(cls()))
-        self.assertNotEqual(Grostl256(), HostGrostl256())
+        # what keeps the seam re-trace-safe as pytree aux.
+        self.assertEqual(Grostl256(), Grostl256())
+        self.assertEqual(hash(Grostl256()), hash(Grostl256()))
 
 
 class EmptyBatchTest(absltest.TestCase):
@@ -219,11 +303,9 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        rows: list[tuple[ByteHash, int]] = [(grostl.Grostl256(), 32)]
-        for hasher, size in rows:
-            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-            self.assertEqual(got.shape, (0, size))
-            self.assertEqual(got.dtype, np.uint8)
+        got = np.asarray(grostl.Grostl256().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+        self.assertEqual(got.shape, (0, 32))
+        self.assertEqual(got.dtype, np.uint8)
 
 
 class MessageRankTest(absltest.TestCase):

@@ -31,6 +31,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    permute_marker,
     routing,
 )
 from hash_frx.poseidon2.linear import (
@@ -60,10 +61,10 @@ _DEDICATED_EMITTER_AVAILABLE = True
 # Which backends have those emitters — a different question from the pin, asked
 # alongside it. The `ZorchFusedRegionRewriter` runs in both the CPU and the GPU
 # compiler and both route the poseidon2 arm (`allow_extension_field_poseidon2`
-# covers the extension-field states on both), so unlike Keccak's GPU-only tuple
-# this one carries both legs. A backend absent here — Metal today — is on the
-# generic path until an emitter is written for it, and then it joins this tuple
-# and nothing else here moves.
+# covers the extension-field states on both), so this one carries both legs,
+# unlike `poseidon.sparse`'s GPU-only tuple. A backend absent here — Metal
+# today — is on the generic path until an emitter is written for it, and then it
+# joins this tuple and nothing else here moves.
 _EMITTER_BACKENDS = ("cpu", "gpu")
 
 
@@ -90,12 +91,7 @@ class Poseidon2:
         self._is_m4_structured = params.is_m4_block_structured
         self._external_m4 = params.external_m4 if self._is_m4_structured else None
         name = self._select_fused_region_name()
-        # A generic region carries no version: the recognizer reads only the name
-        # there, so a version would claim a contract the marker does not have.
-        self.fused_region_marker = (
-            name,
-            POSEIDON2_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, POSEIDON2_MARKER_VERSION)
         # Dedicated == permute lowers to a hash-named marker, not the generic
         # region one (which a vendor can't route, so a whole-region composite
         # around it is unexpandable).
@@ -178,9 +174,9 @@ def _permutation_body(
 ) -> Array:
     """The straight-line permute on a single `(width,)` state, taking the
     Poseidon2Fusion ABI operands explicitly: round constants flattened row-major,
-    int_rc the lane-0 column. The internal J scale rides as the `internal_j_scale`
-    marker attribute (a scalar constant survives `lax.scan`, where an operand is
-    hoisted).
+    int_rc one constant per partial round. The internal J scale rides as the
+    `internal_j_scale` marker attribute (a scalar constant survives `lax.scan`,
+    where an operand is hoisted).
 
     The decomposition every `hash_frx.perm.poseidon2` region runs, spliced inline (the
     generic marker's single-kernel requirement allows no call). A batch is
@@ -246,7 +242,7 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
     return (
         state,
         p.external_constants_initial.reshape(-1),
-        p.internal_constants[:, 0],
+        p.internal_constants,
         p.external_constants_terminal.reshape(-1),
         p.internal_diag,
     )

@@ -12,7 +12,11 @@ Marker names are a wire ABI: Fractalyze XLA's recognizers match by name, and an
 unrecognized name does not error — the composite inlines and fusion is silently
 lost. A contract change therefore stages through `composite.version` rather than
 a rename, and a rename needs the recognizer to accept both spellings first, so
-no build ever requires a toolchain newer than itself.
+no build ever requires a toolchain newer than itself. A third staging exists
+where two operand forms are disjoint in element type AND rank: they ride ONE
+name and the recognizer tells them apart by operands, which is what
+`sha256.SHA256_BYTES_MARKER` does — that requires a recognizer written for it,
+so it is a per-ABI question rather than a per-name one.
 
 The hash markers carry the `hash_frx.` prefix, naming the repo that owns the
 primitive. This one keeps `zorch.` because it is generic rather than owned:
@@ -49,6 +53,7 @@ import frx
 from frx import Array
 
 from hash_frx._composite import _Region, composite
+from hash_frx.markers import dedicated_permute_marker
 
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
@@ -59,49 +64,38 @@ FUSED_REGION_MARKER = "zorch.fused_region"
 class FusionPath(enum.Enum):
     """How a hash's one-call unit lowers on the backend it was built for.
 
-    Three states, because two different questions used to share one bool and
-    came apart: "does this lower to one dedicated kernel?" (routing / perf) and
-    "may this be called inside a traced region?" (traceability). A device hash
-    whose marker nothing on this backend recognizes — BLAKE3 on Metal — is
-    traceable without being one kernel, and a host hash is neither; a single
-    flag collapses the two into one `False`.
+    Every row is a device row — it takes a tracer and returns an ``Array`` — so
+    the only question left is routing:
 
     - ``DEDICATED``: the pinned plugin *and* the backend carry the dedicated
       emitter, so the marked call lowers to one device unit. Only this state
       lets a consumer route a whole-region composite (a sponge hash, a Merkle
       commit) through the hash's marker.
-    - ``GENERIC``: a device function — traceable, takes a tracer — whose marker
-      the backend does not route: either the generic region marker, or a
-      dedicated name that inlines unrecognized. Right bytes, no dedicated
-      kernel.
-    - ``HOST``: a host-library path over ``np.ndarray``. Never traceable — it
-      has to read the message bytes.
+    - ``GENERIC``: the backend does not route the marker — either the generic
+      region marker, or a dedicated name that inlines unrecognized. Right bytes,
+      no dedicated kernel.
 
     Derived per (hash, backend) at construction — the emitter switch is a
-    property of the pin and the backend, so it is never a class constant on a
-    device hash (`keccak.permutation._routes_to_dedicated_emitter` is the
-    pattern). Host rows are the one legitimate constant: a host path is
-    ``HOST`` on every backend.
+    property of the pin and the backend, so it is never a class constant
+    (`keccak.permutation._routes_to_dedicated_emitter` is the pattern).
     """
 
     DEDICATED = "dedicated"
     GENERIC = "generic"
-    HOST = "host"
 
     @classmethod
     def from_marker(cls, name: str) -> "FusionPath":
         """The device path a marker choice implies: a hash-named marker is one
-        kernel, the generic region marker is not. Never `HOST` — a marker
-        emitter is a device function by construction — and deriving the path
+        kernel, the generic region marker is not. Deriving the path
         from the marker actually chosen is what keeps the two from drifting
         when a routing gate grows another case."""
-        return cls.DEDICATED if name != FUSED_REGION_MARKER else cls.GENERIC
+        return cls.from_routing(name != FUSED_REGION_MARKER)
 
     @classmethod
     def from_routing(cls, routed: bool) -> "FusionPath":
         """The device path an emitter switch implies, for a hash whose marker
         name never varies (`routed` = the pin *and* the backend carry the
-        dedicated emitter). Never `HOST`, as `from_marker` states."""
+        dedicated emitter)."""
         return cls.DEDICATED if routed else cls.GENERIC
 
     @property
@@ -110,14 +104,6 @@ class FusionPath(enum.Enum):
         whole region over this hash in an expandable composite. The question
         `has_dedicated_fusion` used to answer."""
         return self is FusionPath.DEDICATED
-
-    @property
-    def is_traceable(self) -> bool:
-        """Whether a call may sit inside a traced region (`jit` / `vmap`). For a
-        `ByteHash` this agrees with the return type by construction — a device
-        row returns `Array`, a host row `np.ndarray` — and the return type
-        remains the authority (`byte_hash.py`)."""
-        return self is not FusionPath.HOST
 
 
 def routing(available: bool, backends: tuple[str, ...]) -> bool:
@@ -137,6 +123,24 @@ def routing(available: bool, backends: tuple[str, ...]) -> bool:
     `FusionPath.from_routing`'s to say.
     """
     return available and frx.default_backend() in backends
+
+
+def permute_marker(name: str, version: int) -> tuple[str, int]:
+    """The `(name, version)` a permutation puts on the wire for its region.
+
+    Takes whichever name the family's routing gate selected and answers both
+    halves of the choice in one place: a generic region carries no version (the
+    recognizer reads only the name there, so a version would claim a contract
+    the marker does not have), and a routed one gets whichever permute spelling
+    `markers` is currently emitting.
+
+    It lives here rather than in `markers` because it needs `FUSED_REGION_MARKER`,
+    and `markers` is deliberately dependency-free — so the dependency can only run
+    fusion → markers, never back.
+    """
+    if name == FUSED_REGION_MARKER:
+        return FUSED_REGION_MARKER, 0
+    return dedicated_permute_marker(name, version)
 
 
 def fused_region(

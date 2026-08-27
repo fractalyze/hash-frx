@@ -68,15 +68,17 @@ py_test(
 )
 
 py_test(
-    name = "byte_hashes_test",
+    name = "rows_test",
     size = "medium",
-    srcs = ["byte_hashes_test.py"],
+    srcs = ["rows_test.py"],
     deps = [
+        requirement("blake3"),
         ":emitter",
         ":vectors",
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx/blake3",
+        "//hash_frx/testing:oracle",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),
@@ -95,6 +97,7 @@ py_test(
     size = "medium",
     srcs = ["streaming_test.py"],
     deps = [
+        requirement("blake3"),
         "//hash_frx/blake3",
         requirement("absl_py"),
         requirement("frx"),

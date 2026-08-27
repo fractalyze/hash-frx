@@ -6,10 +6,48 @@ This page carries only what is specific to writing hash primitives. The rules
 every FRX consumer shares — `@jit` placement, `for` vs `lax.scan` vs `vmap`,
 pytree registration mechanics, type annotations, the `testing/` layout, the
 comment rules — are not repeated here. They follow from FRX and XLA semantics
-rather than from what a repo computes, so a copy per repo is how they drift
-apart; read them in
-[`zorch`'s page](https://github.com/fractalyze/zorch/blob/main/docs/reference/conventions.md),
-which states them in full.
+rather than from what a repo computes, so no repo owns them and a copy per repo
+is how they drift apart. The playbook injects them at session start as
+[`conventions/frx.md`](https://github.com/fractalyze/claude-plugins/blob/main/plugins/playbook/conventions/frx.md).
+
+## Adding a hash: a seam implementation and a row
+
+The [three layers](../blocks/hash.md#three-layers) exist so that a new family
+costs a round function and its constants. The recipe is three steps, and none of
+them is "copy the family next door":
+
+1. **Implement the primitive seam.** A fixed-width permutation implements
+   [`Permutation`](../../hash_frx/permutation.py); a byte hash's compression or
+   round function is a plain callable the extension takes. Write the round
+   function, its constants and its parameter surface — with the document and
+   section each constant comes from, per [byte-exactness](#byte-exactness-is-the-gate).
+2. **Pick the extension that already runs your schedule.** Merkle–Damgård is
+   [`extension/pad.py`](../../hash_frx/extension/pad.py)'s `PadRule` plus
+   [`extension/md.py`](../../hash_frx/extension/md.py)'s `chain` and `MdStream`;
+   a byte sponge is [`extension/sponge.py`](../../hash_frx/extension/sponge.py)
+   plus `SpongePad`; a chunk tree is
+   [`extension/tree.py`](../../hash_frx/extension/tree.py); a construction over a
+   `Permutation` is [`sponge.py`](../../hash_frx/sponge.py),
+   [`duplex_sponge.py`](../../hash_frx/duplex_sponge.py) or
+   [`compression.py`](../../hash_frx/compression.py). If your family needs a
+   parameter the rule does not carry, add the axis to the rule and pin it with a
+   vector that fails when the axis is set wrong — do not fork the rule.
+3. **Add the row.** Register the marker name in
+   [`markers.py`](../../hash_frx/markers.py),
+   override `_parameters()`, and end the module with its
+   [seam conformance pin](#seam-conformance-pins).
+
+**There is no routing step**, and nothing in the list writes a padding rule, a
+length field or a block loop. Those were transcribed nine times before the
+schedules were extracted and are written once now; a tenth copy is a regression
+rather than a new family.
+
+**A new extension is the one case that is not routine.** Shape it against every
+family that will enter it *before* writing it, never against the first one — a
+surface generalized from a single implementation encodes that implementation's
+accidents as the family's. What that discipline caught, and the one case where a
+seam was written early and had to be withdrawn, is in
+[`blocks/hash.md`](../blocks/hash.md#extensions--one-schedule-per-construction).
 
 ## A marked body is authored to lower, not to read
 
@@ -19,7 +57,13 @@ Python reviewer would prefer for a lowering that stays one kernel.
 
 - **A round loop is an unrolled Python `for`.** Round counts are static and
   small, and `lax.scan` lowers to a `stablehlo.while` — a control-flow boundary
-  the region cannot contain.
+  a generically marked region cannot contain.
+  Read "static **and** small" strictly: it is the round loop this licenses, not
+  every static count. A sponge's block count is static and *unbounded*, and
+  unrolling it grows the graph past the compile cliff, so the schedules in
+  [`extension/sponge.py`](../../hash_frx/extension/sponge.py) offer a `while` and
+  a `scan` form beside the unrolled one. Which a caller may take is its
+  emitter's question, not this bullet's — see the fusion contract.
 - **A linear layer is an unrolled sum of column-scaled lanes**
   ([`linear.py`](../../hash_frx/linear.py)), never `fnp.dot` or `fnp.sum` (a
   reduction, which is the `kInput` fusion boundary) and never a dynamic index (a
@@ -34,9 +78,9 @@ Python reviewer would prefer for a lowering that stays one kernel.
   decomposition is one the emitter cannot find, and a constant threaded in the
   wrong order is one it misreads. Two remedies, and every marked body needs one
   of them per constant: **thread it as an explicit operand**
-  (`sha256.compress`'s round-constant table, `blake3.Mode.iv`), or **compute it
-  on device** — `fnp.arange`/`iota` is an index the kernel counts rather than a
-  value the program carries (`blake3._counters`).
+  (`sha256.compress`'s round-constant table, `blake3.modes.Mode.iv`), or
+  **compute it on device** — `fnp.arange`/`iota` is an index the kernel counts
+  rather than a value the program carries (`blake3.modes._counters`).
 
   This rule used to carry a second, stronger reason that no longer holds:
   `lax.composite` once lifted *every* host-materialised array into an operand
@@ -54,11 +98,12 @@ byte. [Testing](#testing) is where the enforcement is.
 ## A type per named member, a parameter per choice within one
 
 **Where a standard names its members, each name is a type.** FIPS 202 names
-SHA3-256, SHA3-512, SHAKE128, SHAKE256; the BLAKE3 spec names `hash`,
-`keyed_hash`, `derive_key`. Those become `Sha3_256` / `Sha3_512` / `Shake128` /
-`Shake256` and `Blake3` / `Blake3Keyed` / `Blake3DeriveKey`, sharing a body and
-differing by the constants the standard attaches to the name — a rate, a
-domain-separation byte, a mode flag. What a caller then chooses *within* one named member rides as a
+four SHA-3 functions and two SHAKEs; the BLAKE3 spec names `hash`,
+`keyed_hash`, `derive_key`. Those become `Sha3_224` / `Sha3_256` / `Sha3_384` /
+`Sha3_512` / `Shake128` / `Shake256` and `Blake3` / `Blake3Keyed` /
+`Blake3DeriveKey`, sharing a body and differing by the constants the standard
+attaches to the name — a rate, a domain-separation byte, a mode flag. What a
+caller then chooses *within* one named member rides as a
 constructor parameter: an output length, a key, a context string.
 
 A member can carry both, and BLAKE3's keyed row does. The standard fixes its
@@ -135,9 +180,26 @@ if TYPE_CHECKING:
     _: type[Permutation] = Poseidon2
 ```
 
-A module shipping two implementations of one seam names each pin, since mypy
-rejects re-annotating `_` — [`sha256.py`](../../hash_frx/sha256.py) pins `Sha256`
-and `HostSha256` separately.
+A module shipping more than one row of one seam names each pin, since mypy
+rejects re-annotating `_` — [`sha512/sha512.py`](../../hash_frx/sha512/sha512.py) pins
+`Sha512`, `Sha384` and `Sha512_256` separately.
+
+**On the `ByteHash` side the rule is checked.** `row_conformance_test`'s
+`PinTest` holds the pins and the byte-hash registry to each other in both
+directions, and per module. That guard exists because the hole was real: `Mgf1`
+was the one implementation module with no pin, and it shipped a `fusion_path`
+the `ByteHash` Protocol does not accept.
+
+**The `Permutation` pins are still hand-kept**, so a seventh permutation can
+ship unpinned and nothing fails. That is an unwritten sweep rather than an
+impossible one — the same shape would work, matching shipped classes that define
+`permute` against the pins — and it is worth writing when someone next touches
+that seam.
+
+**A module that implements no seam carries a comment where its pin would be**,
+stating what does hold the class instead — a convention, not something enforced.
+The one case that exists is
+[`adapter/hmac.py`](../../hash_frx/adapter/hmac.py), which argues it there.
 
 The pin bites only because the full-annotation rule is enforced
 (`disallow_untyped_defs` in [`pyproject.toml`](../../pyproject.toml)): against an

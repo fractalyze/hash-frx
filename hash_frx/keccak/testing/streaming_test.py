@@ -36,11 +36,13 @@ from hash_frx.keccak.byte_hashes import (
 from hash_frx.keccak.sponge import KeccakSponge
 from hash_frx.keccak.streaming import (
     ShakeAbsorb,
+    ShakeBlockSqueeze,
     ShakeSqueeze,
     shake128_init,
     shake256_init,
     shake_init,
 )
+from hash_frx.testing.marker_recognized import emitted_composites
 
 # Long enough to span several blocks at either rate.
 _MESSAGE = bytes((i * 7 + 3) & 0xFF for i in range(400))
@@ -70,6 +72,17 @@ def _absorb_all(init: _Init, chunks: list[bytes]) -> ShakeAbsorb:
 def _squeeze_once(init: _Init, chunks: list[bytes], nbytes: int) -> bytes:
     _, out = _absorb_all(init, chunks).finalize().squeeze(nbytes)
     return bytes(np.asarray(out))
+
+
+def _squeeze_blocks_lowering(rate: int, nblocks: int) -> str:
+    """The lowered module for a whole-block squeeze, absorb kept out of it.
+
+    The squeezer is built eagerly and lowered as an argument, so the module holds
+    the squeeze alone — the shape `SqueezePermutationCountTest` uses for the
+    general squeezer.
+    """
+    squeezer = shake_init(rate).finalize_blocks()
+    return frx.jit(lambda s: s.squeeze_blocks(nblocks)).lower(squeezer).as_text()
 
 
 class ShakeStreamTest(parameterized.TestCase):
@@ -213,6 +226,119 @@ class PytreeThreadingTest(parameterized.TestCase):
         _, outs = frx.lax.scan(body, squeezer, None, length=5)
         got = b"".join(bytes(row) for row in np.asarray(outs))
         self.assertEqual(got, reference(_MESSAGE).digest(160))
+
+
+class ShakeBlockSqueezeTest(parameterized.TestCase):
+    """The whole-block squeezer: same bytes, without the offset's two costs.
+
+    Byte-equality against the general squeezer is the gate — the narrow type is
+    an optimization and may not move a single output byte. The structural cases
+    below are what make it worth having, and they are read off the lowered
+    module because no value test can see a `select` that computes the right
+    answer twice.
+    """
+
+    @parameterized.parameters(*_CASES)
+    def test_blocks_match_the_general_squeezer(
+        self, name: str, init: _Init, rate: int, reference: _Reference
+    ) -> None:
+        for nblocks in (1, 2, 3):
+            with self.subTest(nblocks=nblocks):
+                wide = _squeeze_once(init, [_MESSAGE], nblocks * rate)
+                _, out = (
+                    _absorb_all(init, [_MESSAGE])
+                    .finalize_blocks()
+                    .squeeze_blocks(nblocks)
+                )
+                narrow = bytes(np.asarray(out))
+                self.assertEqual(narrow, wide)
+                self.assertEqual(narrow, reference(_MESSAGE).digest(nblocks * rate))
+
+    @parameterized.parameters(*_CASES)
+    def test_k_blocks_cost_k_permutations(
+        self, name: str, init: _Init, rate: int, reference: _Reference
+    ) -> None:
+        # The state's rate prefix is block 0, so the permutation after the last
+        # block is the one that leaves the carry pointing at the next.
+        for nblocks in (1, 2, 3):
+            with self.subTest(nblocks=nblocks):
+                squeezer = shake_init(rate).finalize_blocks()
+                emitted = emitted_composites(
+                    lambda s: s.squeeze_blocks(nblocks), squeezer
+                )
+                self.assertEqual(len(emitted), nblocks)
+
+    @parameterized.parameters(*_CASES)
+    def test_the_offset_costs_are_gone(
+        self, name: str, init: _Init, rate: int, reference: _Reference
+    ) -> None:
+        # The two things the offset buys and a block-aligned caller does not
+        # want: a traced slice of the output, and a chain-select for the carry.
+        #
+        # The slice is asserted absolutely — the block form has none. The selects
+        # are asserted as a DIFFERENCE, because Keccak-f's own body carries 97 of
+        # them per permutation, so an absolute `assertNotIn` here would be
+        # asserting something about the permutation rather than the schedule.
+        narrow = _squeeze_blocks_lowering(rate, 2)
+        self.assertNotIn("dynamic_slice", narrow)
+        self.assertNotIn("dynamic-slice", narrow)
+
+        squeezer = shake_init(rate).finalize()
+        wide = frx.jit(lambda s: s.squeeze(2 * rate)).lower(squeezer).as_text()
+        self.assertLess(
+            narrow.count("stablehlo.select"), wide.count("stablehlo.select")
+        )
+
+    @parameterized.parameters(*_CASES)
+    def test_the_carry_is_a_narrower_pytree(
+        self, name: str, init: _Init, rate: int, reference: _Reference
+    ) -> None:
+        # The point of a distinct type rather than a view: the sampler's scan
+        # carry is the squeezer, so the offset has to leave the TREEDEF, not
+        # just go unread.
+        blocks = init().finalize_blocks()
+        wide = init().finalize()
+        self.assertNotEqual(
+            tree_util.tree_structure(blocks), tree_util.tree_structure(wide)
+        )
+        self.assertEqual(len(tree_util.tree_leaves(blocks)), 1)
+        self.assertEqual(len(tree_util.tree_leaves(wide)), 2)
+
+    @parameterized.parameters(*_CASES)
+    def test_it_threads_a_sampler_shaped_scan(
+        self, name: str, init: _Init, rate: int, reference: _Reference
+    ) -> None:
+        # ML-DSA's RejNTTPoly shape: one rate block per iteration, sponge as the
+        # carry. The carry must stay fixed-shape across iterations or the scan
+        # will not trace at all.
+        squeezer = _absorb_all(init, [_MESSAGE]).finalize_blocks()
+
+        def body(
+            carry: ShakeBlockSqueeze, _: None
+        ) -> tuple[ShakeBlockSqueeze, frx.Array]:
+            carry, out = carry.squeeze_blocks(1)
+            return carry, out
+
+        _, outs = frx.lax.scan(body, squeezer, None, length=4)
+        got = b"".join(bytes(row) for row in np.asarray(outs))
+        self.assertEqual(got, reference(_MESSAGE).digest(4 * rate))
+
+    @parameterized.parameters(*_CASES)
+    def test_widen_lands_where_the_general_squeezer_would(
+        self, name: str, init: _Init, rate: int, reference: _Reference
+    ) -> None:
+        # A caller that takes whole blocks and then an odd tail: widening after
+        # k blocks must equal squeezing k*rate + tail straight through.
+        narrow, first = (
+            _absorb_all(init, [_MESSAGE]).finalize_blocks().squeeze_blocks(2)
+        )
+        _, tail = narrow.widen().squeeze(37)
+        got = bytes(np.asarray(first)) + bytes(np.asarray(tail))
+        self.assertEqual(got, reference(_MESSAGE).digest(2 * rate + 37))
+
+    def test_squeeze_blocks_rejects_an_empty_request(self) -> None:
+        with self.assertRaises(ValueError):
+            shake256_init().finalize_blocks().squeeze_blocks(0)
 
 
 class ShakeStreamValidationTest(absltest.TestCase):

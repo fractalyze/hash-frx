@@ -24,8 +24,7 @@ covered on purpose:
 `fusion_path` is checked in the same breath because it is defined as "the
 marker is not the generic one" — two ways of saying one thing, and this is
 where they are held to it. That half is independent of how the marker is
-emitted, so it holds for every implementation. A permutation is additionally
-held off `HOST`: that state exists only on the `ByteHash` seam.
+emitted, so it holds for every implementation.
 """
 
 from __future__ import annotations

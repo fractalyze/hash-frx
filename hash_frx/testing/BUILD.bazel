@@ -77,7 +77,6 @@ py_test(
     srcs = ["public_api_test.py"],
     deps = [
         "//hash_frx",
-        "//hash_frx:pbkdf2",
         requirement("absl_py"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -109,7 +108,7 @@ py_library(
     deps = ["//hash_frx"],
 )
 
-# The seam's contract, asserted against all thirty-two rows at once rather than
+# The seam's contract, asserted against every shipped row at once rather than
 # family by family — which is how the #211 and #215 sweeps came to miss SM3 and
 # BLAKE2s. The equality cases are the load-bearing ones: a row's __eq__/__hash__
 # is its jit cache key.
@@ -135,8 +134,8 @@ py_test(
     size = "medium",
     srcs = ["absorb_cost_test.py"],
     deps = [
-        "//hash_frx:sha256",
-        "//hash_frx:sha512",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),
@@ -160,20 +159,20 @@ py_test(
     deps = [
         ":package_sweep",
         "//hash_frx",
-        "//hash_frx:blake2s",
         "//hash_frx:markers",
-        "//hash_frx:ripemd160",
-        "//hash_frx:sha256",
-        "//hash_frx:sha512",
-        "//hash_frx:sm3",
         "//hash_frx:sponge",
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
+        "//hash_frx/blake2s",
         "//hash_frx/blake3",
         "//hash_frx/grostl",
         "//hash_frx/keccak",
         "//hash_frx/poseidon",
         "//hash_frx/poseidon2",
+        "//hash_frx/ripemd160",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
+        "//hash_frx/sm3",
         "//hash_frx/vision",
         requirement("absl_py"),
     ] + GPU_PLUGIN_DEPS,
@@ -185,24 +184,24 @@ py_test(
     srcs = ["fusion_path_test.py"],
     deps = [
         ":rows",
-        "//hash_frx:blake2s",
         "//hash_frx:byte_hash",
         "//hash_frx:compression",
         "//hash_frx:duplex_sponge",
         "//hash_frx:fusion",
-        "//hash_frx:ripemd160",
-        "//hash_frx:sha256",
-        "//hash_frx:sha512",
-        "//hash_frx:sm3",
         "//hash_frx:sponge",
         "//hash_frx/ascon",
         "//hash_frx/blake2b",
+        "//hash_frx/blake2s",
         "//hash_frx/blake3",
         "//hash_frx/grostl",
         "//hash_frx/keccak",
         "//hash_frx/poseidon",
         "//hash_frx/poseidon2",
         "//hash_frx/poseidon2/testing:koalabear16",
+        "//hash_frx/ripemd160",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
+        "//hash_frx/sm3",
         "//hash_frx/vision",
         requirement("absl_py"),
         requirement("frx"),
@@ -229,6 +228,7 @@ py_test(
     deps = [
         ":random_field",
         "//hash_frx:fusion",
+        "//hash_frx:markers",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
@@ -278,6 +278,21 @@ py_test(
         requirement("frx"),
         requirement("numpy"),
     ],
+)
+
+# The ladder's device branch needs a materialized array, which is why these
+# cases are here and not in `byte_hash_test` — that target is deliberately pure
+# numpy and takes no GPU plugin wheels.
+py_test(
+    name = "capacity_test",
+    size = "small",
+    srcs = ["capacity_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
@@ -341,143 +356,17 @@ py_library(
     deps = [requirement("frx")],
 )
 
-# The plain-python RIPEMD-160 oracle: ints and bytes only, no frx, so the
-# differential tests hold the frx implementation to something that shares none
-# of its lowering rules. Lives here rather than in a family package because
-# the device hash is the single top-level module `hash_frx/ripemd160.py` (the
-# sha256 shape), and this directory is that module's `testing/`.
-py_library(
-    name = "ripemd160_reference",
-    testonly = True,
-    srcs = [
-        "__init__.py",
-        "ripemd160_reference.py",
-    ],
-    visibility = ["//hash_frx:__subpackages__"],
-)
-
-# No device work: plain python against the designers' published vectors
-# (million-"a" included), so the CUDA plugin wheels would be ~430 MB of
-# runfiles for nothing.
+# The BLAKE2 parameter block. Host-only and substrate-free — the module under
+# test pulls no frx, so this target takes neither the frx requirement nor the
+# GPU plugin, which is itself part of what the suite asserts.
 py_test(
-    name = "ripemd160_reference_test",
+    name = "blake2_params_test",
     size = "small",
-    srcs = ["ripemd160_reference_test.py"],
+    srcs = ["blake2_params_test.py"],
     deps = [
-        ":ripemd160_reference",
+        "//hash_frx:blake2_params",
         requirement("absl_py"),
     ],
-)
-
-# Testonly, unlike the SHA-2/SHA-3 host siblings: OpenSSL 3 moved RIPEMD-160
-# to the legacy provider, so no dependable C binding exists and this one loops
-# the plain-python oracle — the differential partner only, never a shipped
-# fast path (the `grostl/testing:host_grostl256` asymmetry, stated in the
-# module docstring).
-py_library(
-    name = "host_ripemd160",
-    testonly = True,
-    srcs = [
-        "__init__.py",
-        "host_ripemd160.py",
-    ],
-    visibility = ["//hash_frx:__subpackages__"],
-    deps = [
-        ":ripemd160_reference",
-        "//hash_frx:byte_hash",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
-)
-
-py_test(
-    name = "blake2s_test",
-    # Compile-heavy relative to its arithmetic, like the family's other
-    # unrolled digests: the vector rows and the differential sweep each
-    # compile the 80-G unrolled body once per (batch, length) aval, and the
-    # GPU leg repeats it.
-    size = "large",
-    srcs = ["blake2s_test.py"],
-    deps = [
-        ":jit_cache",
-        "//hash_frx:blake2s",
-        "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "sm3_test",
-    # The fori_loop round body keeps the trace small (the sha256/sha512
-    # arrangement), so this compiles fast relative to the unrolled digests.
-    size = "medium",
-    srcs = ["sm3_test.py"],
-    deps = [
-        ":jit_cache",
-        "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
-        "//hash_frx:sha256",
-        "//hash_frx:sm3",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "ripemd160_test",
-    # Compile-heavy relative to its arithmetic: the vector rows and the
-    # differential sweep each compile the unrolled 160-step digest body once
-    # per (batch, length) aval.
-    size = "medium",
-    srcs = ["ripemd160_test.py"],
-    deps = [
-        ":host_ripemd160",
-        ":jit_cache",
-        ":ripemd160_reference",
-        "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
-        "//hash_frx:ripemd160",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "sha256_test",
-    size = "medium",
-    srcs = ["sha256_test.py"],
-    deps = [
-        ":marker_recognized",
-        "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
-        "//hash_frx:sha256",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "sha512_test",
-    # Compile-heavy like grostl_test: the traced sweep compiles the 80-round
-    # chain once per (batch, length) aval, and the GPU leg repeats it.
-    size = "large",
-    srcs = ["sha512_test.py"],
-    deps = [
-        ":jit_cache",
-        "//hash_frx:byte_hash",
-        "//hash_frx:fusion",
-        "//hash_frx:sha256",
-        "//hash_frx:sha512",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
@@ -538,74 +427,13 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
-py_test(
-    name = "sha256_stream_test",
-    size = "medium",
-    srcs = ["sha256_stream_test.py"],
-    deps = [
-        "//hash_frx:sha256",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "hmac_test",
-    size = "small",
-    srcs = ["hmac_test.py"],
-    deps = [
-        "//hash_frx:hmac",
-        "//hash_frx:sha256",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "pbkdf2_test",
-    # The BIP-39 case runs a real c = 2048 chain and the differentials spin
-    # traced loops per (profile, c, dk_len) cell — loop-heavy rather than
-    # compile-heavy.
-    size = "medium",
-    srcs = ["pbkdf2_test.py"],
-    deps = [
-        "//hash_frx:blake2s",
-        "//hash_frx:hmac",
-        "//hash_frx:pbkdf2",
-        "//hash_frx:sha256",
-        "//hash_frx:sha512",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "hkdf_test",
-    size = "small",
-    srcs = ["hkdf_test.py"],
-    deps = [
-        "//hash_frx:hkdf",
-        "//hash_frx:hmac",
-        "//hash_frx:sha256",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "sha512_stream_test",
-    # Compile-heavy: sha256_stream_test's sweep at doubled block/window
-    # shapes — every (pending, length) aval compiles its own absorb schedule.
-    size = "large",
-    srcs = ["sha512_stream_test.py"],
-    deps = [
-        "//hash_frx:sha512",
-        requirement("absl_py"),
-        requirement("frx"),
-        requirement("numpy"),
-    ] + GPU_PLUGIN_DEPS,
+py_library(
+    name = "oracle",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "oracle.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("numpy")],
 )

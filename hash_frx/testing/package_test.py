@@ -85,7 +85,7 @@ class PublicApiSurfaceTest(absltest.TestCase):
         # backend; binding the names eagerly here would move that onto `import
         # hash_frx` and defeat `markers.py`'s "readable free of every hash's
         # dependencies" property. Measured at the commit that added this:
-        # `import hash_frx` 0.1 ms, `import hash_frx.sha256` 54 ms + a live
+        # `import hash_frx` 0.1 ms, `import hash_frx.sha256.sha256` 54 ms + a live
         # backend.
         self.assertNotIn("frx", sys.modules)
         self.assertEqual([m for m in sys.modules if m.startswith("hash_frx.")], [])

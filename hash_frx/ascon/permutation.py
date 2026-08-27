@@ -43,6 +43,7 @@ from hash_frx.fusion import (
     FusionPath,
     fused_region,
     inert_region_spec,
+    permute_marker,
     routing,
 )
 from hash_frx.word import roll
@@ -70,11 +71,11 @@ ASCON_P_MARKER = "hash_frx.perm.ascon_p"
 ASCON_P_MARKER_VERSION = 1
 
 # Whether the pinned Fractalyze XLA plugin ships a dedicated Ascon-p emitter,
-# and on which backends. None exists yet — the pre-emitter posture `vision` and
-# `grostl` hold, and the one `ascon.ascon_hash256_bytes` holds for the digest
-# marker: both flags flip together with the `frx>=` floor in `pyproject.toml`
-# when an emitter lands, and `fusion_path_test`'s matrix law holds them to
-# agree. Until then `permute` carries the generic region marker.
+# and on which backends. None exists yet — the pre-emitter posture the other
+# emitterless families hold, and the one `ascon.ascon_hash256_bytes` holds for
+# the digest marker: both flags flip together with the `frx>=` floor in
+# `pyproject.toml` when an emitter lands, and `fusion_path_test`'s matrix law
+# holds them to agree. Until then `permute` carries the generic region marker.
 _DEDICATED_EMITTER_AVAILABLE = False
 
 # Which backends have that emitter — a different question from the pin, asked
@@ -115,7 +116,7 @@ def masks() -> Masks:
     Host-built 0/1 vectors would be arrays the decomposition materialises,
     which `lax.composite` lifts into unnamed operands ahead of the declared
     ABI — so they are counted on device instead, the `iota` remedy of
-    docs/reference/conventions.md (`blake3._counters` is the precedent).
+    docs/reference/conventions.md (`blake3.modes._counters` is the precedent).
     Computed once per permutation or digest and shared by every round.
 
     - ``pre``: words {0, 2, 4} — the even positions, `(i & 1) ^ 1`.
@@ -313,13 +314,7 @@ class AsconP:
         # is a value the permutation carries, and a test can construct both
         # routings in one process.
         name = ASCON_P_MARKER if _routes_to_dedicated_emitter() else FUSED_REGION_MARKER
-        # A generic region carries no version: the recognizer reads only the
-        # name there, so a version would claim a contract the marker does not
-        # have.
-        self.fused_region_marker = (
-            name,
-            ASCON_P_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, ASCON_P_MARKER_VERSION)
         self.fusion_path = FusionPath.from_marker(name)
 
     def __eq__(self, other: object) -> bool:

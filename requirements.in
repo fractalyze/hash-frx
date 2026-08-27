@@ -22,19 +22,17 @@
 # rationale there).
 #
 # `blake3` is the BLAKE3 team's own Rust binding, and the one runtime dependency
-# here that is not frx or numpy. It backs the `HostBlake3*` rows, which need a
-# native BLAKE3 the way the other host rows need `hashlib` — the standard library
-# ships `blake2b`/`blake2s` and will not ship BLAKE3. Taking it rather than the
-# in-tree `blake3/testing/reference.py` oracle is deliberate twice over: the
-# oracle is test-only code and orders of magnitude slower than the device
-# dispatch a host row exists to beat, and a differential test against this tree's
-# own transcription of the spec proves far less than one against the reference
-# the published vectors come from (`docs/reference/conventions.md`, byte-exactness).
+# here that is not frx or numpy, and since the host rows went (#324) it is a TEST
+# dependency rather than a runtime one — `pyproject.toml` no longer lists it.
+# The BLAKE3 suites hash against it because a differential test against this
+# tree's own transcription of the spec proves far less than one against the
+# reference the published vectors come from (`docs/reference/conventions.md`,
+# byte-exactness), and the standard library has no BLAKE3 to stand in.
 absl-py
 numpy
 blake3
-frx==0.10.2.dev20260823002126
-frxlib==0.10.2.dev20260823002126
-frx-cuda12-pjrt==0.10.2.dev20260823002126
-frx-cuda12-plugin==0.10.2.dev20260823002126
+frx==0.10.2.dev20260826215637
+frxlib==0.10.2.dev20260826215637
+frx-cuda12-pjrt==0.10.2.dev20260826215637
+frx-cuda12-plugin==0.10.2.dev20260826215637
 zk-dtypes==0.0.17

@@ -6,8 +6,7 @@ the one place the *facts* those switches encode — which backends carry which
 dedicated emitters — are spelled together, independently of the production
 tuples, so a tuple edit is a conscious two-place change rather than a silent
 routing move. The states themselves are pinned with the cells: an absent
-backend reads GENERIC (device, traceable, un-routed), never HOST, and a host
-row reads HOST on every leg.
+backend reads GENERIC (traceable, un-routed) rather than losing its cell.
 
 Per-family derivation mechanics (pin veto, backend veto, marker agreement) live
 with each family — `keccak.testing.permutation_test.EmitterGateTest` is the
@@ -22,18 +21,14 @@ import frx
 from absl.testing import absltest
 from zk_dtypes import binary_field_t5
 
-from hash_frx import blake2s as blake2s_mod
-from hash_frx import ripemd160 as ripemd160_mod
-from hash_frx import sha256 as sha256_mod
-from hash_frx import sha512 as sha512_mod
-from hash_frx import sm3 as sm3_mod
 from hash_frx.ascon import ascon as ascon_mod
 from hash_frx.ascon.ascon import AsconHash256, AsconXof128
 from hash_frx.blake2b import blake2b as blake2b_mod
 from hash_frx.blake2b.blake2b import Blake2b
-from hash_frx.blake2s import Blake2s
-from hash_frx.blake3 import byte_hashes as blake3_rows
-from hash_frx.blake3.byte_hashes import Blake3
+from hash_frx.blake2s import blake2s as blake2s_mod
+from hash_frx.blake2s.blake2s import Blake2s
+from hash_frx.blake3 import rows as blake3_rows
+from hash_frx.blake3.rows import Blake3
 from hash_frx.compression import Compression, CompressionParams
 from hash_frx.duplex_sponge import DuplexSponge
 from hash_frx.fusion import FusionPath
@@ -46,41 +41,57 @@ from hash_frx.poseidon import poseidon as poseidon_mod
 from hash_frx.poseidon import sparse as sparse_mod
 from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
-from hash_frx.ripemd160 import Ripemd160
-from hash_frx.sha256 import Sha256
-from hash_frx.sha512 import (
+from hash_frx.ripemd160 import ripemd160 as ripemd160_mod
+from hash_frx.ripemd160.ripemd160 import Ripemd160
+from hash_frx.sha256 import sha256 as sha256_mod
+from hash_frx.sha256.sha256 import Sha256
+from hash_frx.sha512 import sha512 as sha512_mod
+from hash_frx.sha512.sha512 import (
     Sha384,
     Sha512,
     Sha512_256,
 )
-from hash_frx.sm3 import Sm3
+from hash_frx.sm3 import sm3 as sm3_mod
+from hash_frx.sm3.sm3 import Sm3
 from hash_frx.sponge import Sponge, SpongeParams
-from hash_frx.testing.rows import HOST_ROWS
 from hash_frx.vision import vision as vision_mod
 from hash_frx.vision.params import vision_mark32_params
 from hash_frx.vision.vision import Vision
 
 # The matrix rows: which backends the pinned plugin's dedicated emitters cover,
-# per family. Keccak's arms are GPU-only; the rest run wherever the
+# per family. Grøstl's arm is CPU-only; the rest run wherever the
 # ZorchFusedRegionRewriter (cpu+gpu compilers) routes them — except sparse
 # Poseidon, whose CPU mis-routing cost is measured in `poseidon.sparse`, and
-# Vision, Grøstl, Ascon, RIPEMD-160, SM3 and the BLAKE2 pair, for which no
-# plugin ships an emitter at all.
+# Vision, Ascon, RIPEMD-160 and the BLAKE2 pair, for which no plugin ships an
+# emitter at all.
+#
+# SHA-512 and SM3 arrive with BOTH arms at once, unlike every family above
+# them. They are not per-family emitters: the plugin routes them through its
+# shared words-in Merkle-Damgard envelope, which both compilers already gate
+# on, so registering the compression lit up cpu and gpu in one step. That is
+# also why neither can be CPU-only the way Grøstl is — there is no per-backend
+# arm to ship separately.
+#
+# Keccak covers both legs only from the wheel carrying the CPU sponge emitter.
+# Its two arms had to arrive together: one tuple gates the permute marker and
+# the whole-hash one, and routing the coarser marker to a leg that cannot honour
+# it costs the whole absorb-and-squeeze trace (`keccak.permutation` records the
+# measurement).
 _MATRIX = {
     poseidon_mod: ("cpu", "gpu"),
     poseidon2_mod: ("cpu", "gpu"),
     sparse_mod: ("gpu",),
-    keccak_perm_mod: ("gpu",),
+    keccak_perm_mod: ("cpu", "gpu"),
     vision_mod: (),
     sha256_mod: ("cpu", "gpu"),
-    sha512_mod: (),
+    sha512_mod: ("cpu", "gpu"),
     blake3_rows: ("cpu", "gpu"),
-    grostl_mod: (),
+    grostl_mod: ("cpu",),
     ascon_mod: (),
     ripemd160_mod: (),
     blake2b_mod: (),
     blake2s_mod: (),
-    sm3_mod: (),
+    sm3_mod: ("cpu", "gpu"),
 }
 
 
@@ -97,10 +108,10 @@ class MatrixFactsTest(absltest.TestCase):
 
     def test_the_enum_property_table(self) -> None:
         # Pinned once; the per-impl cases below assert only the member, since
-        # `is_one_kernel` / `is_traceable` are functions of the enum alone.
+        # `is_one_kernel` is a function of the enum alone.
         self.assertEqual(
-            [(p.is_one_kernel, p.is_traceable) for p in FusionPath],
-            [(True, True), (False, True), (False, False)],
+            [p.is_one_kernel for p in FusionPath],
+            [True, False],
         )
 
 
@@ -113,10 +124,10 @@ class DeviceCellTest(absltest.TestCase):
             (Sha256(), _MATRIX[sha256_mod]),
             (Sha3_256(), _MATRIX[keccak_perm_mod]),
             (Blake3(), _MATRIX[blake3_rows]),
-            # The empty rows: GENERIC on every leg, by the same derivation as
-            # an absent backend — never HOST.
-            (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
             (Grostl256(), _MATRIX[grostl_mod]),
+            # The empty rows: GENERIC on every leg, by the same derivation as
+            # an absent backend.
+            (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
             (Sha512(), _MATRIX[sha512_mod]),
             # The truncated variants read the sha512 module's switch — one
             # family row serves all three (the h0-as-operand design).
@@ -136,33 +147,23 @@ class DeviceCellTest(absltest.TestCase):
                 )
                 self.assertIs(impl.fusion_path, expected)
 
-    def test_an_absent_backend_reads_generic_not_host(self) -> None:
-        # The Metal-shaped cell: a device hash on a backend without the arm is
-        # still a device hash — traceable, un-fused — and collapsing it into
-        # HOST is the exact conflation the three-state enum retires. Keccak is
+    def test_an_absent_backend_reads_generic(self) -> None:
+        # The Metal-shaped cell: a hash on a backend without the arm is still
+        # traceable and un-fused rather than unavailable. Keccak is
         # absent from the loop: its family gate test
         # (`keccak.testing.permutation_test.EmitterGateTest`) already owns the
-        # backend-veto mock; these three families have no gate test of their
-        # own.
+        # backend-veto mock, in combinations this loop cannot express; these
+        # four families have no gate test of their own.
         for module, build in (
             (poseidon2_mod, koalabear16_perm),
             (sha256_mod, Sha256),
             (blake3_rows, Blake3),
+            (grostl_mod, Grostl256),
         ):
             with self.subTest(module=module.__name__):
                 with mock.patch.object(module, "_EMITTER_BACKENDS", ("nonesuch",)):
                     impl = build()
                 self.assertIs(impl.fusion_path, FusionPath.GENERIC)
-
-
-class HostCellTest(absltest.TestCase):
-    def test_host_rows_are_host_on_every_leg(self) -> None:
-        # Driven off the shipped-row registry rather than a literal tuple: the
-        # literal had drifted to nine of the fourteen host rows, missing
-        # HostSha3_512, both HostShake sizes and the two keyed BLAKE3 rows.
-        for case in HOST_ROWS:
-            with self.subTest(row=case.name):
-                self.assertIs(case.make().fusion_path, FusionPath.HOST)
 
 
 class ConstructionDelegationTest(absltest.TestCase):

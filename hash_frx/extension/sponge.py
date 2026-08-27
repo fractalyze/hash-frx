@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Sponge: the schedules that feed a permutation a message.
 
-Two of them, and the split is the measurement rather than the intention. Both
+Three of them, and the split is the measurement rather than the intention. All
 run the same construction — merge a block into the rate, permute, repeat; then
 read the rate, permute, read again until enough output is out — but they differ
 on the one axis that does not merge, the **loop form**:
@@ -12,13 +12,21 @@ on the one axis that does not merge, the **loop form**:
 - `field_absorb` walks a runtime counter with a `lax.while_loop`. The field
   sponge takes it, because it reads its bound at runtime so a concrete and a
   symbolic `n` lower the same way.
+- `scanned_absorb` walks a STATIC count with a `lax.scan`, taking its blocks as
+  stacked *values* so the caller indexes nothing. It is what a caller reaches for
+  when the count is large enough that unrolling costs more than a loop boundary.
 
-A body parameterized on which of those two it is would be two bodies behind one
-name, so they are two functions sharing one vocabulary — `pad.SpongePad`,
-`squeeze_blocks`, and the squeeze rule below. The parent epic's XLA spike
-reached the same split from the other side: byte and field absorbs differ only
-in lane load and merge, but field trip counts are runtime operands where byte
-ones are static, so the envelopes keep both forms.
+So the loop form is what a caller's *count* picks, and the three differ again on
+what each hands `absorb` — a Python `int`, a traced index, or the row itself.
+That second axis is why these are three functions rather than one with the loop
+as a parameter: a shared body would have to fix one block contract, and
+`blocks/hash.md` already records why a helper that takes a block and one that
+takes an index are not the same helper. They share one vocabulary instead —
+`pad.SpongePad`, `squeeze_blocks`, and the squeeze rule below, which
+`absorb_squeeze` and a scanned caller both reach through `squeeze`. The parent
+epic's XLA spike reached the first split from the other side: byte and field
+absorbs differ only in lane load and merge, but field trip counts are runtime
+operands where byte ones are static, so the envelopes keep both forms.
 
 **The squeeze rule is the part worth reading, and it is why this is shared at
 all.** The absorb's final permutation has already run when the squeeze starts,
@@ -57,6 +65,7 @@ there.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import lru_cache
 from typing import TypeVar
 
 import frx.numpy as fnp
@@ -73,7 +82,12 @@ R = TypeVar("R")
 
 def squeeze_blocks(output_size: int, rate: int) -> int:
     """Permutations' worth of output a `output_size`-byte request spans, at
-    `rate` bytes each — rounded up, and at least one."""
+    `rate` bytes each — rounded up.
+
+    No floor, unlike `tree.units`: a zero-byte squeeze is zero permutations, and
+    every row here asks for a fixed positive length so the case is unreachable
+    rather than handled. That difference is why the two ceilings do not merge.
+    """
     return -(-output_size // rate)
 
 
@@ -95,14 +109,61 @@ def absorb_squeeze(
     family. `read(state)` takes one output block out of the rate in whatever
     shape the caller assembles; the schedule never looks inside it.
 
-    Both loops are Python-unrolled: the counts are static, and a `lax` loop would
-    be a control-flow boundary (`docs/reference/conventions.md`). The permute
-    between reads is guarded rather than unconditional — see the module
-    docstring for why that guard is the whole point.
+    The absorb is Python-unrolled: the count is static, and a `lax` loop would be
+    a control-flow boundary (`docs/reference/conventions.md`) — see
+    `scanned_absorb` for when that stops being the right trade. The squeeze is
+    `squeeze`'s.
+
+    **What the unrolling costs a marked caller, since the paragraph above says
+    only why it is done.** This body is what `lax.composite` traces to build a
+    whole-hash region, so a caller inside one has an O(1) top-level graph — three
+    equations, whatever the block count — and a compile that is nonetheless
+    LINEAR in it, about 0.2 s per absorb block, paid again per distinct shape.
+    The region's emitter then discards this body and rolls the block loop itself
+    (one `scf.for`), so that cost buys nothing at run time; the body is here to
+    be traced, and to be correct on a backend that declines the marker.
+
+    **The mitigation is not a different route.** Declining the whole-hash marker
+    to get the per-permutation path instead is worse on both axes, because that
+    path unrolls too and its graph grows with the block count rather than staying
+    at three equations: measured on `Sha3_256` at rate 136, 64 absorb blocks, the
+    marked arm compiles in 13.0 s against 104.3 s and runs a batch of 128 in
+    1.5 ms against 19.2 ms. The generic path shares a *kernel* across message
+    lengths, which is the tempting part, but not a *module compile*. A caller
+    that minds the per-shape cost wants a `jit` zone or bucketed lengths, not a
+    marker it declines.
     """
     for i in range(blocks):
         state = permute(absorb(state, i))
 
+    return squeeze(state, squeezes=squeezes, permute=permute, read=read)
+
+
+def squeeze(
+    state: S,
+    *,
+    squeezes: int,
+    permute: Callable[[S], S],
+    read: Callable[[S], R],
+) -> list[R]:
+    """Read `squeezes` output blocks off `state`, permuting between them.
+
+    The squeeze rule on its own, so that an absorb which is not
+    `absorb_squeeze`'s — a scanned one, say — reaches it without restating the
+    guard. The module docstring is where the rule is argued; this is the one
+    place it is spelled.
+
+    Assumes the absorb's final permutation has already run, which every schedule
+    here guarantees.
+
+    **This is the TERMINATING squeeze**, which is why no permutation follows the
+    last read. A RESUMABLE one ends with that permutation instead, because its
+    carry has to point at the next block rather than at the one just returned —
+    `keccak.streaming.ShakeBlockSqueeze.squeeze_blocks` is that shape, and it
+    does not route through here. Worth naming because a trailing permute reads
+    like the dead one this rule forbids, and a genuinely dead one was removed
+    from the sibling schedule once already.
+    """
     out: list[R] = []
     for i in range(squeezes):
         out.append(read(state))
@@ -143,3 +204,89 @@ def field_absorb(
 
     final, _ = lax.while_loop(cond, body, (state, fnp.int32(0)))
     return final
+
+
+def scanned_absorb(
+    state: S,
+    blocks: Array,
+    *,
+    absorb: Callable[[S, Array], S],
+    permute: Callable[[S], S],
+    reverse: bool = False,
+) -> S:
+    """The schedule for a STATIC block count too large to unroll: `blocks` rounds
+    of `permute(absorb(state, block))`, as a `lax.scan`.
+
+    The third loop form, and it exists because "static" and "small" came apart.
+    `absorb_squeeze` unrolls because the contract's rule says a round loop
+    should — round counts are static *and* small, 24 forever. An absorb's count
+    is `len(message) / rate`, which the caller chooses and nothing bounds, and
+    past a few dozen blocks the unrolled graph costs more to compile than the
+    loop boundary costs to keep: measured on `Sha3_256` at rate 136, one traced
+    `digest` per length, the jaxpr grows ~22 eqns per block while the compile
+    goes 5.9 s at 16 blocks, 84.6 s at 32 and 137.0 s at 64, with XLA's own
+    slow-compile alarm firing past that.
+
+    **What separates this from `field_absorb` is the block contract, not the
+    unrolling.** `field_absorb` takes a static `int` bound too, so it already
+    walks a static count without unrolling — but it hands `absorb` a *traced
+    index*, so the caller slices the message itself. This hands the row over as
+    an operand and the caller indexes nothing. Measured on a 25-block, rate-15
+    absorb, both flat at one top-level eqn: the index form lowers to 39 lines
+    with two gathers, this to 32 with the scan's own `dynamic_slice`. The
+    difference is small and the contract is the point — a caller holding its
+    blocks stacked writes no index arithmetic to get here.
+
+    **Which loop form a marked caller may take is the emitter's question.** A
+    generic region admits no control flow at all (`CLAUDE.md`), so a caller
+    inside one must unroll. A name-routed region admits what its emitter's ABI
+    says: `hash_frx.digest.field_sponge` carries a `while` for its runtime absorb
+    length, and `sponge.py` ships exactly that. A loop *around* a marked region
+    is always fine — the region moves into the loop body rather than being
+    destroyed, and each permutation was already its own kernel, so there is no
+    cross-iteration fusion to break.
+
+    `reverse=True` walks the rows from the back, which is what a caller whose
+    layout puts block 0 last wants — it costs two foldable scalar subtracts
+    against a `stablehlo.reverse` over the whole operand.
+
+    The byte sponges do not take this yet, and the reason is structural rather
+    than a missing measurement: `keccak.sponge._absorb_squeeze` serves both the
+    whole-hash `keccak_sponge` region and the generic path from one body, so
+    moving it would mean splitting on `fusion_path` *and* restacking
+    `[B, nb*rate]` into `[nb, B, rate]` for the block contract above. Where the
+    crossover sits is tracked on #278.
+
+    **Reached eagerly, this is only as cheap as `absorb` and `permute` are
+    reusable.** `lax.scan` keys its trace cache on the body's *identity*, and the
+    body is built from those two — so a body built per call misses that cache and
+    re-traces an identical graph every time: 0.0215 s against 0.0001 s at eight
+    blocks, which is worse than the unrolled loop this replaces. `_scan_step`
+    memoizes it on the pair rather than leaving a caller to hoist a body it
+    cannot see. Two consequences: the memo is by *equality*, so a bound method
+    works where raw identity would not (`obj.permute is obj.permute` is False,
+    while the two compare equal); and it is held for the life of the process, so
+    a callback should close over parameters rather than message data — which is
+    what taking `blocks` as an argument is for. Inside a `@jit` zone none of it
+    matters, since the jit cache absorbs the trace.
+    """
+    final, _ = lax.scan(_scan_step(absorb, permute), state, blocks, reverse=reverse)
+    return final
+
+
+@lru_cache(maxsize=None)
+def _scan_step(
+    absorb: Callable[[S, Array], S], permute: Callable[[S], S]
+) -> Callable[[S, Array], tuple[S, None]]:
+    """`scanned_absorb`'s body, memoized so `lax.scan`'s trace cache can hit it.
+
+    One absorb and the permutation the construction puts after it — the same
+    pairing `absorb_squeeze` states, kept here rather than handed to the caller
+    so a scanned caller cannot spell the schedule differently from an unrolled
+    one.
+    """
+
+    def step(carry: S, block: Array) -> tuple[S, None]:
+        return permute(absorb(carry, block)), None
+
+    return step

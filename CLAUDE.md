@@ -9,10 +9,15 @@ rules every change must respect.
 - **Coding conventions — what a primitive is written to, and why the code does
   not read the way a Python reviewer would prefer:**
   [`docs/reference/conventions.md`](docs/reference/conventions.md)
-- **Design notes — why two seams, and what may live in this repo at all:**
+- **Design notes — the primitive / extension / adapter layering, why a schedule
+  is written once per construction, and what may live in this repo at all:**
   [`docs/blocks/hash.md`](docs/blocks/hash.md)
-- **Dev environment — backend selection, the CUDA-12 requirement, running
-  against an unreleased XLA, the compile cache:**
+- **Consuming this package from another repo — the import form, the Bazel dep
+  that goes with it, and what to do about a missing name:**
+  [`docs/reference/consuming.md`](docs/reference/consuming.md)
+- **Dev environment — backend selection, the two test legs (`bazel test` runs
+  only one), the lowering gate a wire-preserving refactor needs, the CUDA-12
+  requirement, running against an unreleased XLA, the compile cache:**
   [`docs/reference/development.md`](docs/reference/development.md)
 - **Detailed design & open decisions:** tracked on GitHub — epic issue
   [fractalyze/hash-frx#1](https://github.com/fractalyze/hash-frx/issues/1).

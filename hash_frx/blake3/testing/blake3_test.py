@@ -27,37 +27,39 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.blake3.blake3 import (
-    BLAKE3_MARKER,
-    BLAKE3_PARENT_MARKER,
+from hash_frx.blake3.compress import (
+    CHUNK_START,
+    DERIVE_KEY_CONTEXT,
+    DERIVE_KEY_MATERIAL,
+    KEYED_HASH,
+)
+from hash_frx.blake3.modes import (
     BLOCK_LEN,
     CHUNK_LEN,
     DIGEST_LEN,
     Mode,
     chaining_value,
     chunk_output,
-    derive_key,
     derive_key_mode,
-    digest,
     hash_mode,
-    keyed_digest,
     keyed_mode,
-    keyed_xof,
-    non_root_digest,
-    parent_digest,
     parent_output,
     root_words,
-    tree_hash,
     tree_output,
     unmarked_hash,
     unmarked_parent_hash,
-    xof,
 )
-from hash_frx.blake3.compress import (
-    CHUNK_START,
-    DERIVE_KEY_CONTEXT,
-    DERIVE_KEY_MATERIAL,
-    KEYED_HASH,
+from hash_frx.blake3.rows import (
+    BLAKE3_MARKER,
+    BLAKE3_PARENT_MARKER,
+    derive_key,
+    digest,
+    keyed_digest,
+    keyed_xof,
+    non_root_digest,
+    parent_digest,
+    tree_hash,
+    xof,
 )
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.emitter import HAS_BLAKE3_EMITTER
@@ -85,7 +87,7 @@ from hash_frx.word import split, unpack_le
 _U32 = np.uint32
 
 
-# `blake3.unmarked_hash` under each mode — the same implementation the shipped
+# `modes.unmarked_hash` under each mode — the same implementation the shipped
 # entry points run, without the marker around it. Read directly where a case
 # wants the body rather than the composite, and stood in for the shipped names by
 # the wrappers below on a leg that cannot afford to compile it.

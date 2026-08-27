@@ -24,7 +24,7 @@ py_library(
 # marker plus the `AsconHash256` ByteHash row, over uint32 lane halves. A
 # standalone hash, not a Permutation; no zk_dtypes / x64 dependency. The host
 # differential partner is testonly
-# (//hash_frx/ascon/testing:host_ascon_hash256) — no C library implements
+# (//hash_frx/ascon/testing:reference) — no C library implements
 # Ascon.
 py_library(
     name = "ascon",
