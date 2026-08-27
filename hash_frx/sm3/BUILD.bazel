@@ -3,8 +3,8 @@ load("@rules_python//python:defs.bzl", "py_library")
 
 # Byte-oriented SM3 (GB/T 32905-2016; ISO/IEC 10118-3): the ShangMi
 # ecosystem's hash, SHA-256's structural cousin — the `digest` batch hash
-# behind the `hash_frx.digest.sm3` marker plus the `Sm3` ByteHash
-# pair. A standalone hash, not a Permutation; no zk_dtypes / x64 dependency.
+# behind the `hash_frx.digest.sm3` marker plus the `Sm3` ByteHash row.
+# A standalone hash, not a Permutation; no zk_dtypes / x64 dependency.
 py_library(
     name = "sm3",
     srcs = [

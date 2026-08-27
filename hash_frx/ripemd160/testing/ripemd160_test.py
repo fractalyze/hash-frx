@@ -186,7 +186,7 @@ class Ripemd160TracedTest(absltest.TestCase):
 
 
 class Ripemd160ByteHashTest(absltest.TestCase):
-    """The two `ByteHash` implementations, against the seam."""
+    """The `ByteHash` row, against the seam."""
 
     def test_impls_satisfy_the_seam(self) -> None:
         h = Ripemd160()

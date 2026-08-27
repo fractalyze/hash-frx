@@ -157,7 +157,7 @@ class Sha256TracedTest(parameterized.TestCase):
 
 
 class Sha256ByteHashTest(parameterized.TestCase):
-    """The two `ByteHash` implementations, against the seam and against each other.
+    """The `ByteHash` row, against the seam and against `hashlib`.
 
     `byte_hash_test.py` stays seam-only — a double, so it runs on a branch where
     no concrete hash exists — which leaves the real class untested by it. This

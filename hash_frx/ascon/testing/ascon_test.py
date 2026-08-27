@@ -175,7 +175,7 @@ class AsconHash256TracedTest(absltest.TestCase):
 
 
 class AsconHash256ByteHashTest(absltest.TestCase):
-    """The two `ByteHash` implementations, against the seam."""
+    """The `ByteHash` row, against the seam."""
 
     def test_impls_satisfy_the_seam(self) -> None:
         h = AsconHash256()

@@ -105,7 +105,7 @@ _EXPORTS: dict[str, str] = {
     "Sponge": "hash_frx.sponge",
     "SpongeChaining": "hash_frx.sponge",
     "SpongeParams": "hash_frx.sponge",
-    # -- rows: device (traceable, return `Array`) --------------------------
+    # -- rows --------------------------
     "AsconHash256": "hash_frx.ascon.ascon",
     "AsconXof128": "hash_frx.ascon.ascon",
     "Blake2b": "hash_frx.blake2b.blake2b",

@@ -95,11 +95,6 @@ def _official_bytes(length: int) -> bytes:
     return official_input(length)
 
 
-def _official_batch(length: int) -> np.ndarray:
-    """The vectors' input at `length`, as a one-message batch."""
-    return np.frombuffer(_official_bytes(length), dtype=np.uint8).reshape(1, length)
-
-
 # Each mode as its two rows, the arguments that name it, and the two published
 # columns it reproduces. Everything below is parameterized over this, because the
 # modes are one body with different parameters and a case that ran for only one of
@@ -207,7 +202,7 @@ class ForwardedVectorTest(parameterized.TestCase):
         # One per layer, so each layer the groups name is on the delegated path:
         # a single compression (64 B), a chunk chain (129 B), a parent-node tree
         # (1025 B).
-        got = np.asarray(cls(*args).digest(_rows(official_input(length))))
+        got = np.asarray(cls(*args).digest(_rows(_official_bytes(length))))
         self.assertEqual(bytes(got[0]).hex(), expected)
 
 
@@ -300,7 +295,8 @@ class SeamConformanceTest(parameterized.TestCase):
         # message proves it no harder — while costing a device row four
         # compression bodies to compile instead of one, twice over for the two
         # output lengths (`_DEVICE_LAYER_LENGTHS` above measures the curve).
-        msg = _rows(official_input(BLOCK_LEN), official_input(BLOCK_LEN))
+        block = _official_bytes(BLOCK_LEN)
+        msg = _rows(block, block)
         for size in (32, 131):
             with self.subTest(output_size=size):
                 out = np.asarray(cls(*args, size).digest(msg))
@@ -356,7 +352,7 @@ class SeamConformanceTest(parameterized.TestCase):
         # identity, so `Blake3().digest != Blake3().digest` even though the two
         # instances are equal. A consumer holds the jitted wrapper, or passes
         # the instance itself where equality is what is read.
-        message = _rows(official_input(65))
+        message = _rows(_official_bytes(65))
         np.testing.assert_array_equal(
             np.asarray(frx.jit(cls(*args).digest)(message)),
             np.asarray(cls(*args).digest(message)),

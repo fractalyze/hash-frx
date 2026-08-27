@@ -149,8 +149,9 @@ class DeviceRow(Row):
 def _require_batch_rank(msg: ArrayLike) -> None:
     """Reject anything that is not the seam's uint8 `[B, L]` batch.
 
-    `device_message` calls this before converting, so the message shape cannot
-    drift: at least six tests match it by regex.
+    Both front doors call it — `device_message` before converting and
+    `message_length` before reading the width — so the two cannot drift, and
+    neither can the message: at least six tests match it by regex.
 
     A 1-D message is the common miss: a single message is `B = 1`, not a bare
     `[L]`. Checked before any conversion, so a wrong rank never reaches a device
