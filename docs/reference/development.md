@@ -7,6 +7,17 @@ The Bazel build is hermetic — it fetches the pinned wheels itself, so
 unreleased XLA. For a first install see the quick start in
 [`../../README.md`](../../README.md).
 
+Several sections below are not specific to this repo — selecting a backend and
+the `FRX_*` prefix, the GPU-leg flags and the control that proves a green leg
+touched the device, the CUDA-major trap, resolving a pinned wheel back to the
+XLA it carries, and why a compile cache belongs to one toolchain build all hold
+for any repo built on these wheels. They are kept here because this page is
+where someone setting the repo up will look, but the canonical copy is the
+playbook's
+[`sections/environment.md`](https://github.com/fractalyze/claude-plugins/blob/main/plugins/playbook/sections/environment.md);
+a correction belongs there first, or the per-repo copies drift — which is how
+this one came to disagree with sig-frx's about the `ptxas` flag.
+
 ## `FRX_*` is an alias for `JAX_*`
 
 FRX is a fork of JAX and keeps JAX's configuration names internally, so its
@@ -50,9 +61,16 @@ soname, so the `nvidia-*-cu12` wheels satisfy it just as well, and pointing
 NV=<venv>/lib/python3.11/site-packages/nvidia
 bazel test --test_env=FRX_PLATFORMS=cuda \
            --test_env=LD_LIBRARY_PATH="$(ls -d $NV/*/lib | paste -sd:)" \
+           --test_env=XLA_FLAGS="--xla_gpu_cuda_data_dir=$NV/cuda_nvcc" \
            --test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false \
            --local_test_jobs=1 //...
 ```
+
+`ptxas` is the reason for the third line: it ships in `cuda_nvcc` rather than
+under a `lib` directory, so `LD_LIBRARY_PATH` does not reach it and XLA is told
+where to look separately. Without it XLA falls back to whatever `ptxas` the
+system has — on a box in this state that is the wrong major, and it is found
+rather than reported missing.
 
 `frx-cuda12-plugin[with-cuda]` is what puts those wheels in a venv;
 [`requirements.in`](../../requirements.in) pins the plugin without that extra,
