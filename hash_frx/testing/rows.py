@@ -49,6 +49,8 @@ from hash_frx import (
     Blake3,
     Blake3DeriveKey,
     Blake3Keyed,
+    CShake128,
+    CShake256,
     Grostl256,
     Hmac,
     Keccak256,
@@ -129,6 +131,26 @@ ALL_ROWS: tuple[RowCase, ...] = (
     RowCase("Keccak256", Keccak256),
     RowCase("Shake128", lambda: Shake128(32), (lambda: Shake128(64),)),
     RowCase("Shake256", lambda: Shake256(64), (lambda: Shake256(32),)),
+    # Each parameter varied alone: varying two at once passes while either
+    # is ignored, and the customization is exactly what must not be.
+    RowCase(
+        "CShake128",
+        lambda: CShake128(b"s", b"n", output_size=32),
+        (
+            lambda: CShake128(b"t", b"n", output_size=32),
+            lambda: CShake128(b"s", b"m", output_size=32),
+            lambda: CShake128(b"s", b"n", output_size=64),
+        ),
+    ),
+    RowCase(
+        "CShake256",
+        lambda: CShake256(b"s", b"n", output_size=64),
+        (
+            lambda: CShake256(b"t", b"n", output_size=64),
+            lambda: CShake256(b"s", b"m", output_size=64),
+            lambda: CShake256(b"s", b"n", output_size=32),
+        ),
+    ),
     RowCase("Blake3", Blake3, (lambda: Blake3(16),)),
     RowCase(
         "Blake3Keyed",

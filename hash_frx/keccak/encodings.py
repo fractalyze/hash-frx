@@ -59,9 +59,9 @@ from __future__ import annotations
 
 # §2.3.1's validity condition. The count `n` prepended by `left_encode` (and
 # appended by `right_encode`) is a single byte, so `x` may occupy at most 255
-# bytes: 8 * 255 = 2040 bits. Spelled as the shift it is rather than as a
-# literal, so the derivation stays visible.
-MAX_ENCODE_BITS = 2040
+# bytes. Written as that product rather than as 2040, so the bound and its
+# reason cannot drift apart.
+MAX_ENCODE_BITS = 8 * 255
 MAX_ENCODE_EXCLUSIVE = 1 << MAX_ENCODE_BITS
 
 

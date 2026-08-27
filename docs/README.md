@@ -103,6 +103,8 @@ without naming one.
 | Ascon-Hash256 and Ascon-XOF128 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` rows over uint32 word halves, plus Ascon-p[12] as a `Permutation` | [`ascon/`](../hash_frx/ascon) |
 | RIPEMD-160 — the little-endian Merkle–Damgård `ByteHash` (Bitcoin HASH160's second half) | [`ripemd160/ripemd160.py`](../hash_frx/ripemd160/ripemd160.py) |
 | The four SHA-3 rows, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
+| cSHAKE128 / cSHAKE256 — SHAKE customized by a function name and a customization string, and why empty `N` and `S` is a branch back to plain SHAKE | [`keccak/cshake.py`](../hash_frx/keccak/cshake.py) |
+| SP 800-185's length encodings (`left_encode`, `bytepad`, …) — the prefixes every SHA-3 derived function is built from, and which of them counts bits | [`keccak/encodings.py`](../hash_frx/keccak/encodings.py) |
 
 ## Fusion machinery
 
