@@ -27,12 +27,17 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
+from hash_frx import markers
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sm3 import sm3
 from hash_frx.sm3.sm3 import Sm3
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import (
+    assert_marker_recognized,
+    emitted_composites,
+)
 from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths: 0/1 (empty + tiny), 55/56 (the one-block/two-block
@@ -117,24 +122,46 @@ def _composite(fn: Any, *args: Any) -> Any:
     return eqns[0]
 
 
+_HAS_SM3_EMITTER = sm3._routes_to_dedicated_emitter()
+
+
 class Sm3MarkerTest(absltest.TestCase):
-    def test_no_leg_routes_an_sm3_marker_yet(self) -> None:
-        # The pre-emitter pin (the Vision/Grøstl arrangement): both module
-        # flags say "no emitter", so every unpatched instance reads GENERIC
-        # on every backend. When an emitter lands these flip with the frx
-        # floor and this case flips to the keccak-style backend gate.
-        self.assertFalse(sm3._DEDICATED_EMITTER_AVAILABLE)
-        self.assertEqual(sm3._EMITTER_BACKENDS, ())
-        self.assertIs(Sm3().fusion_path, FusionPath.GENERIC)
+    def test_routing_is_the_pin_and_the_backend(self) -> None:
+        # The conjunction the keccak family's gate test states. Both halves
+        # are pinned because they move together with the `frx>=` floor, and
+        # both backends are here because the envelope that routes this is
+        # shared rather than per-family — it arrived with both arms at once.
+        self.assertTrue(sm3._DEDICATED_EMITTER_AVAILABLE)
+        self.assertEqual(sm3._EMITTER_BACKENDS, ("cpu", "gpu"))
+        self.assertIs(Sm3().fusion_path, FusionPath.from_routing(_HAS_SM3_EMITTER))
 
     def test_digest_emits_one_composite_with_the_digest_name(self) -> None:
         # The contract's unit: an absent or split marker still computes the
         # right bytes, so only the lowered module shows it. (1, 55) is the
         # differential sweep's aval, so the marker cases add no fresh trace.
+        # The name is the OPERATION one now — the family moved off its own
+        # spelling when the plugin grew a shared words-in envelope, and rides
+        # the `primitive` attribute instead. Matched whole, and the list length
+        # is the composite count, so this pins both which marker is on the wire
+        # and that there is exactly one.
         msg = np.zeros((1, 55), dtype=np.uint8)
-        txt = frx.jit(sm3.digest).lower(msg).as_text()
-        self.assertIn(sm3.SM3_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
+        self.assertEqual(
+            emitted_composites(sm3.digest, msg), [markers.MD_DIGEST_MARKER]
+        )
+
+    def test_the_digest_compiles_to_a_custom_fusion(self) -> None:
+        # What the routing flags CLAIM, checked against what the pinned plugin
+        # actually does. The bytes cannot show it — an unrecognized marker
+        # inlines and computes the same digest — so this asserts the compiled
+        # module, which is where a recognized marker becomes a kCustom fusion.
+        #
+        # `md_digest` is the envelope: SM3 has no emitter of its own, so the
+        # instruction is named for the shared one and the family is pinned by
+        # the `primitive` its config names.
+        if not _HAS_SM3_EMITTER:
+            self.skipTest(f"no SM3 emitter on {frx.default_backend()}")
+        msg = fnp.asarray(np.zeros((1, 55), dtype=np.uint8))
+        assert_marker_recognized(self, "sm3", sm3.digest, msg, envelope_key="md_digest")
 
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         # The wire surface an emitter will read: name, version, and the
@@ -146,8 +173,12 @@ class Sm3MarkerTest(absltest.TestCase):
         # because the fori_loop reads it at a traced round index.
         msg = fnp.asarray(np.zeros((1, 55), dtype=np.uint8))
         eqn = _composite(sm3.digest, msg)
-        self.assertEqual(eqn.params["name"], sm3.SM3_MARKER)
-        self.assertEqual(eqn.params["version"], sm3.SM3_MARKER_VERSION)
+        # One name for every words-in family; SM3 is named by the attribute the
+        # plugin resolves through, not by a suffix.
+        self.assertEqual(eqn.params["name"], markers.MD_DIGEST_MARKER)
+        self.assertEqual(eqn.params["version"], markers.MD_DIGEST_MARKER_VERSION)
+        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(attrs["primitive"], "sm3")
         self.assertLen(eqn.invars, 3)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
         # L = 55: one block once padded (0x80 + the 8-byte length just fit).
@@ -214,12 +245,11 @@ class Sm3ByteHashTest(parameterized.TestCase):
         self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # GENERIC (pre-emitter, every backend), and the traceability tie to
-        # the return type: the row returns an `Array` and takes a tracer
-        # (`byte_hash.py`'s rule).
+        # The routing gate, and the traceability tie to the return type: the
+        # row returns an `Array` and takes a tracer (`byte_hash.py`'s rule).
         msg = np.zeros((1, 1), dtype=np.uint8)
         device = Sm3()
-        self.assertIs(device.fusion_path, FusionPath.GENERIC)
+        self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_SM3_EMITTER))
         self.assertTrue(device.fusion_path.is_traceable)
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)

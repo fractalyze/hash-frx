@@ -130,19 +130,25 @@ class MarkerRegistryTest(absltest.TestCase):
 
 
 class OperationNamedMdDigestTest(absltest.TestCase):
-    """The digest-side flip, unexercised while the flag is off.
+    """The digest-side flip, now shipped ON.
 
-    `OperationNamedPermuteTest`'s sibling. Worth its own class because the two
-    flags flip for different reasons — the permute one to avoid losing fusion
-    the old spellings already have, this one to keep the wire spelling and
-    `fusion_path` moving together — so neither is a proxy for the other.
+    `OperationNamedPermuteTest`'s sibling, and no longer its mirror: that flag
+    is still off. Worth its own class because the two flip for different
+    reasons — the permute one to avoid losing fusion the old spellings already
+    have, this one to keep the wire spelling and `fusion_path` moving together
+    — so neither is a proxy for the other.
     """
 
     def test_off_reports_the_familys_own_spelling(self) -> None:
-        self.assertEqual(
-            markers.words_in_digest_marker("hash_frx.digest.sha512", 1),
-            ("hash_frx.digest.sha512", 1),
-        )
+        # Patched off, because the flag now ships ON: the pinned plugin routes
+        # the operation name. Kept rather than deleted — it is the rollback
+        # path, and the one that fails if the fallback ever stops returning the
+        # family's own spelling verbatim.
+        with mock.patch.object(markers, "_OPERATION_NAMED_MD_DIGEST", False):
+            self.assertEqual(
+                markers.words_in_digest_marker("hash_frx.digest.sha512", 1),
+                ("hash_frx.digest.sha512", 1),
+            )
 
     def test_on_reports_the_operation_name_for_every_family(self) -> None:
         # One name and one version whatever the family was; the primitive
@@ -150,14 +156,15 @@ class OperationNamedMdDigestTest(absltest.TestCase):
         # WORDS-IN families migrate, so the list is explicit rather than every
         # DIGEST row — the raw-bytes forms and the sponges are different wire
         # ABIs that keep their own names.
+        # Unpatched: this is the shipped state now, so the assertion runs
+        # against the flag as configured rather than against a mocked one.
         words_in = ["hash_frx.digest.sha512", "hash_frx.digest.sm3"]
-        with mock.patch.object(markers, "_OPERATION_NAMED_MD_DIGEST", True):
-            for name in words_in:
-                with self.subTest(marker=name):
-                    self.assertEqual(
-                        markers.words_in_digest_marker(name, 1),
-                        (markers.MD_DIGEST_MARKER, markers.MD_DIGEST_MARKER_VERSION),
-                    )
+        for name in words_in:
+            with self.subTest(marker=name):
+                self.assertEqual(
+                    markers.words_in_digest_marker(name, 1),
+                    (markers.MD_DIGEST_MARKER, markers.MD_DIGEST_MARKER_VERSION),
+                )
 
     def test_the_operation_name_is_not_inside_the_digest_namespace(self) -> None:
         # The bare stem and the namespace differ by one trailing dot, and a

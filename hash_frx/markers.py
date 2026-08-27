@@ -109,25 +109,28 @@ MD_DIGEST_MARKER = "hash_frx.digest"
 # (`[h0, constants, blocks] -> digest bytes`), not any family's parameters.
 MD_DIGEST_MARKER_VERSION = 1
 
-# Emitted only where the pinned plugin recognizes it. The recognizer landed in
-# fractalyze/xla#625, together with the SHA-512 (#626) and SM3 (#627) entries it
-# routes; this stays False until the `frx>=` floor moves to a wheel carrying
-# them.
+# ON: the `frx>=` floor now carries the recognizer (fractalyze/xla#625, with the
+# SHA-512 and SM3 registry entries it routes), so the operation name reaches a
+# real emitter rather than inlining.
 #
-# **The reason differs from `_OPERATION_NAMED_PERMUTE`'s, and copying that
-# rationale here would be wrong.** Flipping the permute name early loses fusion,
-# because the per-primitive permute spellings route TODAY. These do not: xla#625
-# resolves a words-in digest through `IsSha256Marker` or the operation name, and
-# `hash_frx.digest.sha512` / `…sm3` match neither — they reach no recognizer on
-# any pin, so there is no fusion for an early flip to lose.
+# It went on in ONE commit with both families' `_DEDICATED_EMITTER_AVAILABLE`
+# and the floor itself, which is what the gate existed to buy. The name alone
+# would have left `fusion_path` reporting `GENERIC` while the lowering became a
+# kernel underneath it — metadata lying about what it describes, which is
+# exactly what `fusion_path_test`'s matrix law exists to catch.
 #
-# What the gate buys instead is that the wire spelling and `fusion_path` move in
-# ONE commit, together with each family's `_DEDICATED_EMITTER_AVAILABLE`. Flip
-# the name alone and a later pin bump would start routing these to real kernels
-# while `fusion_path` still reported `GENERIC` — metadata lying about a
-# lowering that changed underneath it, which is exactly what `fusion_path_test`'s
-# matrix law exists to prevent.
-_OPERATION_NAMED_MD_DIGEST = False
+# **The reason this was gated differs from `_OPERATION_NAMED_PERMUTE`'s, and
+# copying that rationale would be wrong.** Flipping the permute name early loses
+# fusion, because the per-primitive permute spellings route TODAY. These never
+# did: a words-in digest resolved through `IsSha256Marker` or the operation
+# name, and `hash_frx.digest.sha512` / `…sm3` matched neither, so there was no
+# fusion for an early flip to lose — only the metadata disagreement above.
+#
+# Only the two families that ride `words_in_digest_marker` move. SHA-256 keeps
+# its own spelling: it is the one words-in family whose per-family name the
+# plugin still recognizes, so moving it is a separate change with a rollback
+# story of its own.
+_OPERATION_NAMED_MD_DIGEST = True
 
 
 def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:
