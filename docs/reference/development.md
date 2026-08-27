@@ -150,6 +150,42 @@ shows the card empty afterwards because the hogs have exited. The
 `Could not get kernel mode driver version` warning printed on every GPU run is
 unrelated and benign.
 
+## A suite that grows needs its ceiling re-checked in the same PR
+
+Bazel's `size` carries a timeout (`small` 60 s, `medium` 300 s, `large` 900 s),
+and a target that outgrows it does not fail when it grows. It fails later, for
+someone else, because a passing result stays **cached** until something
+invalidates it — and what invalidates it is usually an unrelated change to a
+dependency. A docstring edit in `byte_hash.py` is enough.
+
+So the PR that adds the sweeps sees a green cached result, and the next PR to
+touch anything upstream pays for them. It has happened twice:
+
+| growth | left the target at | timed out in |
+|---|---|---|
+| SHA3-224/384 joined `byte_hashes_test`'s case table | 271 s of 300 s | an unrelated keccak PR |
+| Ascon-CXOF128 joined `ascon_test` (380 s → 790 s) | 790 s of 900 s | an unrelated keccak PR |
+
+Both times `main` was green — on margin, not headroom. Which worker picks the
+target up decides it; the same test measured 173 s and 271 s on consecutive runs.
+
+**If your PR adds cases to a suite, read that target's last CI duration and
+compare it to its ceiling.** Not the local number: the CI executor is slower and
+its spread is wide.
+
+Buying room:
+
+- `timeout = "long"` (900 s) or `"eternal"` (3600 s) beside an unchanged `size`
+  when the cost is wall clock — XLA compiles, not memory or cores. This is the
+  common case here, and `blake3_test` is the precedent.
+- `size = "large"` when the target really does want a bigger resource class.
+
+Record the measured numbers in the BUILD comment. The next person to look will
+be deciding whether to trim the suite instead, and that decision needs to know
+where the seconds actually went — for these suites it is re-tracing the fused
+composite once per distinct `(rate, output_size, batch shape)`, not the
+plain-Python oracles, which are milliseconds.
+
 ## The lowering gate, for a change that must not move the wire
 
 A refactor that is supposed to move code and nothing else needs a gate the
