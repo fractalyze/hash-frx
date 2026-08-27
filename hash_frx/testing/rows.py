@@ -72,6 +72,10 @@ from hash_frx import (
     Shake128,
     Shake256,
     Sm3,
+    TupleHash128,
+    TupleHash256,
+    TupleHashXof128,
+    TupleHashXof256,
 )
 
 _KEY_A = bytes(range(32))
@@ -198,6 +202,41 @@ ALL_ROWS: tuple[RowCase, ...] = (
             lambda: KmacXof256(_KEY_B, b"s", output_size=64),
             lambda: KmacXof256(_KEY_A, b"t", output_size=64),
             lambda: KmacXof256(_KEY_A, b"s", output_size=32),
+        ),
+    ),
+    # TupleHash rows keep the equality contract without implementing the seam —
+    # their input is a sequence, so `row_conformance_test`'s `BYTE_HASH_ROWS`
+    # half correctly passes them by, and this half still holds their cache key.
+    RowCase(
+        "TupleHash128",
+        lambda: TupleHash128(b"s", output_size=32),
+        (
+            lambda: TupleHash128(b"t", output_size=32),
+            lambda: TupleHash128(b"s", output_size=64),
+        ),
+    ),
+    RowCase(
+        "TupleHash256",
+        lambda: TupleHash256(b"s", output_size=64),
+        (
+            lambda: TupleHash256(b"t", output_size=64),
+            lambda: TupleHash256(b"s", output_size=32),
+        ),
+    ),
+    RowCase(
+        "TupleHashXof128",
+        lambda: TupleHashXof128(b"s", output_size=32),
+        (
+            lambda: TupleHashXof128(b"t", output_size=32),
+            lambda: TupleHashXof128(b"s", output_size=64),
+        ),
+    ),
+    RowCase(
+        "TupleHashXof256",
+        lambda: TupleHashXof256(b"s", output_size=64),
+        (
+            lambda: TupleHashXof256(b"t", output_size=64),
+            lambda: TupleHashXof256(b"s", output_size=32),
         ),
     ),
     RowCase("Blake3", Blake3, (lambda: Blake3(16),)),

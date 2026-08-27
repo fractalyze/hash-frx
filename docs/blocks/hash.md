@@ -274,6 +274,31 @@ ipad/opad wrapper over a block-oriented hash, KMAC is a sponge absorbing a
 length-encoded key inside its own message, and no hash, block size or pad byte
 turns one into the other.
 
+## SP 800-185 coverage, and the one function declined
+
+The SHA-3 derived functions land as three constructions over one shared encoding
+layer ([`keccak/encodings.py`](../../hash_frx/keccak/encodings.py)):
+cSHAKE ([`keccak/cshake.py`](../../hash_frx/keccak/cshake.py)), KMAC
+([`keccak/kmac.py`](../../hash_frx/keccak/kmac.py)) and TupleHash
+([`keccak/tuple_hash.py`](../../hash_frx/keccak/tuple_hash.py)), each with its
+XOF form where the standard names one. Every published sample vector passes.
+
+**ParallelHash is declined, and this line is the decision rather than the gap.**
+It is the fourth function SP 800-185 defines (§6) and the only one not here, for
+three reasons that hold together and would each have to change:
+
+- It is a *tree* hash with a block-size parameter, so it is a new schedule
+  rather than another layer over the encodings — the other three are the same
+  cSHAKE absorb with different bytes in front. Nothing it needs is written yet.
+- BLAKE3 already occupies the fast-tree-hash slot here, with a native keyed mode
+  and an in-tree implementation consumers reach for.
+- It has essentially no deployment, and no consumer of this package has asked.
+
+If one does, the encodings it needs — `left_encode(B)`, `right_encode(n)` — are
+already present and pinned, so the work is the tree schedule and its marker, not
+the layer under it. Reopening the decision means naming the consumer; a gap with
+a written reason is a decision, and a gap without one is an oversight.
+
 ## What may live here at all
 
 The seams keep a *consumer* from naming a hash. The reverse obligation — keeping

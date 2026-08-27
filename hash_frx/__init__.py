@@ -130,6 +130,14 @@ _EXPORTS: dict[str, str] = {
     "kmac256": "hash_frx.keccak.kmac",
     "kmac_xof128": "hash_frx.keccak.kmac",
     "kmac_xof256": "hash_frx.keccak.kmac",
+    "TupleHash128": "hash_frx.keccak.tuple_hash",
+    "TupleHash256": "hash_frx.keccak.tuple_hash",
+    "TupleHashXof128": "hash_frx.keccak.tuple_hash",
+    "TupleHashXof256": "hash_frx.keccak.tuple_hash",
+    "tuple_hash128": "hash_frx.keccak.tuple_hash",
+    "tuple_hash256": "hash_frx.keccak.tuple_hash",
+    "tuple_hash_xof128": "hash_frx.keccak.tuple_hash",
+    "tuple_hash_xof256": "hash_frx.keccak.tuple_hash",
     "Ripemd160": "hash_frx.ripemd160.ripemd160",
     "Sha256": "hash_frx.sha256.sha256",
     "Sha384": "hash_frx.sha512.sha512",
@@ -274,6 +282,14 @@ if TYPE_CHECKING:
     from hash_frx.keccak.streaming import shake128_init as shake128_init
     from hash_frx.keccak.streaming import shake256_init as shake256_init
     from hash_frx.keccak.streaming import shake_init as shake_init
+    from hash_frx.keccak.tuple_hash import TupleHash128 as TupleHash128
+    from hash_frx.keccak.tuple_hash import TupleHash256 as TupleHash256
+    from hash_frx.keccak.tuple_hash import TupleHashXof128 as TupleHashXof128
+    from hash_frx.keccak.tuple_hash import TupleHashXof256 as TupleHashXof256
+    from hash_frx.keccak.tuple_hash import tuple_hash128 as tuple_hash128
+    from hash_frx.keccak.tuple_hash import tuple_hash256 as tuple_hash256
+    from hash_frx.keccak.tuple_hash import tuple_hash_xof128 as tuple_hash_xof128
+    from hash_frx.keccak.tuple_hash import tuple_hash_xof256 as tuple_hash_xof256
     from hash_frx.markers import MARKERS as MARKERS
     from hash_frx.markers import Marker as Marker
     from hash_frx.markers import MarkerKind as MarkerKind

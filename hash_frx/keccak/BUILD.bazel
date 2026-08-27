@@ -23,6 +23,7 @@ py_library(
         "permutation.py",
         "sponge.py",
         "streaming.py",
+        "tuple_hash.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
