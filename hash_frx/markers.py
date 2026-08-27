@@ -133,6 +133,31 @@ MD_DIGEST_MARKER_VERSION = 1
 _OPERATION_NAMED_MD_DIGEST = True
 
 
+# The operation-named Merkle-Damgard STREAM FINALIZE marker: finish a hash from
+# a live midstate at a runtime stream position, with the compression carried in
+# the `primitive` composite attribute.
+#
+#   [h, consts..., pending u8[block], counts s32[2], extras u8[..., E]]
+#
+# A third MD schema and so a third operation name, on the rule
+# `MD_DIGEST_MARKER` states: the message here is not a block count but a stream
+# POSITION. `counts` is `[pending_len, total_len]` and rides as a runtime
+# OPERAND, which is the point — a producer tracing this hop cannot know how many
+# blocks the padded tail spans, so it emits both candidates and selects between
+# them, and a kernel taking the position as an operand runs one.
+#
+# **Flat, not `hash_frx.stream.finalize`.** An operation name is a sibling of
+# the other operations, not a child of one — `markers_test` holds every one of
+# them to a single segment, and a dotted spelling would read as "the finalize of
+# a primitive called stream". `stream_absorb` and `stream_squeeze` join it as
+# siblings rather than as a namespace.
+STREAM_FINALIZE_MARKER = "hash_frx.stream_finalize"
+
+# One name, one wire ABI, so one version — it tracks the RESUME schema above,
+# not any family's parameters.
+STREAM_FINALIZE_MARKER_VERSION = 1
+
+
 def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:
     """The `(name, version)` a DEDICATED permute marker rides today.
 
@@ -214,6 +239,15 @@ MARKERS: tuple[Marker, ...] = (
     Marker(
         MD_DIGEST_MARKER,
         MD_DIGEST_MARKER_VERSION,
+        MarkerKind.DIGEST,
+        MarkerNaming.OPERATION,
+    ),
+    # The stream FINALIZE: a whole hash too, finished from a midstate rather
+    # than from an IV. Born operation-named -- there is no per-family spelling
+    # to retire, because this schema has never shipped under one.
+    Marker(
+        STREAM_FINALIZE_MARKER,
+        STREAM_FINALIZE_MARKER_VERSION,
         MarkerKind.DIGEST,
         MarkerNaming.OPERATION,
     ),

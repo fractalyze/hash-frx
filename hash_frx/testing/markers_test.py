@@ -78,6 +78,10 @@ _MODULE_CONSTANTS = {
     # every Merkle-Damgard family whose message arrives already packed, so its
     # constant lives with the choice rather than with any one of them.
     markers.MD_DIGEST_MARKER: markers.MD_DIGEST_MARKER_VERSION,
+    # And one schema over again: the stream FINALIZE is emitted by
+    # `extension/md.py` for every MD family, so the constant lives here for the
+    # same reason -- no single family owns an operation name.
+    markers.STREAM_FINALIZE_MARKER: markers.STREAM_FINALIZE_MARKER_VERSION,
 }
 
 

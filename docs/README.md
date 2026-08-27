@@ -157,7 +157,32 @@ both (fractalyze/xla#616), and hash-frx keeps emitting the old ones until the
 `frx>=` floor carries that recognizer — emitting a name the pinned plugin does
 not know costs the fusion silently rather than failing, so the flip follows the
 pin instead of leading it. The other operation names the relayering adds
-(`digest`, `stream.*`, `duplex`) arrive with the envelopes that consume them.
+(`digest`, `stream_*`, `duplex`) arrive with the envelopes that consume them.
+
+The Merkle–Damgård operation names are one per **wire-ABI schema**, not one per
+family. There are two, and a third schema that stays primitive-named:
+
+| name | operands | the message is |
+| --- | --- | --- |
+| `hash_frx.digest` | `[h0, consts…, blocks W[…, nblocks, w]]` | already padded and packed by the producer |
+| `hash_frx.stream_finalize` | `[h, consts…, pending u8[block], counts s32[2], extras u8[…, E]]` | a stream POSITION: `pending[:counts[0]] ‖ extras` |
+
+`hash_frx.digest.sha256_bytes` is the third — raw bytes with the length as an
+operand — and it keeps its per-family name because its recognizer dispatches on
+operands rather than on the name, which is what lets two ABIs ride under it.
+
+What makes `stream_finalize` its own schema is that `counts` —
+`[pending_len, total_len]` — is a **runtime operand**. The strengthening field
+claims `total_len + E`, the whole stream, where the fold covers only
+`pending_len + E`: Merkle–Damgård's resume property, and the reason a resumed
+digest equals a one-shot one over the same bytes. `markers.py` carries why the
+position rides as an operand at all, and why the name is flat.
+
+`E` is bounded above at `block_size - reserve` — `pending_len` is runtime data,
+so only a tail that fits the two-block layout at *every* reachable offset is
+representable. `E = 0` is legal here and is exercised; the pinned recognizer
+declines it rather than fusing it, so such a call inlines. Right bytes, no
+kernel — the ordinary cost of a marker the plugin will not take.
 
 Two of them wrap a whole hash rather than one primitive — `hash_frx.digest.field_sponge`
 over the field sponge, `hash_frx.digest.keccak_sponge` over the byte one — and both are

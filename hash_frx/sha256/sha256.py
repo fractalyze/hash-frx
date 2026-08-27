@@ -326,6 +326,13 @@ def deserialize_digest(digest: Array) -> Array:
     return pack_be(digest)
 
 
+# The compression's key in the plugin's primitive registry. Two markers
+# carry it -- this family's chain, and the stream-finalize region that wraps
+# it -- and they must agree, or the outer would claim a different compression
+# than the one it folds.
+_PRIMITIVE = "sha256"
+
+
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
 # emission, and one PCS open emits the leaf + every internal level of a Merkle
 # commit plus each transcript squeeze — so the uncached re-trace of the 64-round
@@ -333,7 +340,7 @@ def deserialize_digest(digest: Array) -> Array:
 # `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
 # module (one composite marker per chain) is unchanged.
 @partial(frx.jit, inline=True)
-def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
+def sha256_merkle_damgard(h0: Array, blocks: Array, constants: Array = _Kd) -> Array:
     """The SHA-256 compression chain from midstate `h0` (uint32 [8], shared by
     the batch) over `blocks` (uint32 [B, nblocks, 16]) -> uint8 [B, 32]
     serialized final state, as the name-routed `hash_frx.digest.sha256`
@@ -353,11 +360,11 @@ def sha256_merkle_damgard(h0: Array, blocks: Array) -> Array:
     return chain(
         h0,
         blocks,
-        constants=_Kd,
+        constants=constants,
         compress_block=_compress,
         serialize=serialize_digest,
         marker=(SHA256_MARKER, SHA256_MARKER_VERSION),
-        primitive="sha256",
+        primitive=_PRIMITIVE,
     )
 
 
@@ -514,6 +521,8 @@ _STREAM = MdStream(
     block_to_words=block_to_words,
     deserialize=deserialize_digest,
     chain=sha256_merkle_damgard,
+    constants=_Kd,
+    primitive=_PRIMITIVE,
     make_state=Sha256State,
 )
 

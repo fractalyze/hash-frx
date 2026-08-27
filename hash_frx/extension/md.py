@@ -22,6 +22,10 @@ from frx import Array
 
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import fused_region
+from hash_frx.markers import (
+    STREAM_FINALIZE_MARKER,
+    STREAM_FINALIZE_MARKER_VERSION,
+)
 from hash_frx.word import unpack_be, unpack_le
 
 
@@ -168,6 +172,18 @@ class _Midstate(Protocol):
     @property
     def pending(self) -> Array:
         """The trailing partial block, valid prefix `[:pending_len]`."""
+
+    @property
+    def counts(self) -> Array:
+        """`int32[2] = [pending_len, total_len]`, the packed stream position.
+
+        Required as the LEAF rather than as its two properties because it is a
+        positional operand of the stream-finalize ABI: restacking the two
+        halves would emit the slice/reshape/concatenate glue outside the marked
+        region, which is the glue the marker exists to remove. `absorb` already
+        builds it in this layout, so this states a requirement that was already
+        load-bearing.
+        """
 
     @property
     def pending_len(self) -> Array:
@@ -368,10 +384,26 @@ class MdStream:
     pad: PadRule
     block_to_words: Callable[[Array], Array]
     deserialize: Callable[[Array], Array]
-    # (h0, blocks) -> serialized final state; the family's own marked chain, so
-    # the streaming path and the batch digest go through ONE marker.
-    chain: Callable[[Array, Array], Array]
+    # `(h0, blocks, constants) -> serialized final state`, the family's own
+    # marked chain, so the streaming path and the batch digest go through ONE
+    # marker.
+    #
+    # The table is an ARGUMENT rather than the closure's capture so a caller
+    # inside a marked region can thread that region's own operand — the rule
+    # `sha256.compress` states. That is what makes the stream-finalize region's
+    # declared `constants` operand and the table it actually folds the same
+    # value by construction, rather than two independently-supplied ones with
+    # nothing holding them equal.
+    chain: Callable[[Array, Array, Array], Array]
     make_state: Callable[[Array, Array, Array], Any]
+    # The family's constant table and its key in the plugin's primitive
+    # registry. `chain` already closes over both; the STREAM FINALIZE marker
+    # needs them again because its region WRAPS `chain` rather than being it,
+    # and the table is a positional operand of that wider ABI
+    # (`markers.STREAM_FINALIZE_MARKER`). Threaded rather than captured, for
+    # the reason `chain` above states.
+    constants: Array
+    primitive: str
     # No `length_field`: `finalize` derives it from `pad` (`trailer_field`).
 
     def absorb(self, state: _Midstate, data: Array) -> Any:
@@ -424,9 +456,13 @@ class MdStream:
                 combined[: max_blocks * block].reshape(1, max_blocks * block)
             )
             if min_blocks:
-                h_new = self.deserialize(self.chain(h_new, words[:, :min_blocks]))[0]
+                h_new = self.deserialize(
+                    self.chain(h_new, words[:, :min_blocks], self.constants)
+                )[0]
             if max_blocks > min_blocks:
-                h_hi = self.deserialize(self.chain(h_new, words[:, min_blocks:]))[0]
+                h_hi = self.deserialize(
+                    self.chain(h_new, words[:, min_blocks:], self.constants)
+                )[0]
                 h_new = fnp.where(active_blocks == max_blocks, h_hi, h_new)
 
         tail_len = new_len - active_blocks * block
@@ -461,28 +497,63 @@ class MdStream:
                 "two-block finalize layout at every offset — absorb the prefix "
                 "instead"
             )
-        pl = state.pending_len
-        content_len = pl + fnp.int32(e)
-        len_bytes = trailer_field(self.pad, state.total_len + fnp.int32(e))
 
-        # One block only if the content, the 0x80 and the length field all fit.
-        two_blocks = content_len > fnp.int32(block - lb - 1)
-        active_bytes = fnp.where(two_blocks, fnp.int32(2 * block), fnp.int32(block))
+        def decomposition(
+            h: Array,
+            constants: Array,
+            pending: Array,
+            counts: Array,
+            extras: Array,
+            **_attrs: object,
+        ) -> Array:
+            pl = counts[0]
+            content_len = pl + fnp.int32(e)
+            len_bytes = trailer_field(self.pad, counts[1] + fnp.int32(e))
 
-        pos = fnp.arange(2 * block, dtype=fnp.int32)
-        # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:block].
-        combined_src = fnp.concatenate(
-            [fnp.broadcast_to(state.pending, (batch, block)), extras.astype(fnp.uint8)],
-            axis=1,
-        )
-        src_idx = fnp.clip(
-            pos + fnp.where(pos < pl, fnp.int32(0), block - pl), 0, block + e - 1
-        )
-        content = combined_src[:, src_idx]
+            # One block only if the content, the 0x80 and the length field all fit.
+            two_blocks = content_len > fnp.int32(block - lb - 1)
+            active_bytes = fnp.where(two_blocks, fnp.int32(2 * block), fnp.int32(block))
 
-        region = padded_region(self.pad, content, content_len, active_bytes, len_bytes)
+            pos = fnp.arange(2 * block, dtype=fnp.int32)
+            # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:block].
+            combined_src = fnp.concatenate(
+                [fnp.broadcast_to(pending, (batch, block)), extras.astype(fnp.uint8)],
+                axis=1,
+            )
+            src_idx = fnp.clip(
+                pos + fnp.where(pos < pl, fnp.int32(0), block - pl), 0, block + e - 1
+            )
+            content = combined_src[:, src_idx]
 
-        words = self.block_to_words(region)
-        return fnp.where(
-            two_blocks, self.chain(state.h, words), self.chain(state.h, words[:, :1])
+            region = padded_region(
+                self.pad, content, content_len, active_bytes, len_bytes
+            )
+
+            words = self.block_to_words(region)
+            return fnp.where(
+                two_blocks,
+                self.chain(h, words, constants),
+                self.chain(h, words[:, :1], constants),
+            )
+
+        # The whole hop as ONE region. Its ABI is the words-in digest's, one
+        # schema over: the stream POSITION rides as the `counts` operand, so a
+        # recognizing emitter runs the single block count the position implies
+        # where this decomposition emits both candidates and selects.
+        #
+        # Emitted whether or not the pinned plugin knows the name -- an
+        # unrecognized marker only inlines, so being early costs the fusion and
+        # nothing else, which is how every `hash_frx.digest.*` here already
+        # ships. Nothing gates it: unlike a permutation's marker, this one
+        # decides nothing about how anything ELSE lowers.
+        return fused_region(
+            decomposition,
+            state.h,
+            self.constants,
+            state.pending,
+            state.counts,
+            extras,
+            name=STREAM_FINALIZE_MARKER,
+            version=STREAM_FINALIZE_MARKER_VERSION,
+            primitive=self.primitive,
         )
