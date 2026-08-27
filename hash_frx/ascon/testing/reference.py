@@ -1,5 +1,6 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
-"""A plain-Python Ascon-Hash256, as the oracle the frx one is held to.
+"""Plain-Python Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128, as the oracles
+the frx ones are held to.
 
 Transcribed from NIST SP 800-232 (final, August 2025, "Ascon-Based Lightweight
 Cryptography Standards for Constrained Devices",
@@ -19,11 +20,20 @@ little-endian notation"), and writes back the same way. The classic Ascon
 submissions were big-endian, so a transcription from pre-NIST material fails
 every vector below.
 
-The oracle is itself anchored: `reference_test` holds `ascon_hash256` to the
-KAT vectors transcribed below (`KAT_VECTORS`) and `INITIAL_STATE` — derived
-here by permuting IV ‖ 0^256 rather than copied — to the precomputed values
-the SP publishes (Table 12), so agreement with the oracle means agreement
-with Ascon-Hash256 rather than with a second copy of the same misreading.
+The oracles are themselves anchored: `reference_test` holds each to the KAT
+vectors below (provenance on each tuple) and each initial state — derived here
+by permuting IV ‖ 0^256 rather than copied — to the published record, so
+agreement with an oracle means agreement with the standard rather than with a
+second copy of the same misreading. For Ascon-Hash256 that anchor is the
+precomputed state the SP publishes in Table 12; for the two XOFs it is the
+Table 13 IV assembly, which reproduces all three IVs from their version and
+output-length fields.
+
+The three share everything but two constants and one stage: one rate, one
+padding rule, one permutation. Ascon-XOF128 is Ascon-Hash256 at a second IV
+with the output length moved out of the IV and into the caller's request, and
+Ascon-CXOF128 is that at a third IV with a length-encoded customization string
+absorbed ahead of the message.
 """
 
 from __future__ import annotations
@@ -269,5 +279,164 @@ XOF_KAT_VECTORS: tuple[tuple[bytes, str], ...] = (
         bytes(range(64)),
         "0865c2fa92c71058e79e5c4214f3a1505540411586920536ccee85fbf2940b9f"
         "0131385ffe92f15f35bd35373f14d8bf11f078d9850096016f857d27575da423",
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Ascon-CXOF128 (§5.3): Ascon-XOF128 with a customization string absorbed ahead
+# of the message. Same rate, same padding, same absorb and squeeze; a third IV,
+# and one prefix stage.
+# ---------------------------------------------------------------------------
+# The IV layout is Table 13's with version 4 and, like the XOF's, an output
+# length of 0. Derived here from the field assembly rather than transcribed:
+# v ‖ 0^8 ‖ a ‖ b ‖ t ‖ r/8 ‖ 0^16 with v=4, a=b=12, t=0, r/8=8, which
+# reproduces `IV` and `XOF_IV` exactly when given their own version and output
+# length — `reference_test` pins all three against that one assembly, so a
+# mistyped nibble here is a mistyped nibble in the two shipped constants too.
+CXOF_IV = 0x0000080000CC0004
+
+# Derived, not copied, on the same terms as `INITIAL_STATE` and
+# `XOF_INITIAL_STATE`.
+CXOF_INITIAL_STATE: tuple[int, ...] = tuple(permutation([CXOF_IV, 0, 0, 0, 0]))
+
+# A customization string is at most 256 bytes (§5.3: |Z| <= 2048 bits), which
+# is what makes its length field eight bytes and not a variable-width encoding.
+MAX_CUSTOMIZATION_BYTES = 256
+
+
+def customization_prefix(customization: bytes) -> bytes:
+    """The blocks absorbed ahead of the message: `Z0 ‖ Z ‖ pad`.
+
+    `Z0` is the customization's length **in BITS**, as eight little-endian
+    bytes — a full rate block on its own — then the string, then the same
+    Algorithm 2 padding a message gets.
+
+    **This is not cSHAKE's `bytepad`/`encode_string`.** The two solve the same
+    problem and encode it differently, and reading SP 800-232's rule off the
+    SHA-3 family's is the error a self-consistent implementation hides: a fixed
+    eight-byte little-endian BIT count here, against cSHAKE's left-encoded byte
+    count inside a rate-padded envelope. `CXOF_KAT_VECTORS` is what tells the
+    two apart.
+
+    Rate-aligned by construction, since `Z0` is exactly one block and the pad
+    closes `Z` to a boundary.
+    """
+    if len(customization) > MAX_CUSTOMIZATION_BYTES:
+        raise ValueError(
+            f"customization is {len(customization)} bytes; "
+            f"§5.3 allows at most {MAX_CUSTOMIZATION_BYTES}"
+        )
+    z0 = (len(customization) * 8).to_bytes(8, "little")
+    return z0 + customization + pad(len(customization))
+
+
+def ascon_cxof128(msg: bytes, customization: bytes, output_size: int) -> bytes:
+    """Ascon-CXOF128 of `msg` under `customization`, read out to `output_size`
+    bytes (§5.3).
+
+    **The prefix is not a separate schedule.** Both stages absorb rate blocks
+    with a permutation after each, and both are rate-aligned, so the whole hash
+    is `ascon_xof128`'s loop over `customization_prefix(Z) ‖ msg ‖ pad(msg)` at
+    a third initial state. Spelling it as one stream is what the frx side does
+    too, and `CXOF_KAT_VECTORS` holds the equivalence to the published record
+    rather than to an argument.
+    """
+    stream = customization_prefix(customization) + msg + pad(len(msg))
+    state = list(CXOF_INITIAL_STATE)
+    for i in range(0, len(stream), RATE):
+        state[0] ^= int.from_bytes(stream[i : i + RATE], "little")
+        state = permutation(state)
+    out = b""
+    while len(out) < output_size:
+        out += (state[0] & _MASK64).to_bytes(RATE, "little")
+        state = permutation(state)
+    return out[:output_size]
+
+
+# ---------------------------------------------------------------------------
+# Ascon-CXOF128 KAT, from the designers' reference implementation
+# (https://github.com/ascon/ascon-c), crypto_cxof/asconcxof128/
+# LWC_CXOF_KAT_128_512.txt, which carries 1089 rows: every (message,
+# customization) length pair up to 32 bytes each, message byte i = i and
+# customization byte i = 0x10 + i, with 64 bytes of output.
+#
+# `ascon_cxof128` above was checked against ALL 1089 rows while the ones below
+# were extracted; these are the pairs that straddle the 8-byte rate on each
+# axis independently and on both at once, which is where a prefix that mis-pads
+# or a length field written big-endian first disagrees.
+# ---------------------------------------------------------------------------
+CXOF_KAT_VECTORS: tuple[tuple[bytes, bytes, str], ...] = (
+    (
+        bytes(range(0)),
+        bytes(range(0x10, 0x10 + 0)),
+        "4f50159ef70bb3dad8807e034eaebd44c4fa2cbbc8cf1f05511ab66cdcc52990"
+        "5ca12083fc186ad899b270b1473dc5f7ec88d1052082dcdfe69fb75d269e7b74",
+    ),
+    (
+        bytes(range(0)),
+        bytes(range(0x10, 0x10 + 7)),
+        "717a9ba3b3c00f4078572b2d3fb3f0a86d45f70bc4e1cd89cb7a952bfa641623"
+        "83735534ecbe0a7e62e7592cf447404db0361d98c2237245688ead15c05ae59b",
+    ),
+    (
+        bytes(range(0)),
+        bytes(range(0x10, 0x10 + 8)),
+        "61324766441dd6c11e1736bad1d2185820885ed76fe2ce537775a6e855eeafd2"
+        "a6651b5e862a44982765f8b4c7cbe9c8b354f569ead6abc62cc9b7cdd72e0cb3",
+    ),
+    (
+        bytes(range(0)),
+        bytes(range(0x10, 0x10 + 9)),
+        "32fde6b9d290f56fc74aac9368f32c69973e1bab35d96118db7181aae5776876"
+        "73c01a9e35327aded556987eed3441d4f42ec36b0c198498d9e7f357b948d560",
+    ),
+    (
+        bytes(range(1)),
+        bytes(range(0x10, 0x10 + 1)),
+        "63fa8ba86382f2d544580f51322d080424b42c556eb74503cd73cf052bb993bd"
+        "6f5210984c71c9c445f43ccc5b158226e509bd339cd634414377f79411aa8d5c",
+    ),
+    (
+        bytes(range(7)),
+        bytes(range(0x10, 0x10 + 0)),
+        "aa04b2e280d626f649ebc9e6e09bdcb1ed4b4669647fa727064ece4c913e2d62"
+        "f380f31b1b4eb19ab61c77bb49f533df1e4fddba97cde8315411a85a178e940b",
+    ),
+    (
+        bytes(range(8)),
+        bytes(range(0x10, 0x10 + 0)),
+        "2c076d8a559299e39d9c42d271b40cfd1072bebfac53c939b931508885887440"
+        "36579fb25bf87a8a08924bc6194a6a6349dbf3d0046b03661e36466f46002532",
+    ),
+    (
+        bytes(range(9)),
+        bytes(range(0x10, 0x10 + 0)),
+        "f4bde749129c676dc47b76060ac2eecb8e42b169c22783df441dd351ed944a80"
+        "6f30ba8e3d5210927e332459692a40969708183b1e50adcd88c42d664476808e",
+    ),
+    (
+        bytes(range(8)),
+        bytes(range(0x10, 0x10 + 8)),
+        "7c2fc5904cc9ac514902e50747e36f993dbde034cb05587af1432bf81c74b1ec"
+        "87ecf6179701064494487476f607715853d74c5727925ebf4974e25eb8878919",
+    ),
+    (
+        bytes(range(15)),
+        bytes(range(0x10, 0x10 + 16)),
+        "232f99539efc1c4c69cb55cd0699e42f913694314212c0111872515e9d931c23"
+        "30ab8eee54b67d37d05693020c5e777844f4f0f7b214f1cee8a08107eab5026d",
+    ),
+    (
+        bytes(range(16)),
+        bytes(range(0x10, 0x10 + 15)),
+        "1792046c4b783cf55d72f6e4a013de56db4c152cc7a004df1c7e65e56c4587b4"
+        "726f376942b80842ab3b12754958d40ee3242d45aaf994d4ed281807e6a3db1f",
+    ),
+    (
+        bytes(range(32)),
+        bytes(range(0x10, 0x10 + 32)),
+        "f22e68afdbc5ced421b3679e8606666b1e9f080ef42a70ef9bc32d764dddf27f"
+        "cd879490428977c5ac7d7db6cb16c9e26a2cea1586ec0ae2aa5c8b0135cfc38c",
     ),
 )

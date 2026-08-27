@@ -17,14 +17,22 @@ from __future__ import annotations
 from absl.testing import absltest, parameterized
 
 from hash_frx.ascon.testing.reference import (
+    CXOF_INITIAL_STATE,
+    CXOF_IV,
+    CXOF_KAT_VECTORS,
     INITIAL_STATE,
+    IV,
     KAT_VECTORS,
+    MAX_CUSTOMIZATION_BYTES,
+    RATE,
     SBOX,
     XOF_INITIAL_STATE,
     XOF_IV,
     XOF_KAT_VECTORS,
+    ascon_cxof128,
     ascon_hash256,
     ascon_xof128,
+    customization_prefix,
     pad,
     permutation,
 )
@@ -104,6 +112,85 @@ class XofReferenceAnchorTest(parameterized.TestCase):
         # a zero output length, which is how "arbitrary output" is encoded.
         self.assertEqual(XOF_IV, 0x0000080000CC0003)
         self.assertEqual(XOF_INITIAL_STATE, tuple(permutation([XOF_IV, 0, 0, 0, 0])))
+
+
+class CxofReferenceAnchorTest(parameterized.TestCase):
+    """Ascon-CXOF128 (§5.3), held to the published record on both axes."""
+
+    @parameterized.parameters(
+        *((len(m), len(z), m, z, d) for m, z, d in CXOF_KAT_VECTORS)
+    )
+    def test_matches_the_reference_implementation_kat(
+        self, _mlen: int, _zlen: int, msg: bytes, customization: bytes, out_hex: str
+    ) -> None:
+        self.assertEqual(
+            ascon_cxof128(msg, customization, len(out_hex) // 2).hex(), out_hex
+        )
+
+    def test_every_iv_derives_from_one_field_assembly(self) -> None:
+        # §B Table 13 assembles an IV from version, round counts, output length
+        # and rate: v ‖ 0^8 ‖ a ‖ b ‖ t ‖ r/8 ‖ 0^16, read little-endian. The
+        # three rows differ ONLY in the version byte and the output length, so
+        # rebuilding all three from that one rule is what makes the CXOF
+        # constant a reading of the standard rather than a copy of a copy — a
+        # mistyped nibble in it is a mistyped nibble in the two shipped IVs too.
+        def iv(version: int, output_bits: int) -> int:
+            raw = (
+                bytes([version, 0, (12 << 4) + 12])
+                + output_bits.to_bytes(2, "little")
+                + bytes([RATE, 0, 0])
+            )
+            return int.from_bytes(raw, "little")
+
+        self.assertEqual(iv(2, 256), IV)
+        self.assertEqual(iv(3, 0), XOF_IV)
+        self.assertEqual(iv(4, 0), CXOF_IV)
+        self.assertEqual(CXOF_IV, 0x0000080000CC0004)
+        self.assertEqual(CXOF_INITIAL_STATE, tuple(permutation([CXOF_IV, 0, 0, 0, 0])))
+
+    def test_an_empty_customization_is_not_the_plain_xof(self) -> None:
+        # The IVs differ, so CXOF128 with no customization is a DIFFERENT hash
+        # from XOF128 rather than the same one. This is what an implementation
+        # folding CXOF into XOF as an optional keyword gets wrong, and it is
+        # wrong at every input including this one.
+        self.assertNotEqual(ascon_cxof128(b"abc", b"", 32), ascon_xof128(b"abc", 32))
+        self.assertNotEqual(CXOF_INITIAL_STATE, XOF_INITIAL_STATE)
+
+    def test_the_prefix_is_a_bit_length_then_the_string_then_the_pad(self) -> None:
+        # Z0 is the BIT count in eight little-endian bytes — not a byte count,
+        # and not big-endian. Both mistakes keep the block count and fail every
+        # vector, so pinning the bytes says which one happened.
+        self.assertEqual(customization_prefix(b""), (0).to_bytes(8, "little") + pad(0))
+        self.assertEqual(
+            customization_prefix(b"abc"),
+            (24).to_bytes(8, "little") + b"abc" + pad(3),
+        )
+
+    def test_the_prefix_is_rate_aligned_at_every_admissible_length(self) -> None:
+        # Which is what lets the caller prepend these bytes to the padded
+        # message and run ONE absorb loop: if any length left a partial block
+        # the two stages could not be one stream.
+        for n in range(MAX_CUSTOMIZATION_BYTES + 1):
+            self.assertEqual(len(customization_prefix(bytes(n))) % RATE, 0)
+
+    def test_a_customization_over_the_cap_is_refused(self) -> None:
+        # §5.3 bounds |Z| at 2048 bits, which is what makes the length field a
+        # fixed eight bytes; past it the encoding has no defined meaning.
+        customization_prefix(bytes(MAX_CUSTOMIZATION_BYTES))
+        with self.assertRaisesRegex(ValueError, "at most"):
+            customization_prefix(bytes(MAX_CUSTOMIZATION_BYTES + 1))
+
+    def test_a_short_read_is_a_prefix_of_a_long_one(self) -> None:
+        full = ascon_cxof128(b"abc", b"z", 64)
+        for n in (1, 7, 8, 9, 32, 63, 64):
+            self.assertEqual(ascon_cxof128(b"abc", b"z", n), full[:n])
+
+    def test_the_customization_changes_the_digest(self) -> None:
+        # Two customizations of the SAME length, so nothing about the block
+        # count or the padding differs — only the absorbed bytes.
+        self.assertNotEqual(
+            ascon_cxof128(b"abc", b"aaaa", 32), ascon_cxof128(b"abc", b"aaab", 32)
+        )
 
 
 if __name__ == "__main__":
