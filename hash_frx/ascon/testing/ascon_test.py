@@ -30,14 +30,24 @@ from absl.testing import absltest, parameterized
 from frx import Array
 
 from hash_frx.ascon import ascon
-from hash_frx.ascon.ascon import ASCON_HASH256_DIGEST_SIZE, AsconHash256, AsconXof128
+from hash_frx.ascon.ascon import (
+    ASCON_HASH256_DIGEST_SIZE,
+    MAX_CUSTOMIZATION_BYTES,
+    AsconCxof128,
+    AsconHash256,
+    AsconXof128,
+)
 from hash_frx.ascon.testing.reference import (
+    CXOF_INITIAL_STATE,
+    CXOF_KAT_VECTORS,
     INITIAL_STATE,
     KAT_VECTORS,
     XOF_INITIAL_STATE,
     XOF_KAT_VECTORS,
+    ascon_cxof128,
     ascon_hash256,
     ascon_xof128,
+    customization_prefix,
 )
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
@@ -330,6 +340,185 @@ class AsconXof128ByteHashTest(absltest.TestCase):
     def test_jit_matches_eager(self) -> None:
         msg = fnp.asarray(_message(20))
         row = AsconXof128(40)
+        np.testing.assert_array_equal(
+            np.asarray(frx.jit(row.digest)(msg)), np.asarray(row.digest(msg))
+        )
+
+
+class AsconCxof128KatTest(parameterized.TestCase):
+    """Ascon-CXOF128 (§5.3) — the published vectors, then the oracle
+    differentially on both axes."""
+
+    @parameterized.parameters(
+        *((len(m), len(z), m, z, d) for m, z, d in CXOF_KAT_VECTORS)
+    )
+    def test_matches_the_reference_implementation_kat(
+        self, _mlen: int, _zlen: int, msg: bytes, customization: bytes, out_hex: str
+    ) -> None:
+        out_size = len(out_hex) // 2
+        batch = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        got = np.asarray(ascon.cxof128(batch, customization, out_size))
+        self.assertEqual(got.shape, (1, out_size))
+        self.assertEqual(bytes(got[0]).hex(), out_hex)
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_device_and_oracle_agree_over_message_length(self, length: int) -> None:
+        # Message lengths the vectors do not carry, at an output size that is
+        # NOT a rate multiple so the truncation runs.
+        msg = _message(length)
+        got = np.asarray(ascon.cxof128(msg, b"context", 37))
+        for row in range(msg.shape[0]):
+            self.assertEqual(
+                bytes(got[row]).hex(),
+                ascon_cxof128(bytes(msg[row]), b"context", 37).hex(),
+            )
+
+    @parameterized.parameters(0, 1, 7, 8, 9, 15, 16, 31, MAX_CUSTOMIZATION_BYTES)
+    def test_device_and_oracle_agree_over_customization_length(self, zlen: int) -> None:
+        # **The second axis, which is this row's own.** The prefix crosses the
+        # 8-byte rate here rather than in the message: 7/8/9 are the one-block
+        # edge — an 8-byte customization gains a whole padding block, the same
+        # way a message does — and 256 is the §5.3 cap, whose prefix is 34
+        # blocks and which nothing else exercises.
+        customization = bytes(range(0x10, 0x10 + zlen)) if zlen <= 0xEF else bytes(zlen)
+        msg = _message(20)
+        got = np.asarray(ascon.cxof128(msg, customization, 32))
+        for row in range(msg.shape[0]):
+            self.assertEqual(
+                bytes(got[row]).hex(),
+                ascon_cxof128(bytes(msg[row]), customization, 32).hex(),
+            )
+
+    def test_an_empty_customization_is_not_the_plain_xof(self) -> None:
+        # The IVs differ — version 4 against version 3 — so CXOF128 with no
+        # customization is a DIFFERENT hash from XOF128, not the same one with
+        # a setting turned off. This is exactly what folding CXOF into
+        # `AsconXof128` as an optional keyword would have gotten wrong, and it
+        # is wrong at every input.
+        msg = _message(8)
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(ascon.cxof128(msg, b"", 32)),
+                np.asarray(ascon.xof128(msg, 32)),
+            )
+        )
+
+    def test_the_customization_changes_the_digest_at_one_length(self) -> None:
+        # Same length, so the block count and the padding are identical and
+        # only the absorbed bytes differ — a prefix that dropped the string and
+        # kept its length field would pass every shape assertion and fail here.
+        msg = _message(20)
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(ascon.cxof128(msg, b"aaaa", 32)),
+                np.asarray(ascon.cxof128(msg, b"aaab", 32)),
+            )
+        )
+
+    def test_a_short_read_is_a_prefix_of_a_long_one(self) -> None:
+        msg = _message(20)
+        full = np.asarray(ascon.cxof128(msg, b"z", 64))
+        for n in (7, 33):
+            np.testing.assert_array_equal(
+                np.asarray(ascon.cxof128(msg, b"z", n)), full[:, :n]
+            )
+
+    def test_the_initial_state_meets_the_oracle_derivation(self) -> None:
+        # The device module transcribes the precomputed CXOF state; the oracle
+        # derives Ascon-p[12](IV ‖ 0^256) from the Table 13 assembly. Meeting
+        # here pins the transcription against an independent derivation, as it
+        # does for the hash and the XOF.
+        derived = np.array([split(w) for w in CXOF_INITIAL_STATE], dtype=np.uint32)
+        np.testing.assert_array_equal(ascon._CXOF128_INITIAL_STATE, derived)
+
+    def test_the_device_prefix_meets_the_oracle_prefix(self) -> None:
+        # Both build `Z0 ‖ Z ‖ pad`, one through `SpongePad` and one through a
+        # literal pad; they must agree byte for byte at every boundary.
+        for zlen in (0, 1, 7, 8, 9, 16, MAX_CUSTOMIZATION_BYTES):
+            z = bytes(range(zlen)) if zlen < 256 else bytes(zlen)
+            self.assertEqual(
+                bytes(ascon._customization_prefix(z)), customization_prefix(z)
+            )
+
+
+class AsconCxof128MarkerTest(absltest.TestCase):
+    def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
+        msg = fnp.asarray(_message(9))
+        eqn = _composite(lambda m: ascon.cxof128(m, b"ctx", 40), msg)
+        self.assertEqual(eqn.params["name"], ascon.ASCON_CXOF128_MARKER)
+        self.assertEqual(eqn.params["version"], ascon.ASCON_CXOF128_MARKER_VERSION)
+        # FOUR operands, not the other rows' three: the customization blocks
+        # sit between the state and the message. Captured constants would be
+        # lifted in ahead of these, so the count is what says there are none.
+        self.assertLen(eqn.invars, 4)
+        self.assertEqual(eqn.invars[0].aval.shape, (5, 2))
+        self.assertEqual(eqn.invars[1].aval.shape, (len(b"ctx") + 8 + 5,))
+        self.assertEqual(eqn.invars[2].aval.shape, msg.shape)
+
+    def test_the_prefix_shape_follows_the_rate_and_not_the_string(self) -> None:
+        # **A customization's LENGTH does not determine the prefix shape; the
+        # block it pads to does.** One and two bytes both ride in the same
+        # 16-byte prefix — Z0's block plus one padded block — and only crossing
+        # the 8-byte rate adds a block. So an emitter reading the operand shape
+        # learns the block count and nothing about the string, which is the
+        # same posture `tail` already has.
+        msg = fnp.asarray(_message(9))
+
+        def prefix_shape(customization: bytes) -> tuple[int, ...]:
+            eqn = _composite(lambda m: ascon.cxof128(m, customization, 32), msg)
+            return tuple(eqn.invars[1].aval.shape)
+
+        self.assertEqual(prefix_shape(b"a"), prefix_shape(b"ab"))
+        self.assertEqual(prefix_shape(b"a"), (16,))
+        self.assertEqual(prefix_shape(bytes(7)), (16,))
+        self.assertEqual(prefix_shape(bytes(8)), (24,))
+
+    def test_two_customizations_of_one_length_are_two_traces(self) -> None:
+        # The customization is a STATIC argument, so it is baked rather than
+        # passed — two of the same length share every shape in the region and
+        # must still be two compiled programs. The digests are what shows it,
+        # since the aval cannot.
+        msg = fnp.asarray(_message(9))
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(ascon.cxof128(msg, b"aaaa", 32)),
+                np.asarray(ascon.cxof128(msg, b"bbbb", 32)),
+            )
+        )
+
+
+class AsconCxof128ByteHashTest(absltest.TestCase):
+    """What the shared row sweeps do NOT cover — the row is in
+    `testing.rows.ALL_ROWS` and `fusion_path_test`'s matrix, so seam
+    conformance, the parameter law and the fusion-path cell are asserted
+    there."""
+
+    def test_digest_shape_and_dtype(self) -> None:
+        got = AsconCxof128(b"ctx", 37).digest(_message(5))
+        self.assertEqual(got.shape, (4, 37))
+        self.assertEqual(got.dtype, fnp.uint8)
+
+    def test_rejects_a_zero_length_output(self) -> None:
+        with self.assertRaisesRegex(ValueError, "output_size"):
+            AsconCxof128(b"", 0)
+        with self.assertRaisesRegex(ValueError, "output_size"):
+            ascon.cxof128(_message(1), b"", 0)
+
+    def test_rejects_a_customization_over_the_cap(self) -> None:
+        AsconCxof128(bytes(MAX_CUSTOMIZATION_BYTES), 32)
+        with self.assertRaisesRegex(ValueError, "at most"):
+            AsconCxof128(bytes(MAX_CUSTOMIZATION_BYTES + 1), 32)
+
+    def test_the_customization_is_in_the_value_surface(self) -> None:
+        # Two rows differing ONLY in the customization must not compare equal:
+        # equal rows share a compiled trace, so a customization left out of
+        # `_parameters` serves one hash's executable for another's.
+        self.assertNotEqual(AsconCxof128(b"a", 32), AsconCxof128(b"b", 32))
+        self.assertEqual(AsconCxof128(b"a", 32), AsconCxof128(b"a", 32))
+
+    def test_jit_matches_eager(self) -> None:
+        msg = fnp.asarray(_message(20))
+        row = AsconCxof128(b"ctx", 40)
         np.testing.assert_array_equal(
             np.asarray(frx.jit(row.digest)(msg)), np.asarray(row.digest(msg))
         )

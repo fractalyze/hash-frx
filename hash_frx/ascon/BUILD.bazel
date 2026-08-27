@@ -19,9 +19,11 @@ py_library(
     ],
 )
 
-# Byte-oriented Ascon-Hash256 (NIST SP 800-232, the lightweight-cryptography
-# standard): the `digest` batch hash behind the `hash_frx.digest.ascon_hash256`
-# marker plus the `AsconHash256` ByteHash row, over uint32 lane halves. A
+# The byte-oriented NIST SP 800-232 hashes (the lightweight-cryptography
+# standard): Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128 as `ByteHash` rows
+# over uint32 lane halves, each behind its own `hash_frx.digest.*` marker. The
+# standard's fourth function, Ascon-AEAD128, is a mode over ciphertext and
+# belongs to enc-frx, which imports `:permutation` for it. A
 # standalone hash, not a Permutation; no zk_dtypes / x64 dependency. The host
 # differential partner is testonly
 # (//hash_frx/ascon/testing:reference) — no C library implements

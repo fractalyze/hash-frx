@@ -22,7 +22,7 @@ from absl.testing import absltest
 from zk_dtypes import binary_field_t5
 
 from hash_frx.ascon import ascon as ascon_mod
-from hash_frx.ascon.ascon import AsconHash256, AsconXof128
+from hash_frx.ascon.ascon import AsconCxof128, AsconHash256, AsconXof128
 from hash_frx.blake2b import blake2b as blake2b_mod
 from hash_frx.blake2b.blake2b import Blake2b
 from hash_frx.blake2s import blake2s as blake2s_mod
@@ -134,6 +134,7 @@ class DeviceCellTest(absltest.TestCase):
             (Sha512_256(), _MATRIX[sha512_mod]),
             (AsconHash256(), _MATRIX[ascon_mod]),
             (AsconXof128(32), _MATRIX[ascon_mod]),
+            (AsconCxof128(b"", 32), _MATRIX[ascon_mod]),
             (Ripemd160(), _MATRIX[ripemd160_mod]),
             (Blake2b(), _MATRIX[blake2b_mod]),
             (Blake2s(), _MATRIX[blake2s_mod]),

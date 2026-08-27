@@ -100,7 +100,7 @@ without naming one.
 | BLAKE2s — the 32-bit RFC 7693 sibling at native uint32, on its own digest marker | [`blake2s/blake2s.py`](../hash_frx/blake2s/blake2s.py) |
 | SM3 — the GB/T 32905 ShangMi hash, SHA-256's structural cousin, on its own digest marker | [`sm3/sm3.py`](../hash_frx/sm3/sm3.py) |
 | Grøstl-256 — the AES-round Merkle–Damgård `ByteHash` over GF(2^8), with a bitsliced S-box | [`grostl/`](../hash_frx/grostl) |
-| Ascon-Hash256 and Ascon-XOF128 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` rows over uint32 word halves, plus Ascon-p[12] as a `Permutation` | [`ascon/`](../hash_frx/ascon) |
+| Ascon-Hash256, Ascon-XOF128 and Ascon-CXOF128 — the NIST SP 800-232 lightweight-standard sponge `ByteHash` rows over uint32 word halves, plus Ascon-p[12] as a `Permutation` | [`ascon/`](../hash_frx/ascon) |
 | RIPEMD-160 — the little-endian Merkle–Damgård `ByteHash` (Bitcoin HASH160's second half) | [`ripemd160/ripemd160.py`](../hash_frx/ripemd160/ripemd160.py) |
 | The four SHA-3 rows, SHAKE128, SHAKE256 and Keccak-256 — the byte hashes over one sponge, and that sponge (why it is not `sponge.py`) | [`keccak/byte_hashes.py`](../hash_frx/keccak/byte_hashes.py), [`keccak/sponge.py`](../hash_frx/keccak/sponge.py) |
 | cSHAKE128 / cSHAKE256 — SHAKE customized by a function name and a customization string, and why empty `N` and `S` is a branch back to plain SHAKE | [`keccak/cshake.py`](../hash_frx/keccak/cshake.py) |
