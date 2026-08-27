@@ -83,21 +83,24 @@ SHA512_MARKER_VERSION = 1
 # Issue #66's fusion-marker question resolves the same way as the dedicated
 # emitter below — on measured evidence, when one is written.
 
-# Whether the pinned Fractalyze XLA plugin ships a dedicated SHA-512 emitter,
-# and on which backends. None exists yet — this is the pre-emitter half of the
-# keccak arrangement (`keccak.permutation._DEDICATED_EMITTER_AVAILABLE` carries
-# the family-wide rationale), the posture the other emitterless digests hold:
-# both flags flip together with the `frx>=` floor in `pyproject.toml` when an
-# emitter lands, and `fusion_path_test`'s matrix law holds them to agree. The
-# marker is emitted regardless — there is no per-block routing alternative for
-# a whole-hash digest — and unrecognized it inlines its decomposition: right
-# bytes, `GENERIC` fusion path.
-_DEDICATED_EMITTER_AVAILABLE = False
+# Whether the pinned Fractalyze XLA plugin routes SHA-512, and on which
+# backends. It does, on both: the plugin's generic words-in Merkle-Damgard
+# envelope drives any compression in its primitive registry, so SHA-512 cost a
+# registry row and a round function rather than an emitter per backend — and
+# both compilers already gated that envelope on, which is why one entry lit up
+# CPU and GPU at once.
+#
+# These flip together with the `frx>=` floor in `pyproject.toml`, and
+# `fusion_path_test`'s matrix law holds them to agree. The marker is emitted
+# regardless — there is no per-block routing alternative for a whole-hash
+# digest — so below the floor it inlines its decomposition: right bytes,
+# `GENERIC` fusion path.
+_DEDICATED_EMITTER_AVAILABLE = True
 
 # Which backends have that emitter — a different question from the pin, asked
-# alongside it. Empty until one is written; a backend gaining an arm joins this
-# tuple and nothing else here moves (the keccak/poseidon2 pattern).
-_EMITTER_BACKENDS: tuple[str, ...] = ()
+# alongside it. Both, because the envelope is shared rather than per-family
+# (the keccak/poseidon2 pattern, arriving with both arms at once).
+_EMITTER_BACKENDS: tuple[str, ...] = ("cpu", "gpu")
 
 
 def _routes_to_dedicated_emitter() -> bool:

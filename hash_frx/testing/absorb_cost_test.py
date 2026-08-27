@@ -24,6 +24,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
+from hash_frx import markers
 from hash_frx.sha256 import sha256
 from hash_frx.sha512 import sha512
 
@@ -40,7 +41,14 @@ _FAMILIES = (
     (
         "sha512",
         128,
-        sha512.SHA512_MARKER,
+        # The name the module actually rides, not the family's own spelling:
+        # SHA-512 moved to the shared words-in marker when the plugin grew an
+        # envelope for it, while SHA-256 above still carries its own. This
+        # locates the composite, so it has to follow that choice rather than
+        # restate one side of it.
+        markers.words_in_digest_marker(
+            sha512.SHA512_MARKER, sha512.SHA512_MARKER_VERSION
+        )[0],
         32,
         sha512.sha512_stream_init,
         sha512.sha512_stream_absorb,
