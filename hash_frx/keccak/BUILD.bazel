@@ -17,6 +17,7 @@ py_library(
         "__init__.py",
         "byte_hashes.py",
         "cshake.py",
+        "kmac.py",
         "lane.py",
         "params.py",
         "permutation.py",

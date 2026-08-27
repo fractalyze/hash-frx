@@ -159,3 +159,20 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+# KMAC against SP 800-185 section 4. Medium for `cshake_test`'s reason: the cost
+# is re-tracing the fused sponge per (rate, output_size, block count), not the
+# plain-Python oracle the bits-not-bytes check drives.
+py_test(
+    name = "kmac_test",
+    size = "medium",
+    srcs = ["kmac_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx/keccak",
+        "//hash_frx/keccak:encodings",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

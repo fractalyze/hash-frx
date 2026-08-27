@@ -122,6 +122,10 @@ _EXPORTS: dict[str, str] = {
     "CShake256": "hash_frx.keccak.cshake",
     "Grostl256": "hash_frx.grostl.grostl",
     "Keccak256": "hash_frx.keccak.byte_hashes",
+    "Kmac128": "hash_frx.keccak.kmac",
+    "Kmac256": "hash_frx.keccak.kmac",
+    "KmacXof128": "hash_frx.keccak.kmac",
+    "KmacXof256": "hash_frx.keccak.kmac",
     "Ripemd160": "hash_frx.ripemd160.ripemd160",
     "Sha256": "hash_frx.sha256.sha256",
     "Sha384": "hash_frx.sha512.sha512",
@@ -248,6 +252,10 @@ if TYPE_CHECKING:
     from hash_frx.keccak.byte_hashes import Shake256 as Shake256
     from hash_frx.keccak.cshake import CShake128 as CShake128
     from hash_frx.keccak.cshake import CShake256 as CShake256
+    from hash_frx.keccak.kmac import Kmac128 as Kmac128
+    from hash_frx.keccak.kmac import Kmac256 as Kmac256
+    from hash_frx.keccak.kmac import KmacXof128 as KmacXof128
+    from hash_frx.keccak.kmac import KmacXof256 as KmacXof256
     from hash_frx.keccak.permutation import KeccakF1600 as KeccakF1600
     from hash_frx.keccak.sponge import KeccakSponge as KeccakSponge
     from hash_frx.keccak.streaming import ShakeAbsorb as ShakeAbsorb
