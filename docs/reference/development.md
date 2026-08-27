@@ -40,41 +40,30 @@ the CUDA libraries are `dlopen`ed lazily rather than linked. One line settles it
 ldconfig -p | grep libcudart
 ```
 
-`libcudart.so.13` and no `.so.12` means the system CUDA cannot satisfy these
-wheels. That does **not** make the box CPU-only: the runtime the plugin
-`dlopen`s can come from pip instead, and a venv holding the `nvidia-*-cu12`
-wheels reaches the device on exactly such a machine.
-
-The plugin declares that runtime as an **extra**, so asking for it is the whole
-step — `frx-cuda12-plugin[with-cuda]` pulls `nvidia-cuda-runtime-cu12`,
-`nvidia-cudnn-cu12`, `nvidia-cublas-cu12` and the rest:
+`libcudart.so.13` and no `.so.12` means the *system* CUDA cannot serve these
+wheels. It does not mean the box is CPU-only: the plugin resolves CUDA by
+soname, so the `nvidia-*-cu12` wheels satisfy it just as well, and pointing
+`LD_LIBRARY_PATH` at their `lib` directories runs the GPU leg on that box —
+`bazel test` included.
 
 ```sh
-<venv>/bin/pip install "frx-cuda12-plugin[with-cuda]==<the requirements.in pin>"
-PYTHONPATH=<repo> FRX_PLATFORMS=cuda <venv>/bin/python -c \
-    'import frx; print(frx.default_backend(), frx.devices())'
-# gpu [CudaDevice(id=0)]
+NV=<venv>/lib/python3.11/site-packages/nvidia
+bazel test --test_env=FRX_PLATFORMS=cuda \
+           --test_env=LD_LIBRARY_PATH="$(ls -d $NV/*/lib | paste -sd:)" \
+           --test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false \
+           --local_test_jobs=1 //...
 ```
 
-`nvidia-cuda-runtime-cu12` ships `libcudart.so.12` inside site-packages, which is
-where the plugin finds it — the system's `.so.13` is never consulted.
+`frx-cuda12-plugin[with-cuda]` is what puts those wheels in a venv;
+[`requirements.in`](../../requirements.in) pins the plugin without that extra,
+so the lock carries none and the path has to be supplied per run.
 
-**The venv rescues a direct run, not `bazel test`.**
-[`requirements.in`](../../requirements.in) pins `frx-cuda12-plugin` **without**
-the `with-cuda` extra, so the lock resolves the plugin and none of the
-`nvidia-*` wheels. Bazel's hermetic pip hub then holds the plugin without the
-runtime it loads, and the sandbox cannot reach the venv's copy. On a box with
-no system CUDA 12 the two paths disagree:
-
-| GPU-leg path | CUDA 12 comes from | on a CUDA-13 box |
-|---|---|---|
-| `bazel test --test_env=FRX_PLATFORMS=cuda` | nothing in the hub | fails, always |
-| venv + `PYTHONPATH` + `FRX_PLATFORMS=cuda` | the `nvidia-*-cu12` wheels | runs on the device |
-
-Both print the same `Unable to load CUDA. Is it installed?` above, so the bazel
-failure reads as "this box is CPU-only" when it means "this *path* is". A target
-carrying [`defs.bzl`](../../defs.bzl)'s `GPU_PLUGIN_DEPS` fails the same way —
-the plugin is in its runfiles, the runtime is not.
+**A green GPU leg is evidence only against a control.** `cuda` is strict here —
+it does not fall back — so the same target under
+`--test_env=LD_LIBRARY_PATH=/nonexistent` must *fail*, and the line proving it
+is the `Backend 'cuda' is not in the list of known backends: ['cpu', 'tpu']`
+above: `cpu` was available and the run died anyway. Without that control a
+CPU-fallback run reads as a passing GPU leg.
 
 ## Running against a local Fractalyze XLA build
 
@@ -111,19 +100,10 @@ bazel test --test_env=FRX_PLATFORMS=cuda \
            --local_test_jobs=1 //...                        # GPU leg
 ```
 
-The GPU line needs a **system** CUDA 12: the lock ships the plugin but no
-`nvidia-*` runtime wheels, so bazel cannot supply one itself. Where the box has
-no system CUDA 12 that command fails whatever the card is, and the leg is run a
-module at a time out of a venv instead
-([above](#the-gpu-path-needs-cuda-12-specifically)):
-
-```sh
-PYTHONPATH=<repo> FRX_PLATFORMS=cuda \
-    <venv>/bin/python -m hash_frx.testing.row_conformance_test
-```
-
-That runs one module rather than the target graph — a targeted check on the
-suites whose answer can differ by backend, not a stand-in for the leg.
+Where the box has no *system* CUDA 12, the GPU line also needs
+`LD_LIBRARY_PATH` pointed at the `nvidia-*-cu12` wheels
+([above](#the-gpu-path-needs-cuda-12-specifically)) — without it the leg fails
+whatever the card is.
 
 The two are different *programs*, not the same tests run twice: a family whose
 emitter is GPU-only routes `DEDICATED` on one leg and `GENERIC` on the other, so
