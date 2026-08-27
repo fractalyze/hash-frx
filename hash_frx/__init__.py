@@ -82,7 +82,9 @@ _EXPORTS: dict[str, str] = {
     "KOALABEAR16_PARAMS": "hash_frx.poseidon2.standard",
     "Poseidon2Params": "hash_frx.poseidon2.params",
     "PoseidonParams": "hash_frx.poseidon.params",
+    "SHA3_224_RATE": "hash_frx.keccak.byte_hashes",
     "SHA3_256_RATE": "hash_frx.keccak.byte_hashes",
+    "SHA3_384_RATE": "hash_frx.keccak.byte_hashes",
     "SHA3_512_RATE": "hash_frx.keccak.byte_hashes",
     "SHAKE128_RATE": "hash_frx.keccak.byte_hashes",
     "SHAKE256_RATE": "hash_frx.keccak.byte_hashes",
@@ -120,7 +122,9 @@ _EXPORTS: dict[str, str] = {
     "Ripemd160": "hash_frx.ripemd160.ripemd160",
     "Sha256": "hash_frx.sha256.sha256",
     "Sha384": "hash_frx.sha512.sha512",
+    "Sha3_224": "hash_frx.keccak.byte_hashes",
     "Sha3_256": "hash_frx.keccak.byte_hashes",
+    "Sha3_384": "hash_frx.keccak.byte_hashes",
     "Sha3_512": "hash_frx.keccak.byte_hashes",
     "Sha512": "hash_frx.sha512.sha512",
     "Sha512_256": "hash_frx.sha512.sha512",
@@ -225,12 +229,16 @@ if TYPE_CHECKING:
     from hash_frx.fusion import inert_region_spec as inert_region_spec
     from hash_frx.grostl.grostl import Grostl256 as Grostl256
     from hash_frx.keccak.byte_hashes import KECCAK256_RATE as KECCAK256_RATE
+    from hash_frx.keccak.byte_hashes import SHA3_224_RATE as SHA3_224_RATE
     from hash_frx.keccak.byte_hashes import SHA3_256_RATE as SHA3_256_RATE
+    from hash_frx.keccak.byte_hashes import SHA3_384_RATE as SHA3_384_RATE
     from hash_frx.keccak.byte_hashes import SHA3_512_RATE as SHA3_512_RATE
     from hash_frx.keccak.byte_hashes import SHAKE128_RATE as SHAKE128_RATE
     from hash_frx.keccak.byte_hashes import SHAKE256_RATE as SHAKE256_RATE
     from hash_frx.keccak.byte_hashes import Keccak256 as Keccak256
+    from hash_frx.keccak.byte_hashes import Sha3_224 as Sha3_224
     from hash_frx.keccak.byte_hashes import Sha3_256 as Sha3_256
+    from hash_frx.keccak.byte_hashes import Sha3_384 as Sha3_384
     from hash_frx.keccak.byte_hashes import Sha3_512 as Sha3_512
     from hash_frx.keccak.byte_hashes import Shake128 as Shake128
     from hash_frx.keccak.byte_hashes import Shake256 as Shake256
