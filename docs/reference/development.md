@@ -40,10 +40,41 @@ the CUDA libraries are `dlopen`ed lazily rather than linked. One line settles it
 ldconfig -p | grep libcudart
 ```
 
-`libcudart.so.13` and no `.so.12` means this box cannot run the GPU leg no matter
-what the card is — an idle RTX 5090 behind CUDA 13 is still a CPU-only box for
-these wheels. Run the GPU leg on a CUDA 12 machine, or install a CUDA 12 runtime
-alongside.
+`libcudart.so.13` and no `.so.12` means the system CUDA cannot satisfy these
+wheels. That does **not** make the box CPU-only: the runtime the plugin
+`dlopen`s can come from pip instead, and a venv holding the `nvidia-*-cu12`
+wheels reaches the device on exactly such a machine.
+
+The plugin declares that runtime as an **extra**, so asking for it is the whole
+step — `frx-cuda12-plugin[with-cuda]` pulls `nvidia-cuda-runtime-cu12`,
+`nvidia-cudnn-cu12`, `nvidia-cublas-cu12` and the rest:
+
+```sh
+<venv>/bin/pip install "frx-cuda12-plugin[with-cuda]==<the requirements.in pin>"
+PYTHONPATH=<repo> FRX_PLATFORMS=cuda <venv>/bin/python -c \
+    'import frx; print(frx.default_backend(), frx.devices())'
+# gpu [CudaDevice(id=0)]
+```
+
+`nvidia-cuda-runtime-cu12` ships `libcudart.so.12` inside site-packages, which is
+where the plugin finds it — the system's `.so.13` is never consulted.
+
+**The venv rescues a direct run, not `bazel test`.**
+[`requirements.in`](../../requirements.in) pins `frx-cuda12-plugin` **without**
+the `with-cuda` extra, so the lock resolves the plugin and none of the
+`nvidia-*` wheels. Bazel's hermetic pip hub then holds the plugin without the
+runtime it loads, and the sandbox cannot reach the venv's copy. On a box with
+no system CUDA 12 the two paths disagree:
+
+| GPU-leg path | CUDA 12 comes from | on a CUDA-13 box |
+|---|---|---|
+| `bazel test --test_env=FRX_PLATFORMS=cuda` | nothing in the hub | fails, always |
+| venv + `PYTHONPATH` + `FRX_PLATFORMS=cuda` | the `nvidia-*-cu12` wheels | runs on the device |
+
+Both print the same `Unable to load CUDA. Is it installed?` above, so the bazel
+failure reads as "this box is CPU-only" when it means "this *path* is". A target
+carrying [`defs.bzl`](../../defs.bzl)'s `GPU_PLUGIN_DEPS` fails the same way —
+the plugin is in its runfiles, the runtime is not.
 
 ## Running against a local Fractalyze XLA build
 
@@ -79,6 +110,20 @@ bazel test //...                                            # CPU leg (the defau
 bazel test --test_env=FRX_PLATFORMS=cuda \
            --local_test_jobs=1 //...                        # GPU leg
 ```
+
+The GPU line needs a **system** CUDA 12: the lock ships the plugin but no
+`nvidia-*` runtime wheels, so bazel cannot supply one itself. Where the box has
+no system CUDA 12 that command fails whatever the card is, and the leg is run a
+module at a time out of a venv instead
+([above](#the-gpu-path-needs-cuda-12-specifically)):
+
+```sh
+PYTHONPATH=<repo> FRX_PLATFORMS=cuda \
+    <venv>/bin/python -m hash_frx.testing.row_conformance_test
+```
+
+That runs one module rather than the target graph — a targeted check on the
+suites whose answer can differ by backend, not a stand-in for the leg.
 
 The two are different *programs*, not the same tests run twice: a family whose
 emitter is GPU-only routes `DEDICATED` on one leg and `GENERIC` on the other, so
