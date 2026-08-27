@@ -165,7 +165,11 @@ py_test(
 # plain-Python oracle the bits-not-bytes check drives.
 py_test(
     name = "kmac_test",
+    # The `timeout = "long"` the two targets above carry, for the same reason:
+    # the CI executor's worker-to-worker spread on this family reaches past
+    # `medium`'s 300 s ceiling for a suite that runs well under it locally.
     size = "medium",
+    timeout = "long",
     srcs = ["kmac_test.py"],
     deps = [
         ":reference",
