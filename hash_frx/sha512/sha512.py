@@ -396,6 +396,13 @@ def deserialize_digest(digest: Array) -> Array:
     return pack_be(digest)
 
 
+# The compression's key in the plugin's primitive registry. Two markers
+# carry it -- this family's chain, and the stream-finalize region that wraps
+# it -- and they must agree, or the outer would claim a different compression
+# than the one it folds.
+_PRIMITIVE = "sha512"
+
+
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
 # emission, and one PCS open emits the leaf + every internal level of a Merkle
 # commit plus each transcript squeeze — so the uncached re-trace of the 80-round
@@ -403,7 +410,7 @@ def deserialize_digest(digest: Array) -> Array:
 # `inline=True` splices the cached jaxpr into the enclosing trace, so the
 # emitted module (one composite marker per chain) is unchanged.
 @partial(frx.jit, inline=True)
-def sha512_merkle_damgard(h0: Array, blocks: Array) -> Array:
+def sha512_merkle_damgard(h0: Array, blocks: Array, constants: Array = _Kd) -> Array:
     """The SHA-512 compression chain from midstate `h0` (uint32 [16], shared by
     the batch) over `blocks` (uint32 [B, nblocks, 32]) -> uint8 [B, 64]
     serialized final state, as the name-routed `hash_frx.digest.sha512`
@@ -433,11 +440,11 @@ def sha512_merkle_damgard(h0: Array, blocks: Array) -> Array:
     return chain(
         h0,
         blocks,
-        constants=_Kd,
+        constants=constants,
         compress_block=_compress,
         serialize=serialize_digest,
         marker=words_in_digest_marker(SHA512_MARKER, SHA512_MARKER_VERSION),
-        primitive="sha512",
+        primitive=_PRIMITIVE,
     )
 
 
@@ -553,7 +560,7 @@ _STREAM = MdStream(
     deserialize=deserialize_digest,
     chain=sha512_merkle_damgard,
     constants=_Kd,
-    primitive="sha512",
+    primitive=_PRIMITIVE,
     make_state=Sha512State,
 )
 

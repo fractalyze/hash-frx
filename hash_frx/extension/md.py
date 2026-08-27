@@ -174,6 +174,18 @@ class _Midstate(Protocol):
         """The trailing partial block, valid prefix `[:pending_len]`."""
 
     @property
+    def counts(self) -> Array:
+        """`int32[2] = [pending_len, total_len]`, the packed stream position.
+
+        Required as the LEAF rather than as its two properties because it is a
+        positional operand of the stream-finalize ABI: restacking the two
+        halves would emit the slice/reshape/concatenate glue outside the marked
+        region, which is the glue the marker exists to remove. `absorb` already
+        builds it in this layout, so this states a requirement that was already
+        load-bearing.
+        """
+
+    @property
     def pending_len(self) -> Array:
         """Bytes currently buffered in `pending`."""
 
@@ -372,17 +384,24 @@ class MdStream:
     pad: PadRule
     block_to_words: Callable[[Array], Array]
     deserialize: Callable[[Array], Array]
-    # (h0, blocks) -> serialized final state; the family's own marked chain, so
-    # the streaming path and the batch digest go through ONE marker.
-    chain: Callable[[Array, Array], Array]
+    # `(h0, blocks, constants) -> serialized final state`, the family's own
+    # marked chain, so the streaming path and the batch digest go through ONE
+    # marker.
+    #
+    # The table is an ARGUMENT rather than the closure's capture so a caller
+    # inside a marked region can thread that region's own operand — the rule
+    # `sha256.compress` states. That is what makes the stream-finalize region's
+    # declared `constants` operand and the table it actually folds the same
+    # value by construction, rather than two independently-supplied ones with
+    # nothing holding them equal.
+    chain: Callable[[Array, Array, Array], Array]
     make_state: Callable[[Array, Array, Array], Any]
     # The family's constant table and its key in the plugin's primitive
     # registry. `chain` already closes over both; the STREAM FINALIZE marker
-    # needs them again because its region wraps `chain` rather than being it,
-    # and the table is a positional operand of the wider ABI
-    # (`markers.STREAM_FINALIZE_MARKER`). Threaded rather than captured for the
-    # reason `md_chain` states: a captured constant is lifted into an unnamed
-    # operand ahead of the declared ones and lands at position 0.
+    # needs them again because its region WRAPS `chain` rather than being it,
+    # and the table is a positional operand of that wider ABI
+    # (`markers.STREAM_FINALIZE_MARKER`). Threaded rather than captured, for
+    # the reason `chain` above states.
     constants: Array
     primitive: str
     # No `length_field`: `finalize` derives it from `pad` (`trailer_field`).
@@ -437,9 +456,13 @@ class MdStream:
                 combined[: max_blocks * block].reshape(1, max_blocks * block)
             )
             if min_blocks:
-                h_new = self.deserialize(self.chain(h_new, words[:, :min_blocks]))[0]
+                h_new = self.deserialize(
+                    self.chain(h_new, words[:, :min_blocks], self.constants)
+                )[0]
             if max_blocks > min_blocks:
-                h_hi = self.deserialize(self.chain(h_new, words[:, min_blocks:]))[0]
+                h_hi = self.deserialize(
+                    self.chain(h_new, words[:, min_blocks:], self.constants)
+                )[0]
                 h_new = fnp.where(active_blocks == max_blocks, h_hi, h_new)
 
         tail_len = new_len - active_blocks * block
@@ -483,13 +506,6 @@ class MdStream:
             extras: Array,
             **_attrs: object,
         ) -> Array:
-            # `constants` is threaded through untouched: this region never reads
-            # the table, it only has to put it where the ABI says.
-            del constants
-
-            def chain_from(midstate: Array, words: Array) -> Array:
-                return self.chain(midstate, words)
-
             pl = counts[0]
             content_len = pl + fnp.int32(e)
             len_bytes = trailer_field(self.pad, counts[1] + fnp.int32(e))
@@ -515,7 +531,9 @@ class MdStream:
 
             words = self.block_to_words(region)
             return fnp.where(
-                two_blocks, chain_from(h, words), chain_from(h, words[:, :1])
+                two_blocks,
+                self.chain(h, words, constants),
+                self.chain(h, words[:, :1], constants),
             )
 
         # The whole hop as ONE region. Its ABI is the words-in digest's, one
@@ -533,7 +551,7 @@ class MdStream:
             state.h,
             self.constants,
             state.pending,
-            fnp.stack([state.pending_len, state.total_len]),
+            state.counts,
             extras,
             name=STREAM_FINALIZE_MARKER,
             version=STREAM_FINALIZE_MARKER_VERSION,

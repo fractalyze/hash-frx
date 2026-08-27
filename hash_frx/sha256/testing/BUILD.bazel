@@ -25,6 +25,7 @@ py_test(
     deps = [
         "//hash_frx:markers",
         "//hash_frx/sha256",
+        "//hash_frx/sha512",
         "//hash_frx/testing:marker_recognized",
         requirement("absl_py"),
         requirement("frx"),
