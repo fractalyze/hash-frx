@@ -82,10 +82,11 @@ _DEDICATED_EMITTER_AVAILABLE = True
 
 # Which backends carry that emitter — a different question from the pin, asked
 # alongside it. The round core sits in `xla/codegen/emitters/grostl.{h,cc}`
-# rather than inside the CPU emitter, so a GPU arm can be written without
-# re-deriving it; a backend gaining one joins this tuple and nothing else here
-# moves (the keccak/poseidon2 pattern).
-_EMITTER_BACKENDS: tuple[str, ...] = ("cpu",)
+# rather than inside either backend's emitter, so both arms share one
+# transcription of the spec instead of re-deriving it; a backend gaining an
+# emitter joins this tuple and nothing else here moves (the keccak/poseidon2
+# pattern).
+_EMITTER_BACKENDS: tuple[str, ...] = ("cpu", "gpu")
 
 
 def _routes_to_dedicated_emitter() -> bool:

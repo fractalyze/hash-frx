@@ -157,12 +157,12 @@ def _composite(fn: Any, *args: Any) -> Any:
 
 class Grostl256MarkerTest(absltest.TestCase):
     def test_routing_is_the_pin_and_the_backend(self) -> None:
-        # The conjunction the keccak family's gate test states, arriving here
-        # the other way round: this emitter is CPU-only, so the pin alone does
-        # not decide. Both halves are pinned because they move together with
-        # the `frx>=` floor.
+        # The conjunction the keccak family's gate test states. Both backends
+        # carry this emitter, so the backend half excludes nothing — the pair
+        # is pinned anyway because both halves move together with the `frx>=`
+        # floor, and a family whose arms change has to say so here.
         self.assertTrue(grostl._DEDICATED_EMITTER_AVAILABLE)
-        self.assertEqual(grostl._EMITTER_BACKENDS, ("cpu",))
+        self.assertEqual(grostl._EMITTER_BACKENDS, ("cpu", "gpu"))
         self.assertIs(
             Grostl256().fusion_path, FusionPath.from_routing(_HAS_GROSTL_EMITTER)
         )
