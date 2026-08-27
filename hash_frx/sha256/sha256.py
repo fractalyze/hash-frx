@@ -514,6 +514,8 @@ _STREAM = MdStream(
     block_to_words=block_to_words,
     deserialize=deserialize_digest,
     chain=sha256_merkle_damgard,
+    constants=_Kd,
+    primitive="sha256",
     make_state=Sha256State,
 )
 

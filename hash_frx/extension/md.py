@@ -22,6 +22,10 @@ from frx import Array
 
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import fused_region
+from hash_frx.markers import (
+    STREAM_FINALIZE_MARKER,
+    STREAM_FINALIZE_MARKER_VERSION,
+)
 from hash_frx.word import unpack_be, unpack_le
 
 
@@ -372,6 +376,15 @@ class MdStream:
     # the streaming path and the batch digest go through ONE marker.
     chain: Callable[[Array, Array], Array]
     make_state: Callable[[Array, Array, Array], Any]
+    # The family's constant table and its key in the plugin's primitive
+    # registry. `chain` already closes over both; the STREAM FINALIZE marker
+    # needs them again because its region wraps `chain` rather than being it,
+    # and the table is a positional operand of the wider ABI
+    # (`markers.STREAM_FINALIZE_MARKER`). Threaded rather than captured for the
+    # reason `md_chain` states: a captured constant is lifted into an unnamed
+    # operand ahead of the declared ones and lands at position 0.
+    constants: Array
+    primitive: str
     # No `length_field`: `finalize` derives it from `pad` (`trailer_field`).
 
     def absorb(self, state: _Midstate, data: Array) -> Any:
@@ -461,28 +474,68 @@ class MdStream:
                 "two-block finalize layout at every offset — absorb the prefix "
                 "instead"
             )
-        pl = state.pending_len
-        content_len = pl + fnp.int32(e)
-        len_bytes = trailer_field(self.pad, state.total_len + fnp.int32(e))
 
-        # One block only if the content, the 0x80 and the length field all fit.
-        two_blocks = content_len > fnp.int32(block - lb - 1)
-        active_bytes = fnp.where(two_blocks, fnp.int32(2 * block), fnp.int32(block))
+        def decomposition(
+            h: Array,
+            constants: Array,
+            pending: Array,
+            counts: Array,
+            extras: Array,
+            **_attrs: object,
+        ) -> Array:
+            # `constants` is threaded through untouched: this region never reads
+            # the table, it only has to put it where the ABI says.
+            del constants
 
-        pos = fnp.arange(2 * block, dtype=fnp.int32)
-        # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:block].
-        combined_src = fnp.concatenate(
-            [fnp.broadcast_to(state.pending, (batch, block)), extras.astype(fnp.uint8)],
-            axis=1,
-        )
-        src_idx = fnp.clip(
-            pos + fnp.where(pos < pl, fnp.int32(0), block - pl), 0, block + e - 1
-        )
-        content = combined_src[:, src_idx]
+            def chain_from(midstate: Array, words: Array) -> Array:
+                return self.chain(midstate, words)
 
-        region = padded_region(self.pad, content, content_len, active_bytes, len_bytes)
+            pl = counts[0]
+            content_len = pl + fnp.int32(e)
+            len_bytes = trailer_field(self.pad, counts[1] + fnp.int32(e))
 
-        words = self.block_to_words(region)
-        return fnp.where(
-            two_blocks, self.chain(state.h, words), self.chain(state.h, words[:, :1])
+            # One block only if the content, the 0x80 and the length field all fit.
+            two_blocks = content_len > fnp.int32(block - lb - 1)
+            active_bytes = fnp.where(two_blocks, fnp.int32(2 * block), fnp.int32(block))
+
+            pos = fnp.arange(2 * block, dtype=fnp.int32)
+            # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:block].
+            combined_src = fnp.concatenate(
+                [fnp.broadcast_to(pending, (batch, block)), extras.astype(fnp.uint8)],
+                axis=1,
+            )
+            src_idx = fnp.clip(
+                pos + fnp.where(pos < pl, fnp.int32(0), block - pl), 0, block + e - 1
+            )
+            content = combined_src[:, src_idx]
+
+            region = padded_region(
+                self.pad, content, content_len, active_bytes, len_bytes
+            )
+
+            words = self.block_to_words(region)
+            return fnp.where(
+                two_blocks, chain_from(h, words), chain_from(h, words[:, :1])
+            )
+
+        # The whole hop as ONE region. Its ABI is the words-in digest's, one
+        # schema over: the stream POSITION rides as the `counts` operand, so a
+        # recognizing emitter runs the single block count the position implies
+        # where this decomposition emits both candidates and selects.
+        #
+        # Emitted whether or not the pinned plugin knows the name -- an
+        # unrecognized marker only inlines, so being early costs the fusion and
+        # nothing else, which is how every `hash_frx.digest.*` here already
+        # ships. Nothing gates it: unlike a permutation's marker, this one
+        # decides nothing about how anything ELSE lowers.
+        return fused_region(
+            decomposition,
+            state.h,
+            self.constants,
+            state.pending,
+            fnp.stack([state.pending_len, state.total_len]),
+            extras,
+            name=STREAM_FINALIZE_MARKER,
+            version=STREAM_FINALIZE_MARKER_VERSION,
+            primitive=self.primitive,
         )

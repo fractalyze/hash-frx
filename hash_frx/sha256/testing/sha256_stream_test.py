@@ -15,6 +15,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
+from hash_frx.markers import STREAM_FINALIZE_MARKER
 from hash_frx.sha256 import sha256
 from hash_frx.sha256.sha256 import (
     Sha256State,
@@ -22,6 +23,7 @@ from hash_frx.sha256.sha256 import (
     sha256_stream_finalize,
     sha256_stream_init,
 )
+from hash_frx.testing.marker_recognized import emitted_composites
 
 
 def _u8(data: bytes) -> fnp.ndarray:
@@ -145,6 +147,59 @@ class FinalizeBoundsTest(parameterized.TestCase):
         state = sha256.sha256_stream_init()
         with self.assertRaisesRegex(ValueError, "extras width"):
             sha256.sha256_stream_finalize(state, fnp.zeros((1, 57), dtype=fnp.uint8))
+
+
+class FinalizeMarkerTest(parameterized.TestCase):
+    """The whole hop is ONE marked region.
+
+    `sha256_stream_finalize` emits both padding-block candidates and selects
+    between them, because the live block count depends on `pending_len`, which
+    is traced. The marker exists so a recognizing emitter runs the one block
+    count the runtime position implies instead. Until the pinned plugin carries
+    the recognizer the marker inlines, so these assert what this repo controls:
+    that the region is on the wire, and that wrapping it changed no byte.
+    """
+
+    @parameterized.parameters(0, 3, 40, 63, 64, 200)
+    def test_one_region_whatever_the_stream_position(self, prefix_len: int) -> None:
+        state = sha256.sha256_stream_init()
+        if prefix_len:
+            state = frx.jit(sha256.sha256_stream_absorb)(
+                state, fnp.zeros(prefix_len, dtype=fnp.uint8)
+            )
+        extras = fnp.zeros((4, 8), dtype=fnp.uint8)
+        names = emitted_composites(
+            lambda s, e: sha256.sha256_stream_finalize(s, e), state, extras
+        )
+        # Exactly one, at every position -- the count must not track the
+        # candidate the schedule happens to take.
+        self.assertEqual(names.count(STREAM_FINALIZE_MARKER), 1)
+
+    @parameterized.parameters(1, 8, 40, 56)
+    def test_byte_neutral_against_hashlib(self, width: int) -> None:
+        """The marker is byte-neutral: an unrecognized name only inlines.
+
+        Compared against a ONE-SHOT `hashlib` digest rather than a streaming
+        one, because the property is that a resumed hash equals a one-shot hash
+        of the same message -- an oracle that also resumed could agree for the
+        same wrong reason.
+        """
+        prefix = bytes((i * 11 + 3) % 256 for i in range(100))
+        state = frx.jit(sha256.sha256_stream_absorb)(
+            sha256.sha256_stream_init(),
+            fnp.asarray(np.frombuffer(prefix, dtype=np.uint8)),
+        )
+        rows = np.array(
+            [[(r * 31 + i * 7 + 1) % 256 for i in range(width)] for r in range(4)],
+            dtype=np.uint8,
+        )
+        got = np.asarray(
+            frx.jit(sha256.sha256_stream_finalize)(state, fnp.asarray(rows))
+        )
+        for r in range(rows.shape[0]):
+            self.assertEqual(
+                bytes(got[r]), hashlib.sha256(prefix + bytes(rows[r])).digest()
+            )
 
 
 if __name__ == "__main__":

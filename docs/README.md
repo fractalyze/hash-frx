@@ -159,6 +159,33 @@ not know costs the fusion silently rather than failing, so the flip follows the
 pin instead of leading it. The other operation names the relayering adds
 (`digest`, `stream.*`, `duplex`) arrive with the envelopes that consume them.
 
+The Merkle–Damgård operation names are one per **wire-ABI schema**, not one per
+family, and there are three because the message reaches the kernel three
+different ways:
+
+| name | operands | the message is |
+| --- | --- | --- |
+| `hash_frx.digest` | `[h0, consts…, blocks W[…, nblocks, w]]` | already padded and packed by the producer |
+| `hash_frx.digest_bytes` | `[h0, consts…, msg u8[…, L], tail u8[P]]` | raw bytes, padded in-kernel against a host-built tail |
+| `hash_frx.stream_finalize` | `[h, consts…, pending u8[block], counts s32[2], extras u8[…, E]]` | a stream POSITION: `pending[:counts[0]] ‖ extras` |
+
+`hash_frx.stream_finalize` finishes a hash from a live midstate rather than an
+IV, and `counts` — `[pending_len, total_len]` — rides as a **runtime operand**.
+That is the whole reason it is a separate schema. A producer tracing the hop
+cannot know how many blocks the padded tail spans, because that depends on
+`pending_len`, so `MdStream.finalize` emits both candidates and selects; a
+kernel handed the position runs one. The strengthening field claims
+`total_len + E`, the whole stream, where the fold covers only
+`pending_len + E` — Merkle–Damgård's resume property, and the reason a resumed
+digest equals a one-shot one over the same bytes.
+
+Its bound is `1 <= E <= block_size - reserve`: `pending_len` is runtime data, so
+only a tail that fits the two-block layout at *every* reachable offset is
+representable. All three are flat rather than dotted for the reason the naming
+rule gives — an operation name is a sibling of the other operations, not a child
+of one, so `stream_absorb` and `stream_squeeze` will join `stream_finalize` as
+siblings rather than under a `stream` namespace.
+
 Two of them wrap a whole hash rather than one primitive — `hash_frx.digest.field_sponge`
 over the field sponge, `hash_frx.digest.keccak_sponge` over the byte one — and both are
 assembled by `fused_region_over`, which rebuilds the permute from the operand
