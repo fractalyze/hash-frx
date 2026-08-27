@@ -126,16 +126,18 @@ py_test(
     ],
 )
 
-# cSHAKE against SP 800-185 section 3. Medium rather than small: the reference
-# sweeps run a plain-Python Keccak-f[1600] over every absorb and squeeze
-# boundary at both rates, which is where the seconds go.
+# cSHAKE against SP 800-185 section 3. Medium rather than small, and NOT because
+# of the plain-Python oracle — that is 42 calls and 0.03 s of the run. The cost
+# is re-tracing the fused sponge composite, which keys on
+# (rate, output_size, block count) at roughly 1.5 s a key. That is why the
+# sweeps are unions rather than cross products; adding an output size is the
+# expensive edit here, adding a message length is nearly free.
 py_test(
     name = "cshake_test",
     size = "medium",
     srcs = ["cshake_test.py"],
     deps = [
         ":reference",
-        "//hash_frx:byte_hash",
         "//hash_frx/keccak",
         "//hash_frx/keccak:encodings",
         requirement("absl_py"),

@@ -135,20 +135,20 @@ ALL_ROWS: tuple[RowCase, ...] = (
     # is ignored, and the customization is exactly what must not be.
     RowCase(
         "CShake128",
-        lambda: CShake128(b"s", b"n", 32),
+        lambda: CShake128(b"s", b"n", output_size=32),
         (
-            lambda: CShake128(b"t", b"n", 32),
-            lambda: CShake128(b"s", b"m", 32),
-            lambda: CShake128(b"s", b"n", 64),
+            lambda: CShake128(b"t", b"n", output_size=32),
+            lambda: CShake128(b"s", b"m", output_size=32),
+            lambda: CShake128(b"s", b"n", output_size=64),
         ),
     ),
     RowCase(
         "CShake256",
-        lambda: CShake256(b"s", b"n", 64),
+        lambda: CShake256(b"s", b"n", output_size=64),
         (
-            lambda: CShake256(b"t", b"n", 64),
-            lambda: CShake256(b"s", b"m", 64),
-            lambda: CShake256(b"s", b"n", 32),
+            lambda: CShake256(b"t", b"n", output_size=64),
+            lambda: CShake256(b"s", b"m", output_size=64),
+            lambda: CShake256(b"s", b"n", output_size=32),
         ),
     ),
     RowCase("Blake3", Blake3, (lambda: Blake3(16),)),

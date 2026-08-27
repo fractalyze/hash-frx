@@ -49,6 +49,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import frx.numpy as fnp
+import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
@@ -75,9 +76,9 @@ def _prefix_block(name: bytes, customization: bytes, rate: int) -> bytes:
     """SP 800-185 section 3.3's `bytepad(encode_string(N) ‖ encode_string(S), rate)`
     — the whole number of rate blocks absorbed ahead of the message.
 
-    Empty for the SHAKE fallback, which is what makes `digest` one path rather
-    than two: an empty prefix concatenates to nothing, so the branch lives in
-    this function's caller and not in the hashing.
+    Empty for the SHAKE fallback — which is the signal `__init__` reads to pick
+    the domain byte, and `digest` to skip the prefix entirely and defer to the
+    plain row.
     """
     if not name and not customization:
         return b""
@@ -93,33 +94,54 @@ class _CShake(_KeccakHash):
     are the same number for the same reason: the prefix exists to fill whole
     blocks of the sponge it is about to enter.
 
-    Both decisions are made once here rather than per `digest` call, so a hash
-    that is used in a loop pays for its prefix once and the traced path carries
-    no conditional at all.
+    `_suffix` is set per instance before `super().__init__`, where every FIPS 202
+    row above sets it as a class attribute. That is the honest shape — cSHAKE's
+    domain byte is a function of its *arguments*, not of its type — and it is
+    also why the base takes no suffix parameter: one there would be a public knob
+    on `Shake128` and `Shake256`, which inherit that constructor, turning a row
+    into a different standard without entering `_parameters`.
+
+    The prefix *bytes* are built once here rather than per `digest` call. The
+    device array is still materialised per call, which costs ~15 us eagerly and
+    nothing under `jit`, where it constant-folds — the same arrangement
+    `Blake3Keyed` uses for its key and `KeccakSponge._pad` for its tail.
+
+    `output_size` is keyword-only and required. An XOF names no output length, so
+    the family refuses a default (`docs/reference/conventions.md`), and keyword
+    -only additionally stops `CShake128(24)` — the shape every other
+    variable-output row takes — from silently reading 24 as a customization of
+    twenty-four NUL bytes.
     """
 
     def __init__(
-        self, customization: bytes = b"", name: bytes = b"", output_size: int = 32
+        self,
+        customization: bytes = b"",
+        name: bytes = b"",
+        *,
+        output_size: int,
     ) -> None:
         self._name = bytes(name)
         self._customization = bytes(customization)
         self._prefix = _prefix_block(self._name, self._customization, self._rate)
         # Section 3.3: with both strings empty this *is* SHAKE, which is a
         # different domain byte and not merely a shorter message.
-        super().__init__(
-            output_size, SHAKE_SUFFIX if not self._prefix else CSHAKE_SUFFIX
-        )
+        self._suffix = CSHAKE_SUFFIX if self._prefix else SHAKE_SUFFIX
+        super().__init__(output_size)
 
     def digest(self, msg: ArrayLike) -> Array:
-        message = device_message(msg)
         if not self._prefix:
-            return self._sponge.hash(message)
+            # Section 3.3's fallback is plain SHAKE, which is exactly what the
+            # base row already computes — so it goes through that door rather
+            # than converting the message a second time on the way.
+            return super().digest(msg)
+        message = device_message(msg)
         # The prefix is one row — it is a property of the hash, which every row
         # of a batch shares — so it is broadcast rather than built per row, the
         # arrangement `byte_hash.padded_batch` uses at the other end of the
-        # message.
+        # message. Both concatenates stay outside the marked region, so the
+        # whole hash is still the one `keccak_sponge` kernel the plain row is.
         head = fnp.broadcast_to(
-            fnp.asarray(bytearray(self._prefix), dtype=fnp.uint8),
+            fnp.asarray(np.frombuffer(self._prefix, dtype=np.uint8)),
             (message.shape[0], len(self._prefix)),
         )
         return self._sponge.hash(fnp.concatenate([head, message], axis=-1))

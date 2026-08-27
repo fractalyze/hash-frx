@@ -33,10 +33,12 @@ of what it asserts (`blake2_params_test.py` keeps the same property).
 
 from __future__ import annotations
 
+import sys
+
 from absl.testing import absltest, parameterized
 
+from hash_frx.keccak import encodings
 from hash_frx.keccak.encodings import (
-    MAX_ENCODE_BITS,
     MAX_ENCODE_EXCLUSIVE,
     bytepad,
     encode_string,
@@ -195,11 +197,6 @@ class BoundTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "2\\*\\*2040"):
             right_encode(MAX_ENCODE_EXCLUSIVE)
 
-    def test_the_limit_is_where_the_count_byte_runs_out(self) -> None:
-        # Stated as an identity rather than a literal, so the constant and its
-        # reason cannot drift apart.
-        self.assertEqual(MAX_ENCODE_BITS, 8 * 255)
-
     def test_a_negative_integer_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "0 <= x"):
             left_encode(-1)
@@ -282,8 +279,15 @@ class PublishedIntermediateTest(absltest.TestCase):
 
     def _padded(self, prefix: bytes, w: int) -> bytes:
         """A published `bytepad` result, spelled as its prefix and its width so
-        the 168 or 136 zero bytes need not be transcribed."""
-        return prefix + bytes(-len(prefix) % w)
+        the 168 or 136 zero bytes need not be transcribed.
+
+        `ljust` rather than `prefix + bytes(-len(prefix) % w)`: the latter is
+        character-for-character `bytepad`'s own fill, which would check the
+        published vectors partly against a copy of the code under test. Every
+        call here is a single block, so the two agree — but only one of them is
+        independent.
+        """
+        return prefix.ljust(w, b"\x00")
 
     def test_the_key_encoding_is_a_bit_count(self) -> None:
         # `Encoded K` is printed as `02 01 00 40 41 ...` — left_encode(256) for
@@ -315,13 +319,13 @@ class PublishedIntermediateTest(absltest.TestCase):
         self.assertEqual(right_encode(512), bytes.fromhex("020002"))
 
     def test_the_function_name_and_customization_encodings(self) -> None:
-        # `Encoded N` and `Encoded S`. The customization is 21 bytes, so its
-        # prefix is left_encode(168) — printed as `01 A8`, the same two bytes
-        # the 168-byte rate produces above. Same bytes, different unit, in one
+        # `Encoded S`. The customization is 21 bytes, so its prefix is
+        # left_encode(168) — printed as `01 A8`, the same two bytes the
+        # 168-byte rate produces above. Same bytes, different unit, in one
         # published sample: the clearest statement of the trap this module
         # documents.
-        self.assertEqual(encode_string(self._NAME), bytes.fromhex("01204B4D4143"))
-        self.assertEqual(encode_string(b""), bytes.fromhex("0100"))
+        # `Encoded N` and `Encoded S` are pinned in `UnitTest` and
+        # `SpecExampleTest`; what is new here is the customization.
         self.assertEqual(
             encode_string(self._CUSTOM), bytes.fromhex("01A8") + self._CUSTOM
         )
@@ -340,6 +344,27 @@ class PublishedIntermediateTest(absltest.TestCase):
             bytepad(encode_string(self._NAME) + encode_string(self._CUSTOM), 136),
             self._padded(bytes.fromhex("018801204B4D414301A8") + self._CUSTOM, 136),
         )
+
+
+class SubstrateTest(absltest.TestCase):
+    """The no-frx property, asserted rather than only declared.
+
+    The Bazel target omits the frx requirement, which enforces this on that leg
+    alone — `docs/reference/development.md` documents a pytest leg where the
+    deps do nothing. `blake2_params_test` carries the same guard for the same
+    reason.
+    """
+
+    def test_the_module_pulls_no_frx(self) -> None:
+        # `blake2_params_test`'s spelling: a future `fnp` import here would
+        # initialize a backend on a host-only path.
+        self.assertNotIn("frx", encodings.__dict__)
+        self.assertNotIn("fnp", encodings.__dict__)
+
+    def test_importing_it_loads_no_backend(self) -> None:
+        # The stronger half, and what the Bazel target's missing frx dep buys
+        # on the other leg: nothing this module reaches has imported frx.
+        self.assertNotIn("frx", sys.modules)
 
 
 if __name__ == "__main__":

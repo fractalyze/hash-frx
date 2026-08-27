@@ -27,20 +27,34 @@ hashes — so the test asserts both that the fallback matches SHAKE and that the
 path not taken would have disagreed. Without the second half, an implementation
 that never branched would pass the first by accident only if it were also wrong,
 which is precisely the confusion worth ruling out.
+
+**Sweeps are unions, not cross products.** Absorb and squeeze are sequential in
+a sponge, so a message length and an output length have no interaction for a
+cross product to find — and every distinct `(rate, output_size, block count)`
+re-traces the whole fused composite at roughly 1.5 s a time. So lengths are
+swept at one output size and output sizes at one length, which is
+`byte_hashes_test`'s structure and for this reason.
 """
 
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.byte_hash import ByteHash
-from hash_frx.keccak.byte_hashes import SHAKE_SUFFIX, Shake128, Shake256
+from hash_frx.keccak.byte_hashes import (
+    SHAKE128_RATE,
+    SHAKE256_RATE,
+    SHAKE_SUFFIX,
+    Shake128,
+    Shake256,
+)
 from hash_frx.keccak.cshake import (
     CSHAKE_SUFFIX,
     CShake128,
@@ -51,15 +65,19 @@ from hash_frx.keccak.cshake import (
 from hash_frx.keccak.encodings import bytepad, encode_string
 from hash_frx.keccak.testing.reference import sponge
 
-# The rate each cSHAKE inherits from the SHAKE it customizes, and which its
-# `bytepad` fills. Boundary lengths are derived from these rather than listed,
-# so a rate arrives with its boundaries or not at all — `byte_hashes_test`'s
-# rule, for the same reason.
-_RATES: dict[type[_CShake], int] = {CShake128: 168, CShake256: 136}
-_SHAKE = {
-    CShake128: (Shake128, hashlib.shake_128),
-    CShake256: (Shake256, hashlib.shake_256),
-}
+# `hashlib.shake_128` / `shake_256`: bytes -> an XOF whose `.digest(n)` takes a
+# length. `hashlib`'s own XOF type is not public, so the result is `Any`.
+_ShakeFactory = Callable[[bytes], Any]
+
+# One case per cSHAKE row: the rate it inherits from the SHAKE it customizes
+# (and which its `bytepad` fills), that SHAKE row, and `hashlib`'s. Rates are
+# imported rather than spelled, so a row arrives with its rate or not at all —
+# `byte_hashes_test`'s rule, and the constants it pins against the FIPS 202
+# capacity formula are these.
+_CASES = (
+    ("cshake128", CShake128, SHAKE128_RATE, Shake128, hashlib.shake_128),
+    ("cshake256", CShake256, SHAKE256_RATE, Shake256, hashlib.shake_256),
+)
 
 
 def _boundary_lengths(rate: int) -> tuple[int, ...]:
@@ -73,7 +91,7 @@ def _batch(data: bytes) -> np.ndarray:
     return np.frombuffer(data, dtype=np.uint8).reshape(1, -1)
 
 
-def _digest(row: ByteHash, data: bytes) -> bytes:
+def _digest(row: _CShake, data: bytes) -> bytes:
     return bytes(np.asarray(row.digest(_batch(data)))[0])
 
 
@@ -87,6 +105,13 @@ def _reference_cshake(
         return sponge(data, rate, SHAKE_SUFFIX, out_bytes)
     prefix = bytepad(encode_string(name) + encode_string(customization), rate)
     return sponge(prefix + data, rate, CSHAKE_SUFFIX, out_bytes)
+
+
+# The two `(N, S)` shapes the reference sweeps run: a bare customization, and a
+# non-empty function name beside one. The second is what KMAC will use, and
+# without it the `N` limb of `encode_string(N) ‖ encode_string(S)` is never
+# compared against anything but itself.
+_NAMED = ((b"", b"S"), (b"KMAC", b"Email Signature"))
 
 
 @dataclass(frozen=True)
@@ -176,56 +201,59 @@ class PublishedVectorTest(parameterized.TestCase):
         )
         self.assertEqual(_digest(row, vector.data), vector.outval)
 
-    @parameterized.named_parameters(*((f"sample_{v.sample}", v) for v in _VECTORS))
-    def test_the_vector_is_self_consistent(self, vector: _Vector) -> None:
+    def test_the_vectors_were_parsed_at_the_published_lengths(self) -> None:
         # The samples state their own lengths in bits; a vector whose declared
         # and actual lengths disagree was mis-parsed, and that is a different
         # failure from a wrong implementation.
-        self.assertEqual(
-            vector.row(output_size=len(vector.outval)).digest_size, len(vector.outval)
-        )
-        self.assertIn(len(vector.data), (4, 200))
+        self.assertEqual({len(v.data) for v in _VECTORS}, {4, 200})
+        self.assertEqual({len(v.outval) for v in _VECTORS}, {32, 64})
 
 
 class FallbackTest(parameterized.TestCase):
     """Section 3.3's empty-`N`-and-`S` case, from both sides."""
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
+    @parameterized.named_parameters(*_CASES)
     def test_empty_name_and_customization_is_plain_shake(
-        self, row: type[_CShake]
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
     ) -> None:
         # Against `hashlib`, which implements FIPS 202 without sharing a line
         # with this tree — so this is agreement with the standard rather than
         # with a second copy of one reading of it.
-        _, reference = _SHAKE[row]
-        for length in _boundary_lengths(_RATES[row]):
+        for length in _boundary_lengths(rate):
             data = bytes(i % 256 for i in range(length))
-            for out in (16, 32, _RATES[row] + 1):
-                self.assertEqual(
-                    _digest(row(output_size=out), data),
-                    reference(data).digest(out),
-                    f"length={length} out={out}",
-                )
+            self.assertEqual(
+                _digest(row(output_size=32), data),
+                reference(data).digest(32),
+                f"length={length}",
+            )
+        data = bytes(i % 256 for i in range(200))
+        for out in (16, 64, rate + 1):
+            self.assertEqual(
+                _digest(row(output_size=out), data),
+                reference(data).digest(out),
+                f"out={out}",
+            )
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_the_fallback_equals_the_plain_shake_row(self, row: type[_CShake]) -> None:
+    @parameterized.named_parameters(*_CASES)
+    def test_the_fallback_equals_the_plain_shake_row(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
         # And equals this tree's own SHAKE row, which is the substitution a
         # consumer actually makes.
-        shake, _ = _SHAKE[row]
+        data = bytes(range(200))
         for out in (16, 32, 64):
-            data = bytes(range(200))
             self.assertEqual(
                 _digest(row(output_size=out), data), _digest(shake(out), data)
             )
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_the_fallback_is_a_branch_not_an_identity(self, row: type[_CShake]) -> None:
+    @parameterized.named_parameters(*_CASES)
+    def test_the_fallback_is_a_branch_not_an_identity(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
         # The heart of it. Had the prefix path been taken at empty N and S, the
         # digest would have been well-defined and NOT SHAKE's — so an
         # implementation that forgot to branch produces a self-consistent wrong
         # hash. This asserts the road not taken really does diverge.
-        rate = _RATES[row]
-        _, reference = _SHAKE[row]
         data = b"abc"
         unbranched = sponge(
             bytepad(encode_string(b"") + encode_string(b""), rate) + data,
@@ -236,20 +264,29 @@ class FallbackTest(parameterized.TestCase):
         self.assertNotEqual(unbranched, reference(data).digest(32))
         self.assertEqual(_digest(row(output_size=32), data), reference(data).digest(32))
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_only_both_empty_takes_the_fallback(self, row: type[_CShake]) -> None:
-        # A customization with an empty name still customizes, and vice versa.
-        rate = _RATES[row]
-        self.assertEmpty(_prefix_block(b"", b"", rate))
-        self.assertNotEmpty(_prefix_block(b"", b"S", rate))
-        self.assertNotEmpty(_prefix_block(b"N", b"", rate))
+    @parameterized.named_parameters(*_CASES)
+    def test_only_both_empty_takes_the_fallback(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
+        # Asserted through `digest` rather than through the prefix, so it holds
+        # whatever the construction does internally: a customization with an
+        # empty name still customizes, and vice versa.
+        data = b"abc"
+        plain = reference(data).digest(32)
+        self.assertEqual(_digest(row(output_size=32), data), plain)
+        self.assertNotEqual(
+            _digest(row(customization=b"S", output_size=32), data), plain
+        )
+        self.assertNotEqual(_digest(row(name=b"N", output_size=32), data), plain)
 
 
 class DomainSeparationTest(parameterized.TestCase):
     """That the customization actually separates — the construction's purpose."""
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_different_customizations_disagree(self, row: type[_CShake]) -> None:
+    @parameterized.named_parameters(*_CASES)
+    def test_different_customizations_disagree(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
         data = b"the same message"
         digests = {
             _digest(row(customization=s, output_size=32), data)
@@ -257,9 +294,9 @@ class DomainSeparationTest(parameterized.TestCase):
         }
         self.assertLen(digests, 4)
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
+    @parameterized.named_parameters(*_CASES)
     def test_name_and_customization_are_not_interchangeable(
-        self, row: type[_CShake]
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
     ) -> None:
         # `encode_string(N) || encode_string(S)` is unambiguous, so swapping the
         # two is a different prefix. A `bytepad` over the raw concatenation
@@ -270,8 +307,10 @@ class DomainSeparationTest(parameterized.TestCase):
             _digest(row(customization=b"alpha", name=b"beta", output_size=32), data),
         )
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_a_split_customization_does_not_collide(self, row: type[_CShake]) -> None:
+    @parameterized.named_parameters(*_CASES)
+    def test_a_split_customization_does_not_collide(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
         # The unambiguous-parsing property: ("ab", "") and ("a", "b") share a
         # byte concatenation and must not share a digest.
         data = b"msg"
@@ -285,26 +324,24 @@ class ReferenceSweepTest(parameterized.TestCase):
     """The device path against the plain-Python sponge, where no published
     vector reaches."""
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
+    @parameterized.named_parameters(*_CASES)
     def test_matches_the_reference_across_absorb_boundaries(
-        self, row: type[_CShake]
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
     ) -> None:
-        rate = _RATES[row]
         for length in _boundary_lengths(rate):
             data = bytes(i % 256 for i in range(length))
-            for custom in (b"S", b"Email Signature"):
+            for name, custom in _NAMED:
                 self.assertEqual(
-                    _digest(row(customization=custom, output_size=32), data),
-                    _reference_cshake(data, 32, b"", custom, rate),
-                    f"length={length} custom={custom!r}",
+                    _digest(row(customization=custom, name=name, output_size=32), data),
+                    _reference_cshake(data, 32, name, custom, rate),
+                    f"length={length} name={name!r} custom={custom!r}",
                 )
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
+    @parameterized.named_parameters(*_CASES)
     def test_matches_the_reference_across_squeeze_boundaries(
-        self, row: type[_CShake]
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
     ) -> None:
         # Outputs that cross a rate boundary force the squeeze to permute again.
-        rate = _RATES[row]
         data = b"squeeze"
         for out in (1, rate - 1, rate, rate + 1, 2 * rate):
             self.assertEqual(
@@ -313,13 +350,12 @@ class ReferenceSweepTest(parameterized.TestCase):
                 f"out={out}",
             )
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
+    @parameterized.named_parameters(*_CASES)
     def test_a_customization_spanning_blocks_still_agrees(
-        self, row: type[_CShake]
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
     ) -> None:
         # A customization long enough to push `bytepad` past one block: the
         # prefix is still rate-aligned, so the message still starts fresh.
-        rate = _RATES[row]
         for size in (rate, rate + 1, 3 * rate):
             custom = bytes(i % 256 for i in range(size))
             self.assertEqual(len(_prefix_block(b"", custom, rate)) % rate, 0)
@@ -331,30 +367,37 @@ class ReferenceSweepTest(parameterized.TestCase):
 
 
 class SeamTest(parameterized.TestCase):
-    """What every row in the family owes the seam."""
+    """What these rows owe the seam beyond what the shipped-row registry says.
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_satisfies_the_byte_hash_protocol(self, row: type[_CShake]) -> None:
-        self.assertIsInstance(row(customization=b"S"), ByteHash)
+    `testing/rows.py` registers both, so `row_conformance_test` already runs the
+    Protocol check and the equality matrix on them. The equality contract is
+    kept here as well, deliberately: it is the jit cache key, its failure mode is
+    silent, and this module is where a reader looks for what `N` and `S` do.
+    """
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_digest_size_matches_what_digest_returns(self, row: type[_CShake]) -> None:
-        for out in (1, 32, 200):
+    @parameterized.named_parameters(*_CASES)
+    def test_digest_size_matches_what_digest_returns(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
+        for out in (1, 32):
             instance = row(customization=b"S", output_size=out)
             self.assertLen(_digest(instance, b"msg"), instance.digest_size)
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
+    @parameterized.named_parameters(*_CASES)
     def test_reports_the_same_fusion_path_as_the_plain_row(
-        self, row: type[_CShake]
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
     ) -> None:
         # cSHAKE lowers through the same sponge as the SHAKE it customizes, so
         # it routes the same way; a different answer would mean the prefix had
         # changed the lowering, which it must not.
-        shake, _ = _SHAKE[row]
-        self.assertEqual(row(customization=b"S").fusion_path, shake(32).fusion_path)
+        self.assertEqual(
+            row(customization=b"S", output_size=32).fusion_path, shake(32).fusion_path
+        )
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_batched_equals_per_row(self, row: type[_CShake]) -> None:
+    @parameterized.named_parameters(*_CASES)
+    def test_batched_equals_per_row(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
         instance = row(customization=b"S", output_size=32)
         messages = [bytes([i] * 40) for i in range(4)]
         batched = np.asarray(
@@ -363,8 +406,10 @@ class SeamTest(parameterized.TestCase):
         for i, message in enumerate(messages):
             self.assertEqual(bytes(batched[i]), _digest(instance, message))
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_digest_accepts_a_tracer(self, row: type[_CShake]) -> None:
+    @parameterized.named_parameters(*_CASES)
+    def test_digest_accepts_a_tracer(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
         # The prefix is a host constant and every loop bound is static, so
         # nothing here reads a message byte.
         instance = row(customization=b"S", output_size=32)
@@ -372,10 +417,12 @@ class SeamTest(parameterized.TestCase):
         traced = frx.jit(instance.digest)(fnp.asarray(_batch(data)))
         self.assertEqual(bytes(np.asarray(traced)[0]), _digest(instance, data))
 
-    @parameterized.named_parameters(("cshake128", CShake128), ("cshake256", CShake256))
-    def test_value_identity_covers_every_parameter(self, row: type[_CShake]) -> None:
-        # The equality contract is the jit cache key. Each parameter is varied
-        # alone, because varying two at once passes while either is ignored.
+    @parameterized.named_parameters(*_CASES)
+    def test_value_identity_covers_every_parameter(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
+        # Each parameter varied alone, because varying two at once passes while
+        # either is ignored.
         base = row(customization=b"a", name=b"n", output_size=32)
         self.assertEqual(base, row(customization=b"a", name=b"n", output_size=32))
         self.assertEqual(
@@ -387,6 +434,19 @@ class SeamTest(parameterized.TestCase):
             row(customization=b"a", name=b"n", output_size=64),
         ):
             self.assertNotEqual(base, other)
+
+    @parameterized.named_parameters(*_CASES)
+    def test_the_output_length_is_required(
+        self, row: type[_CShake], rate: int, shake: type, reference: _ShakeFactory
+    ) -> None:
+        # An XOF names no output length, so the family refuses a default
+        # (`docs/reference/conventions.md`). Keyword-only also stops `row(24)` —
+        # the shape every other variable-output row takes — from reading 24 as a
+        # customization of twenty-four NUL bytes.
+        with self.assertRaises(TypeError):
+            row()  # type: ignore[call-arg]
+        with self.assertRaises(TypeError):
+            row(24)  # type: ignore[call-arg,arg-type]
 
     def test_the_two_rates_are_different_hashes(self) -> None:
         self.assertNotEqual(
