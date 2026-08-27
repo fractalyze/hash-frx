@@ -1,0 +1,46 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Ascon-p[12] as a `Permutation` over uint32 word halves (NIST SP 800-232 §3) —
+# the seam a generic sponge takes, and the round body the byte digest below runs
+# inside its own marked region.
+py_library(
+    name = "permutation",
+    srcs = [
+        "__init__.py",
+        "permutation.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx:word64",
+        requirement("frx"),
+    ],
+)
+
+# Byte-oriented Ascon-Hash256 (NIST SP 800-232, the lightweight-cryptography
+# standard): the `digest` batch hash behind the `hash_frx.digest.ascon_hash256`
+# marker plus the `AsconHash256` ByteHash row, over uint32 lane halves. A
+# standalone hash, not a Permutation; no zk_dtypes / x64 dependency. The host
+# differential partner is testonly
+# (//hash_frx/ascon/testing:reference) — no C library implements
+# Ascon.
+py_library(
+    name = "ascon",
+    srcs = [
+        "__init__.py",
+        "ascon.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":permutation",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx/extension:pad",
+        "//hash_frx/extension:sponge",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)

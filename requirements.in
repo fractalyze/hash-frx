@@ -12,14 +12,27 @@
 # the binary-field dtypes (tower t0..t7 + flat GHASH) in the frontend, which
 # requires zk_dtypes >= 0.0.10.
 #
-# The frx build is pinned to the one `zorch` pins. The symmetric layer is being
-# extracted from there, so a ported hash must be byte-comparable against its
-# origin — a simultaneous toolchain bump would make any mismatch ambiguous
-# between the port and the bump.
+# The pin is exact rather than that floor because a bzlmod consumer mirrors it:
+# such a consumer resolves this module's pip dependencies from this lock and its
+# own from its own, and only equal versions keep one zk_dtypes on a test's
+# sys.path. So the pin may run ahead of the floor to satisfy a consumer, and
+# lowering it back to the floor is not a cleanup.
+#
+# The frx pin must satisfy the `frx>=` floor in pyproject.toml (see the
+# rationale there).
+#
+# `blake3` is the BLAKE3 team's own Rust binding, and the one runtime dependency
+# here that is not frx or numpy, and since the host rows went (#324) it is a TEST
+# dependency rather than a runtime one — `pyproject.toml` no longer lists it.
+# The BLAKE3 suites hash against it because a differential test against this
+# tree's own transcription of the spec proves far less than one against the
+# reference the published vectors come from (`docs/reference/conventions.md`,
+# byte-exactness), and the standard library has no BLAKE3 to stand in.
 absl-py
 numpy
-frx==0.10.1.dev20260801051831
-frxlib==0.10.1.dev20260801051831
-frx-cuda12-pjrt==0.10.1.dev20260801051831
-frx-cuda12-plugin==0.10.1.dev20260801051831
-zk-dtypes==0.0.10
+blake3
+frx==0.10.2.dev20260826215637
+frxlib==0.10.2.dev20260826215637
+frx-cuda12-pjrt==0.10.2.dev20260826215637
+frx-cuda12-plugin==0.10.2.dev20260826215637
+zk-dtypes==0.0.17

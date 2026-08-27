@@ -31,3 +31,27 @@ def assert_single_trace(
         if size_after_first is None:
             size_after_first = zone._cache_size()
     test.assertEqual(zone._cache_size(), size_after_first)
+
+
+def assert_trace_growth(
+    test: TestCase, zone: Any, calls: Iterable[Callable[[], object]], at_most: int
+) -> None:
+    """Run ``calls``; fail if ``zone`` gained more than ``at_most`` traces.
+
+    The sibling of ``assert_single_trace`` for a zone that is SUPPOSED to
+    compile more than once, just far fewer times than it is called: a
+    runtime-length digest compiles per capacity width, so a sweep over many
+    lengths must land in a handful of traces. Counting the zone's own cache is
+    what makes that a measurement rather than a restatement of the width policy.
+
+    An upper bound and not equality, for the reason this module's docstring
+    gives: the zone is shared process-wide, so an earlier test may already have
+    seeded one of the entries this sweep would otherwise create.
+    """
+    before = zone._cache_size()
+    for call in calls:
+        call()
+    grown = zone._cache_size() - before
+    test.assertLessEqual(
+        grown, at_most, f"zone gained {grown} traces over {at_most} allowed"
+    )

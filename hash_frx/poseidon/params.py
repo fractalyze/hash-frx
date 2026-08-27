@@ -22,10 +22,18 @@ class PoseidonParams:
     """Fully-free parameter surface of a classic Poseidon permutation.
 
     The core treats `dtype` as opaque and names no field/scheme/zkVM. Classic
-    Poseidon (ark-sponge / HorizenLabs reference style) is the symmetric round
-    function: every round is `ARC -> S-box -> dense MDS`, with the S-box applied
-    to all lanes in a *full* round and to the last lane only in a *partial*
-    round. The rounds split full/partial/full — `full_rounds/2` full, then
+    Poseidon is the symmetric round function: every round is
+    `ARC -> S-box -> dense MDS`, with the S-box applied to all lanes in a *full*
+    round and to a single lane in a *partial* round.
+
+    **Which lane is a convention, and this one follows ark-sponge 0.3: the
+    last.** HorizenLabs, circomlib, Plonky3 and ark-crypto-primitives 0.5 all
+    apply it to lane 0. The two are related by reversing the lane order, so a
+    consumer matching a circomlib or EVM parameter set has to conjugate the MDS
+    and the round constants rather than pass them through — the surface to make
+    that a parameter is on the redesign epic.
+
+    The rounds split full/partial/full — `full_rounds/2` full, then
     `partial_rounds` partial, then `full_rounds/2` full — and the dense MDS runs
     on *every* round.
 
@@ -51,6 +59,12 @@ class PoseidonParams:
     mds: Array
 
     def __post_init__(self) -> None:
+        # `F` and `np.dtype(F)` name one dtype but hash differently (they only
+        # compare equal), so an unnormalized field makes two jit cache keys out
+        # of one parameterization and silently re-traces. The scalar type is the
+        # canonical spelling — `np.dtype(x).type` round-trips — and it is the
+        # one that stays callable for the zero comparisons below.
+        object.__setattr__(self, "dtype", np.dtype(self.dtype).type)
         if self.alpha < 1:
             raise ValueError(f"alpha must be a positive int, got {self.alpha}")
         if self.full_rounds < 1 or self.full_rounds % 2 != 0:
@@ -123,10 +137,8 @@ class PoseidonParams:
     @property
     def mds_rows(self) -> tuple[tuple[int, ...], ...]:
         """The `width × width` MDS as canonical ints (rows of ints) — the form
-        the body applies via integer literals (no captured field array, which a
-        name-routed `fused_region` would lift to a leading operand) and the
-        dedicated emitter carries as a marker attribute (flattened row-major at
-        the call-site). Canonical ints come from a numpy object cast, which
+        the dedicated emitter carries as a marker attribute (flattened row-major
+        at the call-site). Canonical ints come from a numpy object cast, which
         Montgomery-decodes without needing frx x64."""
         w = self.width
         canon = np.asarray(self.mds).astype(object)
@@ -191,6 +203,12 @@ class SparsePoseidonParams:
     partial_col: Array
 
     def __post_init__(self) -> None:
+        # `F` and `np.dtype(F)` name one dtype but hash differently (they only
+        # compare equal), so an unnormalized field makes two jit cache keys out
+        # of one parameterization and silently re-traces. The scalar type is the
+        # canonical spelling — `np.dtype(x).type` round-trips — and it is the
+        # one that stays callable for the zero comparisons below.
+        object.__setattr__(self, "dtype", np.dtype(self.dtype).type)
         if self.alpha < 1:
             raise ValueError(f"alpha must be a positive int, got {self.alpha}")
         if self.half_full_rounds < 1:
@@ -277,12 +295,10 @@ class SparsePoseidonParams:
         return h
 
     # Canonical-int views of the four matrices — the form the dedicated
-    # `hash_frx.sparse_poseidon` emitter carries as marker attributes (flattened
-    # row-major) and the reference body applies via integer literals (no captured
-    # field array, which a name-routed `fused_region` would lift to a leading
-    # operand). Canonical ints come from a numpy object cast, which Montgomery-
-    # decodes without needing frx x64. As with `PoseidonParams.mds`, the emitter
-    # only supports fields whose canonical values fit an int64 literal.
+    # `hash_frx.perm.poseidon_sparse` emitter carries as marker attributes (flattened
+    # row-major). Canonical ints come from a numpy object cast, which Montgomery-
+    # decodes without needing frx x64. The attribute encoding caps the field at a
+    # u64 (see `_select_fused_region_name`).
     @property
     def mds_rows(self) -> tuple[tuple[int, ...], ...]:
         """The dense MDS `M` as canonical ints, applied every full round + final."""

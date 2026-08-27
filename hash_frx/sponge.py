@@ -1,8 +1,8 @@
-"""Sponge hash — scheme-agnostic over a Permutation, one entry per construction.
+"""Sponge hash — scheme-agnostic over a Permutation, one entry per chaining rule.
 
-`Sponge.hash(input, sponge_type=...)` absorbs in `rate`-sized blocks and squeezes
-the first `out` lanes. `sponge_type` (`SpongeType`) picks the construction via a
-`_MODES` row, so a new one is a member + a row, never a method.
+`Sponge.hash(input, chaining=...)` absorbs in `rate`-sized blocks and squeezes
+the first `out` lanes. `chaining` (`SpongeChaining`) picks how the chain crosses
+capacity via a `_RULES` row, so a new one is a member + a row, never a method.
 
 That extension point covers sponges shaped like this one: 1-D field elements,
 an overwrite absorb, and a squeeze that truncates the final state. A sponge that
@@ -12,10 +12,11 @@ its own ([`keccak/sponge.py`](keccak/sponge.py)) and why `duplex_sponge.py`
 refuses an absorb-mode flag for the same reason.
 
 `rate`/`out` are the free params on `SpongeParams` (capacity = width - rate). A
-`has_dedicated_fusion` permutation lowers the whole absorb to one
-`hash_frx.sponge_hash` region (assembled here over the permutation's fused-region
-ABI); a non-fused one runs the `while_loop` absorb over `permute`. Both read the
-absorb length at runtime, so concrete and symbolic `n` lower the same way.
+`DEDICATED`-path permutation lowers the whole absorb to one
+`hash_frx.digest.field_sponge` region (assembled here over the permutation's
+fused-region ABI); a non-fused one runs the `while_loop` absorb over `permute`.
+Both read the absorb length at runtime, so concrete and symbolic `n` lower the
+same way.
 """
 
 from __future__ import annotations
@@ -23,35 +24,48 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
+import frx
 import frx.numpy as fnp
-from frx import Array, lax
+from frx import Array
 
-from hash_frx.fusion import fused_region
+from hash_frx.extension.sponge import field_absorb
+from hash_frx.fusion import FusionPath, fused_region_over
 from hash_frx.permutation import Permutation
 
 
-class SpongeType(enum.Enum):
-    """The sponge construction a hash uses (`Sponge.hash(..., sponge_type=...)`).
-    Behaviour is a `_MODES` row, so a new one is a member + a row, not a method."""
+class SpongeChaining(enum.Enum):
+    """How the chain crosses capacity between blocks (`Sponge.hash(..., chaining=...)`).
 
-    PADDING_FREE = "padding_free"  # Plonky3 PaddingFreeSponge (default)
-    MERKLE_DAMGARD = "merkle_damgard"  # chains each block's digest through capacity
+    Both members share the sponge skeleton — absorb into rate, permute, squeeze —
+    and differ only in a `_RULES` row, which is where their behaviour lives.
+    Naming this axis after Merkle–Damgård, as an earlier spelling did, claimed a
+    domain extension for a discipline inside this one (`docs/blocks/hash.md`,
+    "Names say the construction they implement").
+
+    **The values are a frozen wire spelling rather than the concept names**: each
+    rides the `hash_frx.digest.field_sponge` composite as `construction=`, so
+    renaming one stages exactly like a marker rename (`markers.py`).
+    """
+
+    IMPLICIT_CAPACITY = "padding_free"  # Plonky3 PaddingFreeSponge (default)
+    DIGEST_IN_CAPACITY = "merkle_damgard"
 
 
 # The whole absorb+squeeze as one region the vendor expands into the fused kernel.
 # Attrs carry a `permutation` discriminator + shape; the kernel reads the absorb
 # length at runtime, so one cubin serves every width and symbolic `n`.
-SPONGE_HASH_MARKER = "hash_frx.sponge_hash"
+SPONGE_HASH_MARKER = "hash_frx.digest.field_sponge"
 SPONGE_HASH_MARKER_VERSION = 1
 
 
 @dataclass(frozen=True)
-class _Mode:
-    """One sponge construction's behaviour — the whole per-type surface. A new
-    construction is one `_MODES` row (a `SpongeType` member + its two hooks),
-    no new module-level functions.
+class _Rule:
+    """One chaining rule's behaviour — the whole per-member surface. A new one is
+    a single `_RULES` row (a `SpongeChaining` member + its two hooks), no new
+    module-level functions.
 
     `tail_fill(state, rate)` fills a partial block's masked rate lanes;
     `set_capacity(state, cap, rate, out)` places the prior digest `cap`
@@ -64,17 +78,17 @@ class _Mode:
     fills_capacity: bool
 
 
-_MODES: dict[SpongeType, _Mode] = {
-    # Padding-free (Plonky3): masked lanes keep the prior state; capacity
-    # carries implicitly, so set_capacity is a no-op.
-    SpongeType.PADDING_FREE: _Mode(
+_RULES: dict[SpongeChaining, _Rule] = {
+    # Masked lanes keep the prior state; capacity carries the chain on its own,
+    # so set_capacity is a no-op.
+    SpongeChaining.IMPLICIT_CAPACITY: _Rule(
         tail_fill=lambda s, rate: s[:rate],
         set_capacity=lambda s, cap, rate, out: s,
         fills_capacity=False,
     ),
-    # Merkle-Damgard: masked lanes are zero-padded; capacity lanes
-    # [rate:rate+out] take the prior block's digest.
-    SpongeType.MERKLE_DAMGARD: _Mode(
+    # Masked lanes are zero-padded; capacity lanes [rate:rate+out] take the
+    # prior block's digest.
+    SpongeChaining.DIGEST_IN_CAPACITY: _Rule(
         tail_fill=lambda s, rate: s[:rate] - s[:rate],
         set_capacity=lambda s, cap, rate, out: s.at[rate : rate + out].set(cap),
         fills_capacity=True,
@@ -88,31 +102,36 @@ def _absorb(
     rate: int,
     out: int,
     permute: Callable[[Array], Array],
-    sponge_type: SpongeType,
+    chaining: SpongeChaining,
 ) -> Array:
-    """Absorb as a ``while_loop`` over ``ceil(n/rate)`` blocks — shared by every
-    `SpongeType` (the mode's `tail_fill`/`set_capacity` are the only per-type
-    pieces). The bound is read at runtime, so concrete and symbolic ``n`` alike."""
-    mode = _MODES[sponge_type]
+    """Absorb over ``ceil(n/rate)`` blocks and squeeze the first ``out`` lanes —
+    shared by every `SpongeChaining`, whose `tail_fill`/`set_capacity` are the
+    only per-member pieces.
+
+    The schedule is `extension.sponge.field_absorb`: a ``while_loop``, so the
+    bound is read at runtime and concrete and symbolic ``n`` lower the same way.
+    That loop form is what keeps this construction out of the byte sponges'
+    `absorb_squeeze`, whose counts are static — the two schedules are siblings
+    in `extension/sponge.py` rather than one body with the loop as a parameter.
+
+    The squeeze is a truncation of the final state rather than an iterated read,
+    which is why nothing here needs the byte schedule's permute-between-reads
+    rule."""
+    rule = _RULES[chaining]
     n = input.shape[0]
     nb = (n + rate - 1) // rate
     lanes = fnp.arange(rate)
 
-    def cond(carry: tuple[Array, Array]) -> Array:
-        return carry[1] < nb
-
-    def body(carry: tuple[Array, Array]) -> tuple[Array, Array]:
-        s, i = carry
+    def merge(s: Array, i: Array) -> Array:
         start = i * rate
         w = fnp.minimum(rate, n - start)
         # Last block reads past n; clamp OOB indices (masked out below).
         block = input[fnp.clip(start + lanes, 0, n - 1)]
         cap = s[:out]  # prior digest (zeros on block 0); snapshot before overwrite
-        s = s.at[:rate].set(fnp.where(lanes < w, block, mode.tail_fill(s, rate)))
-        s = mode.set_capacity(s, cap, rate, out)
-        return permute(s), i + 1
+        s = s.at[:rate].set(fnp.where(lanes < w, block, rule.tail_fill(s, rate)))
+        return rule.set_capacity(s, cap, rate, out)
 
-    state, _ = lax.while_loop(cond, body, (state, fnp.int32(0)))
+    state = field_absorb(state, blocks=nb, absorb=merge, permute=permute)
     return state[:out]
 
 
@@ -121,47 +140,36 @@ def _fused_hash(
     input: Array,
     rate: int,
     out: int,
-    sponge_type: SpongeType,
+    chaining: SpongeChaining,
 ) -> Array:
-    """Absorb+squeeze as ONE `hash_frx.sponge_hash` region over a dedicated-fusion
-    permutation. The decomposition rebuilds a const-free `permute` from the ABI
-    operands (a `lax.composite` lifts closed-over consts and breaks the ABI), then
-    runs `_absorb`, so the fallback HLO matches the generic path. Caller gates on
-    `has_dedicated_fusion`."""
-    operands, permute_from_operands, perm_attrs = perm.fused_region_spec(input)
+    """Absorb+squeeze as ONE `hash_frx.digest.field_sponge` region over a
+    dedicated-fusion permutation. `fused_region_over` rebuilds `permute` from
+    the ABI operands — the emitter's operand contract names them there — so the
+    fallback HLO matches the generic path. Caller gates on
+    `fusion_path.is_one_kernel`."""
 
-    def sponge(inp: Array, *constants: Array, **_attrs: object) -> Array:
+    def sponge(inp: Array, permute: Callable[[Array], Array]) -> Array:
         state = fnp.zeros(perm.width, dtype=inp.dtype)
-        return _absorb(
-            inp,
-            state,
-            rate,
-            out,
-            lambda s: permute_from_operands(s, *constants),
-            sponge_type,
-        )
+        return _absorb(inp, state, rate, out, permute, chaining)
 
-    # Permutation attrs + this sponge's shape (`rate`/`digest_elems`) and
-    # `construction` — the string the kernel switches on (extensible to any
-    # `SpongeType`). The marker name/version are the sponge's.
-    attrs: dict[str, object] = {
-        **perm_attrs,
-        "rate": rate,
-        "digest_elems": out,
-        "construction": sponge_type.value,
-    }
-    return fused_region(
+    # This sponge's shape (`rate`/`digest_elems`) and `construction` — the string
+    # the kernel switches on (extensible to any `SpongeChaining`) — alongside the
+    # permutation's own attrs. The marker name/version are the sponge's.
+    return fused_region_over(
+        perm,
+        input,
         sponge,
-        *operands,
         name=SPONGE_HASH_MARKER,
         version=SPONGE_HASH_MARKER_VERSION,
-        **attrs,
+        rate=rate,
+        digest_elems=out,
+        construction=chaining.value,
     )
 
 
 @dataclass(frozen=True)
 class SpongeParams:
-    """Free parameters of a padding-free sponge.
+    """Free parameters of a sponge hash, whichever `SpongeChaining` it runs.
 
     rate : field elements absorbed per permutation (capacity = width - rate).
     out  : field elements squeezed (the digest size).
@@ -183,9 +191,10 @@ class SpongeParams:
 class Sponge:
     """Sponge hash over a fixed-width Permutation.
 
-    `hash(input, sponge_type=...)` is the one entry point (one call = one function
-    = one fused `hash_frx.sponge_hash` kernel). The permutation supplies only its
-    arithmetic — `permute` and its fused-region ABI; the construction lives here.
+    `hash(input, chaining=...)` is the one entry point (one call = one function
+    = one fused `hash_frx.digest.field_sponge` kernel). The permutation supplies
+    only its arithmetic — `permute` and its fused-region ABI; the construction
+    lives here.
     """
 
     def __init__(self, permutation: Permutation, params: SpongeParams) -> None:
@@ -217,11 +226,11 @@ class Sponge:
         return hash((self._permutation, self.rate, self.out))
 
     @property
-    def has_dedicated_fusion(self) -> bool:
-        """Whether the permutation lowers to a hash-dedicated fusion marker, so a
-        consumer can wrap a whole region using this hash in an expandable
-        composite. Delegates to the permutation."""
-        return self._permutation.has_dedicated_fusion
+    def fusion_path(self) -> FusionPath:
+        """How the underlying permute lowers on this backend — `DEDICATED` is
+        what lets a consumer wrap a whole region using this hash in an
+        expandable composite. Delegates to the permutation."""
+        return self._permutation.fusion_path
 
     @property
     def dtype(self) -> Any:
@@ -229,12 +238,12 @@ class Sponge:
         return self._permutation.dtype
 
     def hash(
-        self, input: Array, sponge_type: SpongeType = SpongeType.PADDING_FREE
+        self, input: Array, chaining: SpongeChaining = SpongeChaining.IMPLICIT_CAPACITY
     ) -> Array:
         """Absorb `input` (1-D) and squeeze the first `out` lanes: (n,) -> (out,).
 
-        `sponge_type` picks the construction (see `SpongeType`). A
-        `has_dedicated_fusion` permutation lowers to one `hash_frx.sponge_hash`
+        `chaining` picks how the chain crosses capacity (see `SpongeChaining`). A
+        `DEDICATED`-path permutation lowers to one `hash_frx.digest.field_sponge`
         region; a non-fused one runs the `while_loop` absorb. Both read the absorb
         length at runtime, so symbolic `n` lowers like a concrete one.
         """
@@ -245,19 +254,44 @@ class Sponge:
             raise TypeError(
                 f"input dtype {input.dtype} must match the sponge field {self.dtype}"
             )
-        # A capacity-filling construction (e.g. MERKLE_DAMGARD) needs rate+out==width.
-        if _MODES[sponge_type].fills_capacity and (
+        if _RULES[chaining].fills_capacity and (
             self.rate + self.out != self._permutation.width
         ):
             raise ValueError(
-                f"{sponge_type.value} hash needs rate + out == width (the digest "
+                f"{chaining.name} hash needs rate + out == width (the digest "
                 f"fills the capacity), got {self.rate} + {self.out} != "
                 f"{self._permutation.width}"
             )
-        # Dedicated-fusion → one `hash_frx.sponge_hash` region (built here); else the
-        # generic `while_loop` absorb over `permute`.
-        perm = self._permutation
-        if perm.has_dedicated_fusion:
-            return _fused_hash(perm, input, self.rate, self.out, sponge_type)
-        state = fnp.zeros(perm.width, dtype=input.dtype)
-        return _absorb(input, state, self.rate, self.out, perm.permute, sponge_type)
+        # Zero absorbed blocks leave the state at its zero initialization, so
+        # the digest is the zero prefix (Plonky3's PaddingFreeSponge on an
+        # empty iterator; DIGEST_IN_CAPACITY chains nothing either).
+        # Static, so no marker or permute is emitted for a constant result —
+        # without this the absorb gather slices a length-0 input and fails.
+        if input.shape[0] == 0:
+            return fnp.zeros(self.out, dtype=input.dtype)
+        return _hash_body(self, input, chaining)
+
+
+# Module-level jit zone so the hash decomposition traces once per (sponge,
+# chaining, input aval) process-wide: `lax.composite` re-traces its
+# decomposition on every emission and again under every vmap batching (see
+# `hash_frx._composite`), and one Merkle commit emits hundreds of identical-aval
+# leaf hashes. The sponge (permutation + rate + out, compared by value) and the
+# chaining rule are the static key — together they fully determine the
+# decomposition; `inline=True` splices the cached jaxpr into the enclosing trace,
+# so the emitted module (one `hash_frx.digest.field_sponge` marker per hash on the
+# dedicated path) is unchanged and a recognizing emitter still sees the composite
+# form. Same hoist as `hash_frx.poseidon2.poseidon2._permute_body`.
+#
+# Being output-invariant is exactly why it needs its own test: byte-identity and
+# lowered-module comparison both hold with or without it, so only a trace count
+# can see it.
+@partial(frx.jit, static_argnames=("sponge", "chaining"), inline=True)
+def _hash_body(sponge: Sponge, input: Array, chaining: SpongeChaining) -> Array:
+    # Dedicated-fusion → one `hash_frx.digest.field_sponge` region (built here);
+    # else the generic `while_loop` absorb over `permute`.
+    perm = sponge._permutation
+    if perm.fusion_path.is_one_kernel:
+        return _fused_hash(perm, input, sponge.rate, sponge.out, chaining)
+    state = fnp.zeros(perm.width, dtype=input.dtype)
+    return _absorb(input, state, sponge.rate, sponge.out, perm.permute, chaining)

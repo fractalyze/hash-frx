@@ -1,13 +1,30 @@
-"""Poseidon2 koalabear-16 byte-matches the honest Plonky3 reference."""
+"""Every shipped Poseidon2 set byte-matches the honest Plonky3 reference, and
+the koalabear-16 set carries the engine's lowering and marker contract.
+
+The per-set half is `ShippedSetTest`, parameterized over `_SETS` — a set that
+ships without a vector is then a thing that cannot happen, which is the
+argument `testing/rows.py` makes for its own table. Everything else stays on
+koalabear-16 and is deliberately NOT swept: `frx.vmap`'s batching, the
+five-operand ABI and the trace-sharing zone are properties of the engine rather
+than of a parameterization, so running them per set buys another compile of the
+same code path.
+
+The one exception is marker RECOGNITION, which is swept: the marker carries
+`alpha` and `internal_rounds` as attributes, so each set presents a different
+attribute tuple to the pinned toolchain and a set the recognizer declines is
+byte-invisible (`testing/marker_recognized.py` states why).
+"""
 
 from __future__ import annotations
 
 import dataclasses
 import functools
+from typing import Any
 
 import frx
 import frx.numpy as fnp
-from absl.testing import absltest
+from absl.testing import absltest, parameterized
+from zk_dtypes import babybear_mont as BB
 from zk_dtypes import koalabear_mont as F
 
 from hash_frx.poseidon2.poseidon2 import (
@@ -15,6 +32,10 @@ from hash_frx.poseidon2.poseidon2 import (
     POSEIDON2_MARKER_VERSION,
     Poseidon2,
     _permute_body,
+)
+from hash_frx.poseidon2.testing.babybear16 import (
+    BABYBEAR16_EXPECTED,
+    babybear16_perm,
 )
 from hash_frx.poseidon2.testing.koalabear16 import (
     KOALABEAR16_EXPECTED,
@@ -25,13 +46,53 @@ from hash_frx.poseidon2.testing.koalabear16 import (
 )
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.marker_seam import assert_marker_matches_emission
+
+# Each shipped set: its factory, its dtype, and the Plonky3 vector it is held
+# to. Rows, not classes — the table is what makes a new set's coverage
+# automatic rather than dependent on remembering to write a class.
+_SETS = (
+    ("koalabear16", koalabear16_perm, F, KOALABEAR16_EXPECTED),
+    ("babybear16", babybear16_perm, BB, BABYBEAR16_EXPECTED),
+)
+
+
+class ShippedSetTest(parameterized.TestCase):
+    """What every shipped set owes, at every set."""
+
+    @parameterized.named_parameters(*_SETS)
+    def test_permute_byte_matches_plonky3(
+        self, factory: Any, dtype: Any, expected: Any
+    ) -> None:
+        # Runs the SHIPPED parameters, so this is what holds each set's
+        # published constants to the revision `standard.py` names for it. Where
+        # each vector came from is stated beside the vector, in the fixture
+        # module that owns it.
+        out = factory().permute(fnp.arange(16, dtype=dtype))
+        self.assertTrue(bool(fnp.array_equal(out, expected)))
+
+    @parameterized.named_parameters(*_SETS)
+    def test_marker_is_recognized_by_the_pinned_toolchain(
+        self, factory: Any, dtype: Any, expected: Any
+    ) -> None:
+        # Swept where the value tests above would not need to be: `alpha` and
+        # `internal_rounds` ride the marker as ATTRIBUTES, so babybear-16
+        # (alpha 7, 13 internal rounds) presents a tuple koalabear-16
+        # (alpha 3, 20) never did. A recognizer that declines it is invisible
+        # to every value test — the marker inlines and the bytes stay right.
+        assert_marker_recognized(
+            self, "poseidon2", factory().permute, fnp.arange(16, dtype=dtype)
+        )
 
 
 class Poseidon2Koalabear16Test(absltest.TestCase):
-    def test_permute_byte_matches_plonky3(self) -> None:
-        p = koalabear16_perm()
-        out = p.permute(fnp.arange(16, dtype=F))
-        self.assertTrue(bool(fnp.array_equal(out, KOALABEAR16_EXPECTED)))
+    """The engine's contract, exercised through one set.
+
+    These are properties of the Poseidon2 implementation rather than of a
+    parameterization — batching, the operand ABI, the trace-sharing zone — so
+    they are asserted once. `ShippedSetTest` above is where a second set earns
+    its coverage.
+    """
 
     def test_vmap_batch_matches(self) -> None:
         p = koalabear16_perm()
@@ -51,7 +112,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         assert_single_trace(self, _permute_body, calls)
 
     def test_permute_emits_poseidon2_named_composite(self) -> None:
-        # The standard-MDS permute marks its region "hash_frx.poseidon2" so XLA
+        # The standard-MDS permute marks its region "hash_frx.perm.poseidon2" so XLA
         # routes it to the dedicated Poseidon2Fusion emitter; the permutation
         # shape rides as composite.attributes — all four ints are required by
         # the XLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
@@ -64,22 +125,19 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         self.assertIn(f'"{POSEIDON2_MARKER}"', composite_line)
         self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, composite_line)
         self.assertIn(f"version = {POSEIDON2_MARKER_VERSION}", composite_line)
-        # Exactly the 5 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
-        # diag]. The internal J scale rides as the `internal_j_scale` attribute,
-        # not a 6th operand. A closed-over external matrix would be
-        # lifted to a leading 6th operand (frx.lax.composite prepends consts) and
-        # break the Poseidon2Fusion operand ABI — the e2e GPU failure this guards.
+        # Exactly the 5 ABI operands: the J scale rides as an attribute and any
+        # closed-over constant must stay inline (frx#218), never a 6th operand.
         operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 5, composite_line)
 
-    def test_marker_is_recognized_by_the_pinned_toolchain(self) -> None:
-        p = koalabear16_perm()
-        assert_marker_recognized(self, "poseidon2", p.permute, fnp.arange(16, dtype=F))
+    def test_seam_marker_matches_the_emission(self) -> None:
+        assert_marker_matches_emission(
+            self, koalabear16_perm(), fnp.arange(16, dtype=F)
+        )
 
     def test_non_identity_j_scale_stays_five_operands_canonical(self) -> None:
-        # A non-identity J scale must ride as the CANONICAL attribute value and
-        # still emit exactly 5 operands (materialized in-trace, never lifted to a
-        # 6th operand). koalabear16_scaled_perm's scale is R⁻¹: canonical
+        # A non-identity J scale must ride as the CANONICAL attribute value.
+        # koalabear16_scaled_perm's scale is R⁻¹: canonical
         # 1057030144, Montgomery STORAGE 1 — so the attribute must read 1057030144,
         # not the storage 1 a raw-bits/canonical mixup would emit.
         p = koalabear16_scaled_perm()

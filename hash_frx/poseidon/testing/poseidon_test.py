@@ -8,13 +8,16 @@ the dedicated emitter consumes off the lowered StableHLO.
 
 from __future__ import annotations
 
+import dataclasses
+
 import frx
 import frx.numpy as fnp
 import numpy as np
-from absl.testing import absltest
+from absl.testing import absltest, parameterized
 from zk_dtypes import babybear_mont as F
-from zk_dtypes import pfinfo
+from zk_dtypes import goldilocks_mont, pfinfo
 
+from hash_frx.fusion import FusionPath
 from hash_frx.permutation import Permutation
 from hash_frx.poseidon.params import PoseidonParams
 from hash_frx.poseidon.poseidon import (
@@ -23,6 +26,7 @@ from hash_frx.poseidon.poseidon import (
     Poseidon,
 )
 from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.marker_seam import assert_marker_matches_emission
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -73,7 +77,9 @@ def _poseidon_params() -> PoseidonParams:
     )
 
 
-def _reference_permute(state_canon: list[int]) -> list[int]:
+def _reference_permute(
+    state_canon: list[int], mds_rows: tuple[tuple[int, ...], ...] = _MDS
+) -> list[int]:
     """Independent classic-Poseidon reference in pure-Python int arithmetic mod p.
 
     Each round: ARC (add the round's full-width constants) -> S-box (x^alpha on
@@ -90,7 +96,7 @@ def _reference_permute(state_canon: list[int]) -> list[int]:
         return pow(x % p, alpha, p)
 
     def mds(vec: list[int]) -> list[int]:
-        return [sum(_MDS[i][j] * vec[j] for j in range(w)) % p for i in range(w)]
+        return [sum(mds_rows[i][j] * vec[j] for j in range(w)) % p for i in range(w)]
 
     r = 0
     for _ in range(half_full):  # initial full rounds
@@ -127,13 +133,107 @@ class PoseidonReferenceByteMatchTest(absltest.TestCase):
             self.assertEqual(got, want)
 
 
+# An MDS whose entries sit above the dedicated emitter's add-chain bound. Any
+# real MDS over a 31-bit field looks like this — the small-int matrix above is
+# the exception, not the rule.
+_WIDE_MDS = ((2, 3, 1), (1, 64, 3), (3, 1, _P - 1))
+# A matrix the emitter also rejects for a second reason: an MDS has no zero row.
+_ZERO_ROW_MDS = ((2, 3, 1), (0, 0, 0), (3, 1, 2))
+_GOLDILOCKS_P = pfinfo(goldilocks_mont).modulus
+
+
+def _to_goldilocks_field(rows: tuple[tuple[int, ...], ...]) -> fnp.ndarray:
+    """Canonical ints -> Goldilocks. Unsigned, because an entry near `p` does not
+    fit the int64 `_to_field` above casts through — which is the point."""
+    return fnp.asarray(np.array(rows, dtype=np.uint64).astype(goldilocks_mont))
+
+
+def _goldilocks_params() -> PoseidonParams:
+    """The same width-3 shape over Goldilocks, with an MDS entry past
+    `2**63 - 1` — #117's trigger, and the only way to reach it: a 31-bit field
+    cannot hold a value that large, so `_WIDE_MDS` above cannot stand in.
+
+    What this pins is an *ordering*, not a second rejection branch — it takes the
+    same `[0, 64)` exit `_WIDE_MDS` does. The gate reads canonical Python ints
+    and runs before `_poseidon_marker_attrs` casts them to int64, so #117's
+    `OverflowError` is unreachable. Compute those attributes any earlier and this
+    case raises while every other test still passes.
+
+    `alpha` is 7 rather than 3 because 3 divides `p - 1`, and an S-box has to
+    permute.
+    """
+    return PoseidonParams(
+        width=_WIDTH,
+        dtype=goldilocks_mont,
+        alpha=7,
+        full_rounds=_FULL,
+        partial_rounds=_PARTIAL,
+        round_constants=_to_goldilocks_field(_ROUND_CONSTANTS),
+        mds=_to_goldilocks_field(((2, 3, 1), (1, 2, 3), (3, 1, _GOLDILOCKS_P - 1))),
+    )
+
+
+def _poseidon_params_with(mds_rows: tuple[tuple[int, ...], ...]) -> PoseidonParams:
+    params = _poseidon_params()
+    return dataclasses.replace(
+        params, mds=_to_field(np.array(mds_rows, dtype=np.int64))
+    )
+
+
+class PoseidonUnroutableMdsTest(parameterized.TestCase):
+    """A parameter set the dedicated emitter cannot express takes the generic
+    marker rather than failing the compile, which is what routing one to it used
+    to cost: an `unparsable composite.attributes` error naming a marker that was
+    never malformed.
+
+    `_poseidon_params()`'s own small matrix is the other side of the gate — the
+    marker-emission tests below still pin it to the dedicated path — so this is a
+    question the MDS answers rather than a blanket no.
+    """
+
+    @parameterized.named_parameters(
+        ("entry_at_the_bound", _WIDE_MDS),
+        ("all_zero_row", _ZERO_ROW_MDS),
+    )
+    def test_it_emits_the_generic_marker(
+        self, mds_rows: tuple[tuple[int, ...], ...]
+    ) -> None:
+        p = Poseidon(_poseidon_params_with(mds_rows))
+
+        self.assertIs(p.fusion_path, FusionPath.GENERIC)
+        # The wire contract, not only the Python-side path: `fusion_path` staying
+        # right while the emitted marker drifts is the failure this catches.
+        assert_marker_matches_emission(self, p, fnp.arange(_WIDTH, dtype=F))
+
+    def test_an_entry_wider_than_the_marker_attribute_also_falls_back(self) -> None:
+        p = Poseidon(_goldilocks_params())
+
+        self.assertIs(p.fusion_path, FusionPath.GENERIC)
+        assert_marker_matches_emission(
+            self, p, fnp.arange(_WIDTH, dtype=goldilocks_mont)
+        )
+
+    def test_the_generic_path_still_byte_matches_the_reference(self) -> None:
+        p = Poseidon(_poseidon_params_with(_WIDE_MDS))
+        rng = np.random.default_rng(1)
+
+        for _ in range(4):
+            canon = rng.integers(0, _P, size=_WIDTH, dtype=np.int64)
+            out = p.permute(_to_field(canon))
+
+            self.assertEqual(
+                [int(x) for x in _to_canon(out)],
+                _reference_permute([int(x) for x in canon], _WIDE_MDS),
+            )
+
+
 class PoseidonPermuteShapeTest(absltest.TestCase):
     def test_is_a_permutation(self) -> None:
         p = Poseidon(_poseidon_params())
         self.assertIsInstance(p, Permutation)
         self.assertEqual(p.width, _WIDTH)
         self.assertEqual(p.dtype, F)
-        self.assertTrue(p.has_dedicated_fusion)
+        self.assertIs(p.fusion_path, FusionPath.DEDICATED)
 
     def test_permute_shape_and_vmap(self) -> None:
         p = Poseidon(_poseidon_params())
@@ -157,7 +257,7 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
 
 class PoseidonMarkerEmissionTest(absltest.TestCase):
     def test_permute_emits_poseidon_named_composite(self) -> None:
-        # The permute marks its region "hash_frx.poseidon" so XLA routes it to the
+        # The permute marks its region "hash_frx.perm.poseidon" so XLA routes it to the
         # dedicated Poseidon emitter; the permutation shape rides as
         # composite.attributes — all four ints plus the flat MDS are required by
         # the XLA recognizer.
@@ -170,9 +270,8 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         self.assertIn(f'"{POSEIDON_MARKER}"', composite_line)
         self.assertIn(EXPECTED_ATTRS, composite_line)
         self.assertIn(f"version = {POSEIDON_MARKER_VERSION}", composite_line)
-        # Exactly the 2 ABI operands [state, round_constants flattened]. A
-        # closed-over MDS would be lifted to a leading operand (frx.lax.composite
-        # prepends consts) and break the 2-operand Poseidon emitter ABI.
+        # Exactly the 2 ABI operands: the closed-over MDS must stay inline in
+        # the decomposition (frx#218), never a leading operand.
         operands = composite_line.split(f'"{POSEIDON_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 2, composite_line)
 
@@ -190,6 +289,10 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         assert_marker_recognized(
             self, "poseidon", p.permute, fnp.arange(p.width, dtype=F)
         )
+
+    def test_seam_marker_matches_the_emission(self) -> None:
+        p = Poseidon(_poseidon_params())
+        assert_marker_matches_emission(self, p, fnp.arange(p.width, dtype=F))
 
 
 if __name__ == "__main__":

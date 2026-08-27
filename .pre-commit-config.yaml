@@ -38,10 +38,11 @@ repos:
       - id: mypy
         # Enforces the full-annotation convention (disallow_untyped_defs lives in
         # pyproject). Checks the whole hash_frx/ tree rather than just changed
-        # files, so cross-module inference stays consistent. numpy ships types;
-        # frx / zk_dtypes / absl are ignored in pyproject (no usable stubs).
+        # files, so cross-module inference stays consistent. numpy and blake3 both
+        # ship types, so they are installed here and checked for real; frx /
+        # zk_dtypes / absl are ignored in pyproject (no usable stubs).
         pass_filenames: false
-        additional_dependencies: [numpy]
+        additional_dependencies: [numpy, blake3]
 -   repo: https://github.com/keith/pre-commit-buildifier
     rev: 8.0.1
     hooks:

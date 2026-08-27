@@ -13,14 +13,18 @@ import hashlib
 import frx
 import frx.numpy as fnp
 import numpy as np
-from absl.testing import absltest
+from absl.testing import absltest, parameterized
 
-from hash_frx.sha256 import (
+from hash_frx.markers import STREAM_FINALIZE_MARKER
+from hash_frx.sha256 import sha256
+from hash_frx.sha256.sha256 import (
     Sha256State,
     sha256_stream_absorb,
     sha256_stream_finalize,
     sha256_stream_init,
 )
+from hash_frx.sha512 import sha512
+from hash_frx.testing.marker_recognized import emitted_composites
 
 
 def _u8(data: bytes) -> fnp.ndarray:
@@ -117,6 +121,80 @@ class Sha256StreamTest(absltest.TestCase):
 
         got = bytes(np.asarray(run(chunks))[0])
         self.assertEqual(got, hashlib.sha256(msg).digest())
+
+
+class FinalizeBoundsTest(parameterized.TestCase):
+    """The finalize's two boundaries, both silent before (#212).
+
+    `extras` wider than the block minus the length field cannot fit the
+    two-block layout at every runtime `pending_len`, and used to overlap the
+    padding and return a wrong digest with no error. The length field is a
+    64-bit count in bits, and a byte count near 2^31 has a bit length near
+    2^34 — held to `int.to_bytes` across the wrap the one-word form had.
+    """
+
+    @parameterized.parameters((63, 56), (0, 56), (55, 1), (63, 1), (32, 24))
+    def test_widest_extras_still_match_hashlib(self, pending: int, width: int) -> None:
+        state = sha256.sha256_stream_absorb(
+            sha256.sha256_stream_init(), fnp.zeros(pending, dtype=fnp.uint8)
+        )
+        got = np.asarray(
+            sha256.sha256_stream_finalize(state, fnp.zeros((1, width), dtype=fnp.uint8))
+        )[0]
+        want = hashlib.sha256(bytes(pending + width)).digest()
+        self.assertEqual(got.tobytes(), want)
+
+    def test_extras_past_the_layout_are_rejected(self) -> None:
+        state = sha256.sha256_stream_init()
+        with self.assertRaisesRegex(ValueError, "extras width"):
+            sha256.sha256_stream_finalize(state, fnp.zeros((1, 57), dtype=fnp.uint8))
+
+
+class FinalizeMarkerTest(parameterized.TestCase):
+    """The whole hop is ONE marked region, for every MD family.
+
+    `MdStream.finalize` emits both padding-block candidates and selects between
+    them, because the live block count depends on `pending_len`, which is
+    traced. The marker exists so a recognizing emitter runs the one block count
+    the runtime position implies instead. Until the pinned plugin carries the
+    recognizer it inlines, so this asserts what the repo controls: which names
+    reach the wire, and with which primitive.
+
+    Byte-neutrality is not re-asserted here -- every finalize call in this file
+    already goes through the marked region, so `Sha256StreamTest` and
+    `FinalizeBoundsTest` above ARE the evidence, against a one-shot `hashlib`.
+
+    Both families, because `MdStream` is the shared emitter and SHA-512 is
+    where `primitive` is the only discriminator: its inner marker is the
+    family-less `hash_frx.digest`, so a mis-threaded attribute would show up
+    here and nowhere else.
+    """
+
+    @parameterized.named_parameters(
+        ("sha256", sha256, "sha256"),
+        ("sha512", sha512, "sha512"),
+    )
+    def test_the_hop_is_one_region_naming_its_primitive(
+        self, family: object, primitive: str
+    ) -> None:
+        init = getattr(family, f"{primitive}_stream_init")
+        finalize = getattr(family, f"{primitive}_stream_finalize")
+        block = 64 if primitive == "sha256" else 128
+        state = frx.jit(getattr(family, f"{primitive}_stream_absorb"))(
+            init(), fnp.zeros(block + 36, dtype=fnp.uint8)
+        )
+        names = emitted_composites(finalize, state, fnp.zeros((4, 8), dtype=fnp.uint8))
+        # Exactly one outer region, wrapping the two candidate chains. The
+        # whole list is pinned rather than just the count: the inner markers are
+        # what the outer would be hiding if it ever swallowed them.
+        self.assertEqual(names[0], STREAM_FINALIZE_MARKER)
+        self.assertLen(names, 3)
+        self.assertTrue(
+            frx.jit(finalize)
+            .lower(state, fnp.zeros((4, 8), dtype=fnp.uint8))
+            .as_text()
+            .count(f'primitive = "{primitive}"')
+        )
 
 
 if __name__ == "__main__":

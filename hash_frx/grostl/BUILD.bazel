@@ -1,0 +1,25 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Byte-oriented Grøstl-256 (the final-round SHA-3 candidate): the `digest`
+# batch hash behind the `hash_frx.digest.grostl256` marker plus the `Grostl256`
+# ByteHash row. A standalone hash, not a Permutation; no zk_dtypes / x64
+# dependency. The host differential partner is testonly
+# (//hash_frx/grostl/testing:reference) — no C library implements Grøstl.
+py_library(
+    name = "grostl",
+    srcs = [
+        "__init__.py",
+        "grostl.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx/extension:md",
+        "//hash_frx/extension:pad",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)

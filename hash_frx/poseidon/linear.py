@@ -4,21 +4,14 @@ Every linear layer is a fixed, unrolled sum of column-scaled lanes so a round
 body stays straight-line element-wise and fuses to one kernel: `fnp.dot`/`fnp.sum`
 lower to a reduction (the `kInput` fusion boundary) and dynamic indexing to
 `gather`, either of which splits the kernel. The summation primitive
-`unrolled_sum` and the field-array dense layer `apply_matrix` are shared with
-poseidon2 in `hash_frx.linear`; this module adds the Poseidon-specific forms.
+`unrolled_sum` and the dense layer `apply_matrix` are shared with poseidon2 in
+`hash_frx.linear`; this module adds the Poseidon-specific sparse form.
 
-Two matrix forms, by where the matrix rides:
-- **Integer-literal** (`apply_dense_mds`, `apply_sparse_partial_ints`) — the
-  matrix is canonical ints, so no field array is captured; required inside a
-  name-routed `fused_region`, where a closed-over array lifts to a leading operand
-  and breaks the emitter's ABI (the structure rides as an int64 marker attribute
-  instead). The dedicated `hash_frx.sparse_poseidon` emitter's reference body uses
-  these; it supports only fields whose canonical values fit an int64 literal.
-- **Field-array** (`apply_matrix` (shared), `apply_sparse_partial`) — the matrix
-  stays a field array, which the generic `zorch.fused_region` marker lifts to an
-  operand harmlessly (no name-routed ABI). This is the optimized-sparse variant's
-  readable body when the dedicated emitter is absent, and the only form for fields
-  whose entries exceed an int64 literal.
+Every matrix rides as a field array. Inside a marked region a closed-over
+matrix stays a constant of the decomposition body — frx keeps composite consts
+inline rather than lifting them to operands — so the same form serves the
+generic `zorch.fused_region` marker and the name-routed dedicated markers,
+whose structure rides separately as int64 marker attributes.
 """
 
 from __future__ import annotations
@@ -27,28 +20,6 @@ import frx.numpy as fnp
 from frx import Array
 
 from hash_frx.linear import unrolled_sum
-
-
-def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Array:
-    """Dense MDS layer `mds @ state`: row `i` is `sum_j mds[i][j] * state[j]`.
-
-    `mds_rows` is the `width x width` matrix as canonical Python ints (rows of
-    ints), so lanes scale by integer literals and no field array is captured —
-    required inside a name-routed `fused_region`. The unrolled per-lane sum keeps
-    the layer reduction-free (no `fnp.dot`/`fnp.sum`/gather), so the round body
-    lowers to a single fused kernel.
-    """
-    if state.ndim != 1:
-        raise ValueError(f"dense MDS needs a 1-D state, got shape {state.shape}")
-    w = state.shape[0]
-    if w == 0 or len(mds_rows) != w:
-        raise ValueError(
-            f"dense MDS needs a 1-D state matching a square matrix, got state "
-            f"{state.shape}, matrix rows {len(mds_rows)}"
-        )
-    return fnp.stack(
-        [unrolled_sum([mds_rows[i][j] * state[j] for j in range(w)]) for i in range(w)]
-    )
 
 
 def apply_sparse_partial(
@@ -88,45 +59,9 @@ def apply_sparse_partial(
             f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
             f"width {w}"
         )
-    out0 = unrolled_sum(
-        [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
-    )
-    out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])
-    return fnp.concatenate([out0[None], out_rest])
-
-
-def apply_sparse_partial_ints(
-    dot_row: tuple[int, ...],
-    col_vec: tuple[int, ...],
-    active: Array,
-    tail: Array,
-) -> Array:
-    """Integer-literal twin of `apply_sparse_partial`, for the dedicated
-    `hash_frx.sparse_poseidon` emitter's reference body.
-
-    `dot_row` (width ints) and `col_vec` (width-1 ints) are canonical Python ints,
-    so the lanes scale by integer literals and no field array is captured — a
-    name-routed `fused_region` would lift a closed-over array to a leading operand
-    and break the emitter's operand ABI (the sparse structure rides as an int64
-    marker attribute instead). Same arithmetic and reduction-free normal form as
-    `apply_sparse_partial`; this is the sparse-partial sibling of `apply_dense_mds`.
-    """
-    w = len(dot_row)
-    if len(col_vec) != w - 1:
-        raise ValueError(
-            f"col_vec must have width-1 entries, got {len(col_vec)} for width {w}"
-        )
-    if active.ndim != 0:
-        raise ValueError(
-            f"active (post-S-box lane 0) must be a scalar, got shape {active.shape}"
-        )
-    if tail.shape != (w - 1,):
-        raise ValueError(
-            f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
-            f"width {w}"
-        )
-    out0 = unrolled_sum(
-        [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
-    )
-    out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])
+    # Array-shaped so `active` is read twice rather than once per lane — the
+    # chained-input rule in `hash_frx.linear`.
+    prods = dot_row[1:] * tail
+    out0 = unrolled_sum([dot_row[0] * active, *prods])
+    out_rest = tail + col_vec * active
     return fnp.concatenate([out0[None], out_rest])

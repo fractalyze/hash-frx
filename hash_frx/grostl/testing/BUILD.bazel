@@ -1,0 +1,49 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# The plain-python oracle: ints, bytes and lists only, no frx, so the
+# differential tests hold the frx implementation to something that shares none
+# of its lowering rules (its S-box is the 256-entry table, not the circuit).
+py_library(
+    name = "reference",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "reference.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
+# No device work: plain python against the transcribed KAT, so the CUDA plugin
+# wheels would be ~430 MB of runfiles for nothing.
+py_test(
+    name = "reference_test",
+    size = "small",
+    srcs = ["reference_test.py"],
+    deps = [
+        ":reference",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
+    name = "grostl_test",
+    # Compile-heavy: the digest body splices two ten-round bitsliced
+    # permutations per block plus the output transformation, and the KAT +
+    # differential sweeps compile it once per (batch, length) aval.
+    size = "large",
+    srcs = ["grostl_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx/grostl",
+        "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_recognized",
+        "//hash_frx/testing:oracle",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

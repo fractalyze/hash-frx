@@ -1,0 +1,22 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "blake3",
+    srcs = [
+        "__init__.py",
+        "compress.py",
+        "modes.py",
+        "rows.py",
+        "streaming.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx/extension:tree",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)

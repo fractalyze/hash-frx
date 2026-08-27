@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import frx.numpy as fnp
 from frx import Array
 
+from hash_frx.fusion import FusionPath
 from hash_frx.permutation import Permutation
 
 
@@ -76,11 +77,12 @@ class Compression:
         return hash((self._permutation, self.arity, self.chunk))
 
     @property
-    def has_dedicated_fusion(self) -> bool:
-        """Whether the permutation lowers to a hash-dedicated fusion marker, so a
-        consumer can wrap a whole region using this hash (e.g. a Merkle commit) in
-        an expandable composite. Delegates to the permutation; names no hash."""
-        return self._permutation.has_dedicated_fusion
+    def fusion_path(self) -> FusionPath:
+        """How the underlying permute lowers on this backend — `DEDICATED` is
+        what lets a consumer wrap a whole region using this hash (e.g. a Merkle
+        commit) in an expandable composite. Delegates to the permutation; names
+        no hash."""
+        return self._permutation.fusion_path
 
     def compress(self, inputs: Array) -> Array:
         """Compress `arity` chunks into one: (arity, chunk) over dtype -> (chunk,)."""

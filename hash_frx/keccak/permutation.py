@@ -20,11 +20,22 @@ become constant arrays rather than branches, and pi is a static reorder built
 from slices — a runtime lane permutation would lower to a gather and split the
 kernel.
 
-`has_dedicated_fusion` is False: there is no `hash_frx.keccak_f` emitter yet
-(#21), so `permute` marks itself with the generic `zorch.fused_region` rather
-than a name-routed one. False means *generic marker*, not *no marker* — the
-contract's guarantee that a permutation call is one device unit does not wait
-for a dedicated emitter.
+`permute` marks itself with `hash_frx.perm.keccak_f` where that emitter can actually
+be reached and the generic `zorch.fused_region` where it cannot — which takes
+both `_DEDICATED_EMITTER_AVAILABLE` (does the pinned plugin carry it) and
+`_EMITTER_BACKENDS` (does this backend), since an emitter is written per backend
+rather than once.
+`fusion_path` reports which of the two ran (`DEDICATED` vs `GENERIC`), and the
+two are not a fast and a slow kernel: **only the dedicated marker is one device
+unit.**
+
+A bare `zorch.fused_region` carries no live-width operand, and the rewriter
+declines those on purpose — routing one to the generic loop fusion would build an
+indexed per-element subgraph that re-executes shared producers per output
+element, which is exponential in body depth. So it inlines instead, and ordinary
+fusion materializes the intermediates: a single permutation lands as ~70 fusions
+rather than one. The fusion contract is met by a *recognized* marker, never by
+the fallback, which is why the switch has to track the pin.
 """
 
 from __future__ import annotations
@@ -38,7 +49,14 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
+from hash_frx.fusion import (
+    FUSED_REGION_MARKER,
+    FusionPath,
+    fused_region,
+    inert_region_spec,
+    permute_marker,
+    routing,
+)
 from hash_frx.keccak import lane as lanes
 from hash_frx.keccak.lane import Lane
 from hash_frx.keccak.params import (
@@ -47,6 +65,7 @@ from hash_frx.keccak.params import (
     ROUNDS,
     WIDTH,
 )
+from hash_frx.word import roll
 
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
@@ -54,22 +73,59 @@ if TYPE_CHECKING:
 # rho's offsets as a (5, 5) [y][x] constant, matching the grid.
 _ROT = np.asarray(ROTATION_OFFSETS, dtype=np.uint32).reshape(5, 5)
 
+KECCAK_F_MARKER = "hash_frx.perm.keccak_f"
+# Marker revision riding as `composite.version`; version 1 is the operand ABI
+# below. XLA recognizes the marker by name + attributes and deliberately does not
+# gate on the version, which exists so a contract change can stage without a
+# rename (`hash_frx.fusion`).
+KECCAK_F_MARKER_VERSION = 1
 
-def _roll(x: Array, shift: int, axis: int = 0) -> Array:
-    """`fnp.roll` written as the two static slices it is.
+# Whether the pinned Fractalyze XLA plugin ships the dedicated Keccak emitters.
+# Two separate things turn on this flag, and the second is why it must track the
+# pin rather than being left optimistic: emitting an unrecognized *name* is
+# byte-neutral (the composite inlines and the fusion is silently lost), but
+# a `DEDICATED` fusion path also routes a `Sponge` over this permutation to
+# `hash_frx.digest.field_sponge` carrying `permutation="keccak_f"`, which a
+# plugin without the arm rejects outright as an unknown permutation — a hard
+# compile failure, not
+# a fallback. Nothing here builds that `Sponge` (the byte hashes go through
+# `KeccakSponge` and its own marker), so today only the first applies; the second
+# is what makes the flag a pin question rather than a preference.
+#
+# Flipped together with the `frx>=` floor in `pyproject.toml`, like
+# `poseidon.sparse._DEDICATED_EMITTER_AVAILABLE`. Below that floor the marker is
+# emitted, ignored, and computes the right bytes with none of the kernels, so no
+# value test can see it violated — only `MarkerRecognizedTest`, which reads the
+# compiled module, and only on a leg that has the emitter to begin with.
+_DEDICATED_EMITTER_AVAILABLE = True
 
-    The wrapper carries an internal `jit`, so it lowers to a call inside the
-    body and the single-kernel rewriter rejects it
-    (`docs/reference/conventions.md`). The shift is a compile-time constant, so
-    the cut point is known and this is a slice pair plus a concatenate.
-    """
-    n = x.shape[axis]
-    cut = (-shift) % n
-    if cut == 0:
-        return x
-    if axis == 0:
-        return fnp.concatenate([x[cut:], x[:cut]], axis=0)
-    return fnp.concatenate([x[:, cut:], x[:, :cut]], axis=1)
+# Which backends have those emitters, which is a *different* question from the
+# pin and has to be asked alongside it. Both compilers now enable both flags:
+# `gpu_compiler.cc` and `cpu_compiler.cc` each set `allow_keccak_f_fusion` and
+# `allow_keccak_sponge_fusion`, against `CpuKeccakFusion` and
+# `CpuKeccakSpongeFusion` under `xla/backends/cpu/codegen/emitters/`.
+#
+# BOTH entries are load-bearing, and the second is the reason this tuple could
+# not move when only the permute emitter existed. Routing to a dedicated emitter
+# the backend does not have is not merely neutral: the whole-hash `KeccakSponge`
+# marker traces the entire padded absorb and squeeze chain into one composite,
+# and where it is not honoured that trace is pure cost. Measured on `enc-frx`'s
+# ML-KEM-512 `decaps` at `B = 32`: 6.84s of tracing against 0.40s for the
+# per-permutation routing, for a module that optimizes to the same 7645 loop
+# fusions either way. One tuple gates both markers, so a leg joins it only once
+# it can honour the coarser one.
+#
+# A list rather than `!= "unknown"`, and for the same reason
+# `blake3.testing.emitter` keeps one: a backend is on the generic path until an
+# emitter is *written* for it, so a leg that gains an arm joins this tuple and
+# nothing else here moves.
+_EMITTER_BACKENDS = ("cpu", "gpu")
+
+
+def _routes_to_dedicated_emitter() -> bool:
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 def _unpack(state: Array) -> Lane:
@@ -100,8 +156,8 @@ def _theta(a: Lane) -> Lane:
         c_lo, c_hi = c_lo ^ lo[y], c_hi ^ hi[y]
 
     rot_lo, rot_hi = lanes.rotl((c_lo, c_hi), 1)
-    d_lo = _roll(c_lo, 1) ^ _roll(rot_lo, -1)
-    d_hi = _roll(c_hi, 1) ^ _roll(rot_hi, -1)
+    d_lo = roll(c_lo, 1) ^ roll(rot_lo, -1)
+    d_hi = roll(c_hi, 1) ^ roll(rot_hi, -1)
     return lo ^ d_lo, hi ^ d_hi
 
 
@@ -120,18 +176,19 @@ def _pi(g: Array) -> Array:
     fusion computations against 285 for this form, and 6.6x the runtime. A
     reorder being gather-free is not the same as it being cheap.
     """
-    sheared = fnp.concatenate([_roll(g[x : x + 1], -x, axis=1) for x in range(5)])
+    sheared = fnp.concatenate([roll(g[x : x + 1], -x, axis=1) for x in range(5)])
     columns = sheared.T
     return fnp.concatenate([columns[(3 * y) % 5 : (3 * y) % 5 + 1] for y in range(5)])
 
 
-def _rho_pi(a: Lane) -> Lane:
+def _rho_pi(a: Lane, tables: lanes.RhoTables) -> Lane:
     """Rotate every lane by its own offset, then move it to its pi destination.
 
-    Both steps are static: the offsets are a constant grid, and the movement is
-    a fixed reorder built from slices, so no index reaches the device.
+    Both steps are static: the rotation tables are derived once from the offset
+    grid the region takes as an operand, and the movement is a fixed reorder
+    built from slices, so no index reaches the device.
     """
-    rot_lo, rot_hi = lanes.rotl_each(a, _ROT)
+    rot_lo, rot_hi = lanes.rotl_each(a, tables)
     return _pi(rot_lo), _pi(rot_hi)
 
 
@@ -142,8 +199,8 @@ def _chi(a: Lane) -> Lane:
     element-wise.
     """
     lo, hi = a
-    lo1, hi1 = _roll(lo, -1, axis=1), _roll(hi, -1, axis=1)
-    lo2, hi2 = _roll(lo, -2, axis=1), _roll(hi, -2, axis=1)
+    lo1, hi1 = roll(lo, -1, axis=1), roll(hi, -1, axis=1)
+    lo2, hi2 = roll(lo, -2, axis=1), roll(hi, -2, axis=1)
     return lo ^ ((~lo1) & lo2), hi ^ ((~hi1) & hi2)
 
 
@@ -172,56 +229,107 @@ def _iota(a: Lane, rnd: int) -> Lane:
     return _patch_lane_zero(lo, rc_lo), _patch_lane_zero(hi, rc_hi)
 
 
-def _rounds(state: Array) -> Array:
-    """The 24 rounds, unrolled — the decomposition the marked region runs."""
+def _rounds(state: Array, rho_offsets: Array, **_attrs: object) -> Array:
+    """The 24 rounds, unrolled — the decomposition the marked region runs.
+
+    Takes rho's offset grid as an operand rather than closing over it: an array
+    the body materialises on the host is lifted into an unnamed operand ahead of
+    the declared ones, once per materialisation site, so closing over it put 96
+    anonymous constants in front of the state and left no ABI to write down.
+    `_attrs` is marker metadata passed through, which the body does not read.
+    """
+    tables = lanes.rho_tables(rho_offsets)
     a = _unpack(state)
     for rnd in range(ROUNDS):
-        a = _iota(_chi(_rho_pi(_theta(a))), rnd)
+        a = _iota(_chi(_rho_pi(_theta(a), tables)), rnd)
     return _pack(a)
 
 
-# Module-level jit zone so the permutation body traces once per state aval
-# process-wide: `lax.composite` re-traces its decomposition on every emission,
-# and one sponge absorb emits a permute per block. `inline=True` splices the
-# cached jaxpr into the enclosing trace, so the emitted module is unchanged.
-# Keccak-f is parameterless, so unlike its siblings there is no static key.
-@partial(frx.jit, inline=True)
-def _permute_body(state: Array) -> Array:
-    """`permute` as ONE `zorch.fused_region`.
+def _abi_operands(state: Array) -> tuple[Array, ...]:
+    """The marked region's operands, in the order the emitter's ABI names them:
+
+    ``[0] state``         `uint32[..., 50]` — 25 lanes as interleaved halves
+    ``[1] rho_offsets``   `uint32[5, 5]`    — rho's per-lane rotation counts,
+                                              `[y][x]`, as FIPS 202 tabulates them
+
+    Keccak-f[1600] is otherwise parameterless: width, round count, round
+    constants and the pi reorder are fixed by the standard, so an emitter bakes
+    them and only the offsets ride, because the fallback decomposition needs a
+    non-materialised copy of them (`_rounds`).
+    """
+    return state, fnp.asarray(_ROT)
+
+
+def _marker_attrs() -> dict[str, object]:
+    """The dedicated marker's `composite.attributes` — the recognizer's contract.
+    Identifying rather than parameterising, the permutation having no free
+    parameters; the body ignores them and the generic marker stays attrs-free."""
+    return {"permutation": "keccak_f", "width": WIDTH, "rounds": ROUNDS}
+
+
+# Module-level jit zone so the permutation body traces once per (permutation,
+# state aval) process-wide: `lax.composite` re-traces its decomposition on every
+# emission, and one sponge absorb emits a permute per block. `inline=True`
+# splices the cached jaxpr into the enclosing trace, so the emitted module is
+# unchanged. Keccak-f has no free parameters, but the permutation is still the
+# static key: the marker it carries is not a function of the parameters, so
+# without it a dedicated and a generic instance collide in this cache.
+@partial(frx.jit, static_argnames=("perm",), inline=True)
+def _permute_body(perm: "KeccakF1600", state: Array) -> Array:
+    """`permute` as ONE marked region.
 
     The marker is the contract rather than an optimisation: a permutation call
     *is* one marked region by construction, so an unmarked body leaves nothing
-    naming the unit. `has_dedicated_fusion = False` selects *which* marker, not
-    whether there is one — the same thing `SparsePoseidon` does on its
-    non-dedicated path.
+    naming the unit. `fusion_path` selects *which* marker, not whether there is
+    one — the same thing `SparsePoseidon` does on its non-dedicated path.
 
     The generic marker is also what obliges the body to be straight-line and
-    element-wise, since the generic rewriter accepts nothing else.
+    element-wise, since the generic rewriter accepts nothing else. The dedicated
+    one carries the same body: a marker the plugin does not recognize inlines,
+    and the fallback has to be the reference decomposition.
     """
-    return fused_region(_rounds, state, name=FUSED_REGION_MARKER)
+    name, version = perm.fused_region_marker
+    return fused_region(
+        _rounds,
+        *_abi_operands(state),
+        name=name,
+        version=version,
+        **(_marker_attrs() if perm.fusion_path.is_one_kernel else {}),
+    )
 
 
 class KeccakF1600:
     """Keccak-f[1600] as a `Permutation` over `uint32` lane halves.
 
     Stateless and parameterless — the standard fixes width, rounds, offsets, and
-    constants — so every instance equals every other, which keeps it a stable
-    static jit-zone key the way the `Permutation` contract requires.
+    constants — so two instances differ only in the marker they route to, which
+    is what keeps them a stable static jit-zone key the way the `Permutation`
+    contract requires.
     """
 
     width = WIDTH
     dtype = fnp.uint32
-    # No `hash_frx.keccak_f` emitter exists yet; consumers fall back to the
-    # generic region marker.
-    has_dedicated_fusion = False
+
+    def __init__(self) -> None:
+        # Read per instance rather than pinned on the class so the emitter flag
+        # is a value the permutation carries, and a test can construct both
+        # routings in one process.
+        name = (
+            KECCAK_F_MARKER if _routes_to_dedicated_emitter() else FUSED_REGION_MARKER
+        )
+        self.fused_region_marker = permute_marker(name, KECCAK_F_MARKER_VERSION)
+        self.fusion_path = FusionPath.from_marker(name)
 
     def __eq__(self, other: object) -> bool:
+        # The parameter surface is empty, so the marker IS the identity: without
+        # it a dedicated and a generic instance collide in `_permute_body`'s
+        # static-arg cache, and the second would reuse the first's marker.
         if not isinstance(other, KeccakF1600):
             return NotImplemented
-        return True
+        return self.fused_region_marker == other.fused_region_marker
 
     def __hash__(self) -> int:
-        return hash(KeccakF1600)
+        return hash((KeccakF1600, self.fused_region_marker))
 
     def permute(self, state: Array) -> Array:
         """Apply Keccak-f[1600]: `(50,)` uint32 -> `(50,)`.
@@ -238,15 +346,17 @@ class KeccakF1600:
                 f"state dtype {state.dtype} must be {self.dtype} — a lane is two "
                 "uint32 halves, not one 64-bit word"
             )
-        return _permute_body(state)
+        return _permute_body(self, state)
 
     def fused_region_spec(
         self, leading: Array
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
-        """Inert: the round constants are inlined literals rather than ABI
-        operands, so there is no dedicated layout to hand out until an emitter
-        exists (#21)."""
-        return (leading,), (lambda state, *_ops: _permute_body(state)), {}
+        """The KeccakFusion ABI: operands `(leading, rho_offsets)`, the
+        operand-fed permute, and the identifying attrs. Dedicated path only;
+        otherwise the shared inert stub."""
+        if not self.fusion_path.is_one_kernel:
+            return inert_region_spec(self, leading)
+        return _abi_operands(leading), _rounds, _marker_attrs()
 
 
 if TYPE_CHECKING:

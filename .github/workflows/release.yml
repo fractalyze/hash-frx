@@ -1,0 +1,378 @@
+# Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
+
+# The official channel: `hash-frx` on PyPI, rehearsed on TestPyPI. Publishing a
+# GitHub Release builds the tagged commit and uploads it; a workflow_dispatch
+# aims the same pipeline at TestPyPI or stops at the build.
+#
+# Timestamped nightlies are dev-release.yml's job — it cuts a GitHub prerelease
+# per green main and never touches PyPI. The `released` event filter is what
+# keeps the two apart, instead of an if-guard someone can forget.
+#
+# `hash_frx/__init__.py` names the release being worked toward, so a tag equals
+# it and the nightlies between two releases are `.dev` builds OF the next
+# version. Bump it right AFTER a tag: leaving it at the released version makes
+# every later nightly sort below that release (PEP 440 puts a final release
+# above all of its own pre-releases), which breaks `>=` for consumers.
+#
+# Upload is OIDC, so no API token exists here. Each index needs the publisher
+# registered by hand once — there is no API — as (project `hash-frx`, owner
+# `fractalyze`, repo `hash-frx`, workflow `release.yml`, environment `pypi` on
+# PyPI and `testpypi` on TestPyPI). Renaming this file invalidates both. Until
+# they exist every upload fails with 403 invalid-publisher.
+
+name: Release
+
+on:
+  # `released` rather than `published`: `published` also fires for prereleases,
+  # and dev-release.yml cuts one per green main — those nightlies would land on
+  # PyPI, where uploads are immutable and cannot be withdrawn.
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      # `pypi` is deliberately absent. The tag-versus-version check below has no
+      # tag to read on a dispatch, so that route would reach an irreversible
+      # upload with nothing validated. Retrying a failed production upload is
+      # "Re-run failed jobs" on the release-triggered run.
+      target:
+        description: "Publish target"
+        type: choice
+        options:
+          - testpypi
+          - build-only
+        default: testpypi
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-tag:
+    name: Resolve target and validate tag
+    runs-on: ubuntu-latest
+    # Job outputs, not workflow `env`: a downstream `if:` and `environment:` are
+    # evaluated before that job starts and cannot read the `env` context.
+    outputs:
+      target: ${{ steps.resolve.outputs.target }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      python-version: ${{ steps.python.outputs.version }}
+    steps:
+      # The tagged commit, not the branch head — a Release can be cut from an
+      # older tag long after main has moved on.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      # smoke-test has no checkout, so it cannot read `.python-version` itself
+      # and must be handed the value. Carrying it as a job output rather than
+      # letting that job check the file out keeps its workspace empty, which is
+      # what the job depends on — see the note on its `Setup Python`.
+      - name: Read the supported Python version
+        id: python
+        run: echo "version=$(cat .python-version)" >>"$GITHUB_OUTPUT"
+
+      - name: Resolve target
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGET: ${{ inputs.target }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            target=pypi
+          else
+            target="$INPUT_TARGET"
+          fi
+          echo "target=$target" >>"$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >>"$GITHUB_OUTPUT"
+
+      # A PyPI version published against the wrong tag can never be replaced,
+      # only yanked, so the disagreement has to stop the run before anything is
+      # built. A dispatch has no tag to compare.
+      - name: Check tag matches packaged version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          tag = os.environ["RELEASE_TAG"]
+          tag_version = tag[1:] if tag.startswith("v") else tag
+
+          with open("hash_frx/__init__.py", encoding="utf-8") as fp:
+              match = re.search(
+                  r'^__version__\s*=\s*["\']([^"\']+)["\']', fp.read(), re.MULTILINE
+              )
+          pkg_version = match.group(1) if match else None
+
+          if tag_version != pkg_version:
+              sys.exit(
+                  "version mismatch — refusing to release:\n"
+                  f"  tag                   {tag} (-> {tag_version})\n"
+                  f"  hash_frx/__init__.py  {pkg_version}\n"
+                  "Cut the tag from a commit whose __version__ is the version "
+                  "being released."
+              )
+
+          # `types: [released]` keeps prereleases out, but that flag is a
+          # checkbox on the Release form, independent of the version string:
+          # cutting v0.2.0rc1 without ticking it fires `released` and the
+          # comparison above is satisfied. Assert the shape too, so the only
+          # thing between an rc and immutable PyPI is not a remembered checkbox.
+          if not re.fullmatch(r"\d+(\.\d+)*", tag_version):
+              sys.exit(
+                  f"{tag_version} is not a final release version — refusing to "
+                  "release. Pre-release, post-release and dev versions belong "
+                  "on a prerelease (which does not fire this workflow) or on "
+                  "TestPyPI via workflow_dispatch."
+              )
+
+          print(f"tag {tag} matches packaged final version {tag_version}")
+          PY
+
+  build:
+    name: Build sdist and wheel
+    needs: [validate-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+
+      - name: Install build tools
+        run: pip install build
+
+      # Both distributions, unlike dev-release.yml's wheel-only build: PyPI
+      # serves an sdist, the Fractalyze index generator ignores one. And no
+      # version stamping — a release's version is the committed one, already
+      # checked against the tag.
+      - name: Build
+        run: python -m build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-distributions
+          path: dist/*
+          retention-days: 3
+
+  smoke-test:
+    name: Smoke test against the public closure
+    needs: [validate-tag, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+
+      # The version comes from validate-tag, not from `python-version-file`:
+      # this job never checks out, so there is no `.python-version` here to read
+      # — and it must stay that way. The probe below reads its script from
+      # stdin, so the working directory leads `sys.path`; a workspace holding
+      # `hash_frx/` would satisfy its imports from the source tree and pass with
+      # a broken distribution.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ needs.validate-tag.outputs.python-version }}
+
+      # No extra index, deliberately: this repo's own tests pin exact frx dev
+      # builds, so they say nothing about what a `pip install hash-frx`
+      # resolves to.
+      - name: Install the wheel from public PyPI only
+        run: |
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install --index-url https://pypi.org/simple \
+            dist/*.whl
+
+      # A marker the compiler does not accept is not an error: it inlines back
+      # to its decomposition and computes identical bytes, so an
+      # install-and-hash check passes with every kernel gone. Only the compiled
+      # module separates the two. Two markers, one per emitter family.
+      #
+      # Not reused from `hash_frx/testing/` — those packages are excluded from
+      # the wheel, so reaching for them would test a tree consumers never get.
+      # `hash_frx.blake3` is omitted on purpose: it has no emitter yet
+      # (fractalyze/xla#336), so it is emitted-and-inlined by design.
+      - name: Prove the fusion markers are recognized
+        run: |
+          /tmp/wheel-venv/bin/python - <<'PY'
+          import sys
+
+          import frx
+          import frx.numpy as fnp
+          import numpy as np
+          from zk_dtypes import koalabear_mont as F
+
+          from hash_frx.poseidon2.params import Poseidon2Params
+          from hash_frx.poseidon2.poseidon2 import POSEIDON2_MARKER, Poseidon2
+          from hash_frx.sha256 import SHA256_MARKER, digest
+
+          WIDTH, EXTERNAL, INTERNAL = 16, 8, 20
+
+          def zeros(*shape):
+              return fnp.zeros(shape, dtype=F)
+
+          permutation = Poseidon2(
+              Poseidon2Params(
+                  width=WIDTH,
+                  dtype=F,
+                  alpha=3,
+                  external_rounds=EXTERNAL,
+                  internal_rounds=INTERNAL,
+                  external_constants_initial=zeros(EXTERNAL, WIDTH),
+                  external_constants_terminal=zeros(EXTERNAL, WIDTH),
+                  internal_constants=zeros(INTERNAL, WIDTH),
+                  internal_diag=fnp.ones((WIDTH,), dtype=F),
+              )
+          )
+
+          print(f"frx {frx.__version__} on {frx.default_backend()}")
+
+          failed = []
+          for marker, fn, args in (
+              (POSEIDON2_MARKER, permutation.permute, (zeros(WIDTH),)),
+              (SHA256_MARKER, digest, (np.zeros((2, 64), dtype=np.uint8),)),
+          ):
+              lowered = frx.jit(fn).lower(*args)
+              emitted = marker in lowered.as_text()
+              fusions = [
+                  line
+                  for line in lowered.compile().as_text().splitlines()
+                  if "kind=kCustom" in line
+              ]
+              # Matched as `%<key> =`, not by substring: `poseidon` is a prefix
+              # of `poseidon2`, so either emitter would satisfy the other.
+              key = marker.rsplit(".", 1)[-1]
+              recognized = any(f"%{key} =" in line for line in fusions)
+              print(f"  {marker}: emitted={emitted} recognized={recognized}")
+              if not emitted:
+                  failed.append(f"{marker} was not emitted at all")
+              elif not recognized:
+                  failed.append(f"{marker} is emitted but NOT recognized")
+
+          if failed:
+              sys.exit(
+                  "\n".join(failed)
+                  + f"\n\nfrx {frx.__version__} — the toolchain a public "
+                  "install resolves to is below this package's floor. Raise "
+                  "the frx bound in pyproject.toml, and do not publish until "
+                  "this passes: the distributions would compute correct hashes "
+                  "with none of the kernels they exist to provide."
+              )
+          PY
+
+      # pip falls back to the sdist on any platform or Python without a matching
+      # wheel, and `python -m build` producing a tarball says nothing about that
+      # tarball producing a wheel. Installing it from the path is what checks.
+      - name: Install the sdist from public PyPI only
+        run: |
+          python -m venv /tmp/sdist-venv
+          /tmp/sdist-venv/bin/pip install --index-url https://pypi.org/simple \
+            dist/*.tar.gz
+          /tmp/sdist-venv/bin/python -c "import hash_frx; print(hash_frx.__version__)"
+
+  attach:
+    name: Attach distributions to the release
+    if: github.event_name == 'release'
+    # After smoke-test: the Fractalyze index mirrors Release assets, so
+    # attaching already publishes somewhere a consumer resolves from.
+    needs: [validate-tag, build, smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+
+      # --clobber so a re-run replaces the assets instead of failing on the
+      # names already there; a Release asset is mutable, a PyPI file is not.
+      - name: Attach distributions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
+        run: |
+          gh release upload "$RELEASE_TAG" dist/* \
+            --clobber --repo "$GITHUB_REPOSITORY"
+
+  publish:
+    name: Publish
+    # Last, because it is the only irreversible step. `attach` is skipped on a
+    # dispatch and a skipped `needs` would cascade, so the guard names the
+    # results it accepts rather than relying on the default.
+    needs: [validate-tag, build, smoke-test, attach]
+    if: >-
+      !cancelled()
+      && needs.build.result == 'success'
+      && needs.smoke-test.result == 'success'
+      && (needs.attach.result == 'success' || needs.attach.result == 'skipped')
+      && needs.validate-tag.outputs.target != 'build-only'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment: ${{ needs.validate-tag.outputs.target }}
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-distributions
+          path: dist
+
+      # Neither step tolerates a version already on the index. Accepting it
+      # would turn a forgotten version bump into a green run that shipped
+      # nothing and left consumers on the stale distribution.
+      - name: Publish to TestPyPI
+        if: needs.validate-tag.outputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        if: needs.validate-tag.outputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Its own job because it is the one call that leaves the repository: as a step
+  # its exit status became the parent's result, so an expired token could fail a
+  # run whose distributions had already shipped. After `attach` because the
+  # index mirrors Release assets, not PyPI files.
+  index-rebuild:
+    name: Rebuild the Fractalyze index
+    needs: [validate-tag, attach]
+    # `!cancelled()` is load-bearing: without a status function the implicit
+    # guard walks the whole upstream graph and any skipped ancestor skips this.
+    if: >-
+      !cancelled()
+      && needs.attach.result == 'success'
+      && needs.validate-tag.outputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger PyPI index rebuild
+        # PYPI_REPO_TOKEN is the org secret dev-release.yml also uses.
+        env:
+          GH_TOKEN: ${{ secrets.PYPI_REPO_TOKEN }}
+        run: |
+          gh api repos/fractalyze/pypi/dispatches \
+            -f event_type=rebuild-index

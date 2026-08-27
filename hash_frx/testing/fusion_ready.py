@@ -14,9 +14,17 @@ The call check is separate because it has to be: a call is not a `stablehlo.`
 op, so the op scan is blind to it, and a body can have an entirely fusion-safe
 vocabulary while still carrying the boundary that rejects it.
 
-Applies to the linear layers, not to a whole permutation: a permutation fuses
-via its composite marker and normal-form linear layers, which is a different
-fusion shape with no dot for XLA to optimize.
+``assert_input_uses`` is the second half of what a layer owes, and it is a
+different question from fusion-readiness: a body can be perfectly fusion-safe and
+still read its chained input once per lane, which is the quadratic fan-out
+`hash_frx.linear` forbids. Nothing about the layer's output or its op vocabulary
+shows it — only counting reads in the traced graph does.
+
+Applies to any body that must pass the generic single-kernel rewriter: the
+linear layers always, and a whole permutation exactly when its production
+marker is the generic `zorch.fused_region` (Vision today) — a permutation on
+a DEDICATED marker fuses via its own emitter instead, which tolerates shapes
+this whitelist rejects, so holding such a body here would over-constrain it.
 """
 
 from __future__ import annotations
@@ -33,6 +41,10 @@ _FUSION_SAFE = frozenset(
         "add",
         "subtract",
         "multiply",
+        # The binary-field inverse S-box: `x ** -1` lowers to `1/x`, one
+        # element-wise `divide` — the same op class as `multiply`, admitted on
+        # that property (Vision's round body is where it appears).
+        "divide",
         "negate",
         "constant",
         "convert",
@@ -41,6 +53,12 @@ _FUSION_SAFE = frozenset(
         "slice",
         "concatenate",
         "transpose",
+        # An index the kernel counts rather than a value it loads: `iota` reads
+        # no memory, so it fuses into its consumer wherever `constant` does.
+        # Admitted on that property alone — a body reaches for it under the
+        # operand-ABI rule in `docs/reference/conventions.md`, but that is not
+        # what earns an op a place here.
+        "iota",
         # Bit-oriented hashes compute in machine words rather than a field, so
         # their element-wise vocabulary is boolean and shift rather than
         # add/multiply. `select` belongs here for the same reason `add` does —
@@ -53,6 +71,11 @@ _FUSION_SAFE = frozenset(
         "shift_left",
         "shift_right_logical",
         "select",
+        # `select`'s other half. A predicate is element-wise wherever the select
+        # it feeds is, and a body derives one on device whenever the mask would
+        # otherwise be a host array — which the operand-ABI rule turns into a
+        # lifted operand per materialisation site.
+        "compare",
     }
 )
 
@@ -84,3 +107,39 @@ def assert_fusion_ready(fn: Callable[..., Any], *args: Any, reduces: int = 0) ->
     offenders = sorted({o for o in ops if o != "reduce" and o not in _FUSION_SAFE})
     if offenders:
         raise AssertionError(f"non-fusion-safe ops in body: {offenders}")
+
+
+def assert_input_uses(
+    fn: Callable[..., Any], *args: Any, arg: int = 0, limit: int
+) -> None:
+    """Assert ``fn`` reads its ``arg``-th traced input at most ``limit`` times.
+
+    A layer must not read a chained input more times than its output shape
+    requires. Each extra read is a separate expression the compiler re-derives the
+    value for, so where the value is loop-carried — a permutation's rounds — the
+    cost compounds per round rather than adding. `hash_frx.linear` states the rule
+    and what it cost to learn it.
+
+    ``limit`` is where the scaling law goes: pass ``limit=width`` for a layer whose
+    lanes each legitimately touch the state once, or the measured constant for a
+    value every lane shares. Written that way one call already pins the scaling; a
+    second width only catches a superlinearity whose constant is small enough to
+    hide at the first.
+    """
+    jaxpr = frx.make_jaxpr(fn)(*args).jaxpr
+    var = jaxpr.invars[arg]
+    n = sum(eqn.invars.count(var) for eqn in jaxpr.eqns)
+    if n > limit:
+        raise AssertionError(
+            f"input {arg} read {n} times, over the limit of {limit}. Read it once "
+            f"as an array, or hoist its lanes once and index the hoisted list."
+        )
+
+
+def primitive_count(fn: Callable[..., Any], *args: Any, name: str) -> int:
+    """How many ``name`` primitives ``fn`` traces to — the same traced-graph
+    accounting as ``assert_input_uses``, counting ops instead of reads. Sharper
+    than a read count where a per-lane form multiplies as well as re-reads, and it
+    fails naming the width that drifted."""
+    jaxpr = frx.make_jaxpr(fn)(*args).jaxpr
+    return sum(1 for eqn in jaxpr.eqns if eqn.primitive.name == name)
