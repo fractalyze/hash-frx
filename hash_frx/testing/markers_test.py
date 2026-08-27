@@ -82,6 +82,9 @@ _MODULE_CONSTANTS = {
     # `extension/md.py` for every MD family, so the constant lives here for the
     # same reason -- no single family owns an operation name.
     markers.STREAM_FINALIZE_MARKER: markers.STREAM_FINALIZE_MARKER_VERSION,
+    # And the raw-bytes one beside it, for the same reason: three families emit
+    # it, so its constant lives with the choice rather than with any of them.
+    markers.BYTES_DIGEST_MARKER: markers.BYTES_DIGEST_MARKER_VERSION,
 }
 
 
@@ -176,6 +179,55 @@ class OperationNamedMdDigestTest(absltest.TestCase):
         # `hash_frx.digest.*` row look operation-named.
         self.assertEqual(markers.MD_DIGEST_MARKER, DIGEST_NAMESPACE.rstrip("."))
         self.assertNotStartsWith(markers.MD_DIGEST_MARKER, DIGEST_NAMESPACE)
+
+
+class OperationNamedBytesDigestTest(absltest.TestCase):
+    """The raw-bytes flip, still OFF.
+
+    `OperationNamedMdDigestTest`'s sibling one schema over, and currently in the
+    opposite state: that flag ships ON, this one waits for a `frx>=` floor
+    carrying the recognizer (fractalyze/xla#635) and the registry entries it
+    resolves through (#636/#639/#642).
+    """
+
+    # Membership is hand-listed -- nothing in `MARKERS` distinguishes the
+    # schemas -- but the SPELLINGS come off the modules: the resolver returns
+    # its argument verbatim when off and ignores it when on, so a stranded
+    # literal would pass both tests below.
+    _FAMILIES = (
+        (ripemd160.RIPEMD160_MARKER, ripemd160.RIPEMD160_MARKER_VERSION),
+        (blake2s.BLAKE2S_MARKER, blake2s.BLAKE2S_MARKER_VERSION),
+        (blake2b.BLAKE2B_MARKER, blake2b.BLAKE2B_MARKER_VERSION),
+    )
+
+    def test_off_reports_the_familys_own_spelling(self) -> None:
+        # Unpatched -- the shipped state. A fallback that altered the name
+        # would silently change the wire on a pin still reading the old one.
+        for name, version in self._FAMILIES:
+            with self.subTest(marker=name):
+                self.assertEqual(
+                    markers.bytes_in_digest_marker(name, version), (name, version)
+                )
+
+    def test_on_reports_the_operation_name_for_every_family(self) -> None:
+        # One name and version whatever the family was; the plugin resolves
+        # it through the `primitive` attribute instead.
+        with mock.patch.object(markers, "_OPERATION_NAMED_BYTES_DIGEST", True):
+            for name, version in self._FAMILIES:
+                with self.subTest(marker=name):
+                    self.assertEqual(
+                        markers.bytes_in_digest_marker(name, version),
+                        (
+                            markers.BYTES_DIGEST_MARKER,
+                            markers.BYTES_DIGEST_MARKER_VERSION,
+                        ),
+                    )
+
+    def test_the_flag_is_off_until_the_pin_carries_the_recognizer(self) -> None:
+        # Flipping early does not fail -- the families swap one unrecognized
+        # name for another and keep inlining. Pinned so it moves in the same
+        # commit as the floor and the routing gates.
+        self.assertFalse(markers._OPERATION_NAMED_BYTES_DIGEST)
 
 
 class OperationNamedPermuteTest(absltest.TestCase):

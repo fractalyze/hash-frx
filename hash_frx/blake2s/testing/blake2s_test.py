@@ -180,6 +180,11 @@ class Blake2sMarkerTest(absltest.TestCase):
         eqn = _composite(blake2s.digest, msg)
         self.assertEqual(eqn.params["name"], blake2s.BLAKE2S_MARKER)
         self.assertEqual(eqn.params["version"], blake2s.BLAKE2S_MARKER_VERSION)
+        # Pinned while the marker still rides its own spelling: a family that
+        # quietly stopped emitting `primitive` would pass every assertion above
+        # and then decline into its decomposition at flip time rather than fail.
+        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(attrs["primitive"], "blake2s")
         self.assertLen(eqn.invars, 4)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
         # L = 63: one block once padded, so the zero tail is 1 byte.

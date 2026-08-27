@@ -54,6 +54,7 @@ from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.md import masked_chain
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.markers import bytes_in_digest_marker
 from hash_frx.word import pack_le, rotl, unpack_le
 
 if TYPE_CHECKING:
@@ -247,11 +248,12 @@ def ripemd160_bytes(msg: Array) -> Array:
     A name-routed digest marker, so it is exempt from the generic
     single-kernel rule (`sha256.sha256_merkle_damgard` states the exemption)
     and the body may chain blocks; the 80 steps of each line are
-    Python-unrolled regardless, the count being static. No plugin ships a
-    RIPEMD-160 recognizer yet (`_DEDICATED_EMITTER_AVAILABLE`), so today the
-    marker inlines its decomposition on every backend — identical bytes, no
-    dedicated kernel — and an emitter landing changes the lowering, never the
-    value.
+    Python-unrolled regardless, the count being static. A RIPEMD-160 entry landed
+    in fractalyze/xla#636, but this marker still inlines on every backend — identical
+    bytes, no dedicated kernel. Changing that needs the `frx>=` floor AND this
+    family's gates to move together, neither on its own;
+    `markers.bytes_in_digest_marker` states the ordering and why `primitive` is
+    already on the wire.
 
     Operands are explicit in the recognizer's positional ABI order:
 
@@ -283,13 +285,15 @@ def ripemd160_bytes(msg: Array) -> Array:
         )
         return unpack_le(state)  # little-endian digest serialization: [B, 20]
 
+    name, version = bytes_in_digest_marker(RIPEMD160_MARKER, RIPEMD160_MARKER_VERSION)
     return fused_region(
         decomposition,
         _H0d,
         msg,
         fnp.asarray(_PAD.tail(msg.shape[-1])),
-        name=RIPEMD160_MARKER,
-        version=RIPEMD160_MARKER_VERSION,
+        name=name,
+        version=version,
+        primitive="ripemd160",
     )
 
 

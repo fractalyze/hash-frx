@@ -99,6 +99,7 @@ from hash_frx.blake2_params import BLAKE2B_WORD_BYTES, param_block, param_words
 from hash_frx.byte_hash import DeviceRow, device_message, padded_batch
 from hash_frx.extension.pad import PadRule, Trailer, haifa_counter
 from hash_frx.fusion import FusionPath, fused_region, routing
+from hash_frx.markers import bytes_in_digest_marker
 from hash_frx.word import pack_le, roll, split, unpack_le
 from hash_frx.word64 import Pair, add64, rotr64, xor64
 
@@ -415,11 +416,12 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
     A name-routed digest marker, so it is exempt from the generic
     single-kernel rule (`sha256.sha256_merkle_damgard` states the exemption)
     and the body may chain blocks; the 12 rounds per block are
-    Python-unrolled regardless, the count being static. No plugin ships a
-    BLAKE2b recognizer yet (`_DEDICATED_EMITTER_AVAILABLE`), so today the
-    marker inlines its decomposition on every backend — identical bytes, no
-    dedicated kernel — and an emitter landing changes the lowering, never the
-    value.
+    Python-unrolled regardless, the count being static. A BLAKE2b entry landed
+    in fractalyze/xla#642, but this marker still inlines on every backend — identical
+    bytes, no dedicated kernel. Changing that needs the `frx>=` floor AND this
+    family's gates to move together, neither on its own;
+    `markers.bytes_in_digest_marker` states the ordering and why `primitive` is
+    already on the wire.
 
     Operands are explicit in the recognizer's positional ABI order:
 
@@ -457,14 +459,16 @@ def blake2b_bytes(h0: Array, msg: Array, tail: Array) -> Array:
             state = _compress(state, iv_lo, iv_hi, words[:, i], t, last)
         return unpack_le(state)  # little-endian serialization: [B, 64]
 
+    name, version = bytes_in_digest_marker(BLAKE2B_MARKER, BLAKE2B_MARKER_VERSION)
     return fused_region(
         decomposition,
         h0,
         fnp.asarray(_IV_PAIRS),
         msg,
         tail,
-        name=BLAKE2B_MARKER,
-        version=BLAKE2B_MARKER_VERSION,
+        name=name,
+        version=version,
+        primitive="blake2b",
     )
 
 

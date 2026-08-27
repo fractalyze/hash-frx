@@ -157,6 +157,41 @@ STREAM_FINALIZE_MARKER = "hash_frx.stream_finalize"
 # not any family's parameters.
 STREAM_FINALIZE_MARKER_VERSION = 1
 
+# The operation-named RAW-BYTES Merkle-Damgard digest marker: one name for every
+# family whose message arrives UNPADDED, with the primitive carried in the
+# `primitive` composite attribute.
+#
+# A separate operation from `MD_DIGEST_MARKER`, not a version of it: words-in
+# hands the kernel pre-padded blocks, raw-bytes hands it the message and a zero
+# tail. An emitter reading one as the other reads a message where a block count
+# should be.
+#
+# Flat for the reason `PERMUTE_MARKER` and `MD_DIGEST_MARKER` are: an operation
+# name is a sibling of the other operations, not a child of one. The dotted
+# spelling would also put a LIVE name inside `DIGEST_NAMESPACE`, which holds the
+# retiring per-family spellings and is slated for deletion as a group.
+BYTES_DIGEST_MARKER = "hash_frx.digest_bytes"
+
+# One name, one wire ABI, so one version -- it tracks the raw-bytes SCHEMA
+# (`[h0, consts..., msg, tail] -> digest bytes`), not any family's parameters.
+# `consts...` is zero or more: RIPEMD-160 carries none, the BLAKE2 pair one each.
+BYTES_DIGEST_MARKER_VERSION = 1
+
+# Emitted only where the pinned plugin recognizes it. The recognizer landed in
+# fractalyze/xla#635 over the #632 envelope, and the entries it resolves through
+# in #636 (RIPEMD-160), #639 (BLAKE2s) and #642 (BLAKE2b); this stays False
+# until the `frx>=` floor moves to a wheel carrying them.
+#
+# **Unlike both siblings, flipping this early would do nothing at all** -- the
+# three families emit names no recognizer matches, and an old plugin matches the
+# operation name no better, so they inline either way. So the flag is not what
+# makes the flip safe; the ORDERING is, and the hazard sits on the family
+# `_DEDICATED_EMITTER_AVAILABLE` gates: turning one on before the floor carries
+# its entry makes `fusion_path` advertise a kernel over a body that still
+# inlines, which is what `fusion_path_test`'s matrix law catches. This rides
+# with those gates so the rename and the routing claim land in one commit.
+_OPERATION_NAMED_BYTES_DIGEST = False
+
 
 def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:
     """The `(name, version)` a DEDICATED permute marker rides today.
@@ -182,12 +217,37 @@ def words_in_digest_marker(name: str, version: int) -> tuple[str, int]:
 
     Only the words-in schema belongs here. A raw-bytes digest is a DIFFERENT
     wire ABI — its message operand is unpadded and the padding happens inside
-    the region — so it keeps its own name rather than joining this one behind a
-    flag, and `hash_frx.digest.sha256_bytes` states why that is a new name and
-    not a version bump.
+    the region — so it does not join this name; `bytes_in_digest_marker` is its
+    own sibling behind its own flag, and `hash_frx.digest.sha256_bytes` states
+    why that is a new name and not a version bump.
     """
     if _OPERATION_NAMED_MD_DIGEST:
         return MD_DIGEST_MARKER, MD_DIGEST_MARKER_VERSION
+    return name, version
+
+
+def bytes_in_digest_marker(name: str, version: int) -> tuple[str, int]:
+    """The `(name, version)` a raw-bytes Merkle-Damgard digest rides today.
+
+    `words_in_digest_marker`'s sibling one schema over: takes the family's own
+    spelling and returns either it or the operation-named one, so the choice is
+    made in one place rather than once per family.
+
+    Only the STATIC-length schema belongs here — `[h0, consts..., msg, tail]`,
+    where the block count is a shape property. The runtime-LENGTH forms carry a
+    scalar length operand instead, which makes it a runtime value; both
+    `sha256.SHA256_BYTES_MARKER` and `grostl.GROSTL256_MARKER` are in that group
+    and neither is a caller. **Grostl is the live trap** — it walks
+    `masked_chain` exactly as RIPEMD-160 does, and it is routed on the pinned
+    plugin today, so wiring it here would be a no-op until the flip moved a live
+    marker onto an envelope with no length operand.
+
+    Callers emit the `primitive` attribute alongside their own name, not only
+    after the flip — that is what makes the flip a rename and nothing else
+    (`extension/md.py`'s `chain` states the same arrangement words-in).
+    """
+    if _OPERATION_NAMED_BYTES_DIGEST:
+        return BYTES_DIGEST_MARKER, BYTES_DIGEST_MARKER_VERSION
     return name, version
 
 
@@ -248,6 +308,15 @@ MARKERS: tuple[Marker, ...] = (
     Marker(
         STREAM_FINALIZE_MARKER,
         STREAM_FINALIZE_MARKER_VERSION,
+        MarkerKind.DIGEST,
+        MarkerNaming.OPERATION,
+    ),
+    # The operation-named RAW-BYTES Merkle-Damgard digest. Its own row rather
+    # than a version of the one above because the two are different wire ABIs:
+    # words-in takes pre-padded blocks, this takes the message and a zero tail.
+    Marker(
+        BYTES_DIGEST_MARKER,
+        BYTES_DIGEST_MARKER_VERSION,
         MarkerKind.DIGEST,
         MarkerNaming.OPERATION,
     ),
