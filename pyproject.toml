@@ -38,25 +38,81 @@ classifiers = [
 #
 # The GPU plugins (frx-cuda12-*) stay undeclared: they are an install-time
 # platform choice, offered through frx's own `cuda12` extra.
-#
-# `blake3` is declared because the shipped tree imports it: the `HostBlake3*` rows
-# in `hash_frx/blake3/byte_hashes.py` need a native BLAKE3 the way the other host
-# rows need `hashlib`, and the standard library has none. It ships prebuilt wheels
-# for every platform this package supports, so it costs a consumer no toolchain.
 dependencies = [
     "numpy",
-    "blake3",
-    # Floor = the first wheel where closed-over composite constants stay inline
-    # (fractalyze/jax#218); an older frx lifts the captured matrices to leading
-    # operands and breaks every dedicated emitter ABI.
+    # Floor = the first wheel whose Grøstl-256 emitter accepts the RUNTIME-LENGTH
+    # operand form (fractalyze/xla#599, merged as PR #600), which
+    # `grostl.grostl256_bytes` now emits and has no static-tail form to fall
+    # back to.
+    #
+    # This floor is the first here that guards against being SLOWER rather than
+    # against being wrong or un-fused. Below it the marker is declined and the
+    # digest inlines a decomposition that derives its block count from runtime
+    # data — so it speculates every block the buffer could hold, where the
+    # static-tail form it replaced compressed only the blocks the message
+    # occupied. Right bytes either way; the interval this floor closes is one
+    # where the package would ship a regression, which is why the swap and this
+    # line are one change.
+    #
+    # It subsumes the dedicated Grøstl-256 CPU emitter (fractalyze/xla#591, PR
+    # #593), below which the marker is declined outright — right bytes, and a
+    # fusion count two orders of magnitude off the routed one, for the reason
+    # `grostl._DEDICATED_EMITTER_AVAILABLE` states.
+    #
+    # Neither Grøstl floor is silent.
+    # `grostl.testing.grostl_test.Grostl256MarkerRecognizedTest` reads the
+    # COMPILED module on the cpu leg — the leg `grostl._EMITTER_BACKENDS`
+    # names — and fails below it. The floor still states the requirement; that
+    # test is what refuses to ship it unmet.
+    #
+    # Verified against the wheel rather than inferred from its version: the
+    # bump PR that produced it names the jax commit that triggered it
+    # (`jax@9a2b14a41c47`), whose `third_party/xla/revision.bzl` pins
+    # `2b7cf3e55bfa…` — the xla commit PR #600 merged, closing #599. The version
+    # suffix cannot settle this on its own; a bump PR is opened carrying an
+    # older commit and updated in place.
+    #
+    # It subsumes the runtime-length SHA-256 digest ABI floor: the first wheel
+    # where that ABI is SAFE under the `hash_frx.digest.sha256_bytes` name it
+    # travels as. Three things had to be in the wheel, and they landed
+    # separately — the CPU emitter (fractalyze/xla#575), acceptance of the
+    # runtime-length ABI under this name (xla#581), and the GPU emitter plus
+    # its compiler gate (xla#582, merged as PR #585).
+    #
+    # All three are load-bearing for `digest` itself, which routes the length
+    # ABI on every backend in `_BYTES_EMITTER_BACKENDS` — GPU included. On a
+    # wheel without the GPU emitter, a GPU caller gets the name recognized and
+    # the operands DECLINED: right bytes, and the decomposition it falls back to
+    # speculates every block the buffer could hold, so it is slower than the
+    # blocks form rather than merely un-fused. `sha256_bytes` has no routing
+    # gate of its own, so a direct caller — this package's own test suite
+    # included — hits the same decline wherever it runs. That floor was
+    # invisible in both directions, because nothing failed.
+    #
+    # Both of these buy back performance, where the ones below them bought
+    # back correctness.
+    #
+    # They subsume, in turn, the raw-bytes digest marker
+    # (`hash_frx.digest.sha256_bytes`, fractalyze/xla#561): the wheel before
+    # its floor recognized that marker but lacked its kernel reuse-key arm, so
+    # two different-length digests in ONE compiled program shared a kernel and
+    # the second returned wrong bytes on GPU (fractalyze/xla#562), and with
+    # it the kind-namespaced marker spellings
+    # (`hash_frx.perm.*` / `.compress.*` / `.digest.*`, fractalyze/xla#539),
+    # the vmapped-sponge rank collapse (fractalyze/xla#549), the
+    # Keccak-emitter SAFETY wheel (the wheel that first shipped the dedicated
+    # Keccak emitters fused a producer into the permutation's custom fusion
+    # and dropped it from the kernel, so an incremental SHAKE aborted or
+    # returned a wrong digest with no error — fractalyze/xla#517), and before
+    # that the composite-constant lifting ABI every dedicated emitter depends
+    # on.
     #
     # The `!=` excludes the one version no lower bound can reach: PEP 440 sorts
-    # a final release above ALL of its own pre-releases, so `0.10.1` — which
-    # predates both that fix and the `hash_frx.*` marker rename — sorts above
-    # the dev build named as the floor. Naming a later stable instead fails the
-    # other way, since the nightly line resumes below it (`0.10.2.dev...` <
-    # `0.10.2`).
-    "frx>=0.10.1.dev20260812040018,!=0.10.1",
+    # a final release above ALL of its own pre-releases, so `0.10.2` — released
+    # before any of this — sorts above the dev build named as the floor and
+    # would otherwise satisfy it. Naming a later stable instead fails the other
+    # way, since the nightly line resumes below it (`0.10.3.dev...` < `0.10.3`).
+    "frx>=0.10.2.dev20260826215637,!=0.10.2",
 ]
 
 [project.urls]

@@ -10,14 +10,14 @@ import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
 
 
 class _Id:
     width = 3
     dtype = fnp.int32
-    has_dedicated_fusion = False  # no dedicated marker -> consumers use a fallback
+    fusion_path = FusionPath.GENERIC  # no dedicated marker -> fallback
     fused_region_marker = (FUSED_REGION_MARKER, 0)
 
     def permute(self, state: Array) -> Array:

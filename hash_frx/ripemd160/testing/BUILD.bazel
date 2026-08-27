@@ -1,0 +1,49 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# The plain-python RIPEMD-160 oracle: ints and bytes only, no frx, so the
+# differential tests hold the frx implementation to something that shares none
+# of its lowering rules.
+py_library(
+    name = "reference",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "reference.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
+# No device work: plain python against the designers' published vectors
+# (million-"a" included), so the CUDA plugin wheels would be ~430 MB of
+# runfiles for nothing.
+py_test(
+    name = "reference_test",
+    size = "small",
+    srcs = ["reference_test.py"],
+    deps = [
+        ":reference",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
+    name = "ripemd160_test",
+    # Compile-heavy relative to its arithmetic: the vector rows and the
+    # differential sweep each compile the unrolled 160-step digest body once
+    # per (batch, length) aval.
+    size = "medium",
+    srcs = ["ripemd160_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx/ripemd160",
+        "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:oracle",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

@@ -27,33 +27,39 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.blake3.blake3 import (
-    BLAKE3_MARKER,
+from hash_frx.blake3.compress import (
+    CHUNK_START,
+    DERIVE_KEY_CONTEXT,
+    DERIVE_KEY_MATERIAL,
+    KEYED_HASH,
+)
+from hash_frx.blake3.modes import (
     BLOCK_LEN,
     CHUNK_LEN,
     DIGEST_LEN,
     Mode,
     chaining_value,
     chunk_output,
-    derive_key,
     derive_key_mode,
-    digest,
     hash_mode,
-    keyed_digest,
     keyed_mode,
-    keyed_xof,
     parent_output,
     root_words,
-    tree_hash,
     tree_output,
     unmarked_hash,
-    xof,
+    unmarked_parent_hash,
 )
-from hash_frx.blake3.compress import (
-    CHUNK_START,
-    DERIVE_KEY_CONTEXT,
-    DERIVE_KEY_MATERIAL,
-    KEYED_HASH,
+from hash_frx.blake3.rows import (
+    BLAKE3_MARKER,
+    BLAKE3_PARENT_MARKER,
+    derive_key,
+    digest,
+    keyed_digest,
+    keyed_xof,
+    non_root_digest,
+    parent_digest,
+    tree_hash,
+    xof,
 )
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.emitter import HAS_BLAKE3_EMITTER
@@ -76,12 +82,12 @@ from hash_frx.blake3.testing.vectors import (
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
-from hash_frx.word import split
+from hash_frx.word import split, unpack_le
 
 _U32 = np.uint32
 
 
-# `blake3.unmarked_hash` under each mode — the same implementation the shipped
+# `modes.unmarked_hash` under each mode — the same implementation the shipped
 # entry points run, without the marker around it. Read directly where a case
 # wants the body rather than the composite, and stood in for the shipped names by
 # the wrappers below on a leg that cannot afford to compile it.
@@ -89,17 +95,22 @@ _U32 = np.uint32
 # **Which side the value tables read.** Where the BLAKE3 emitter is present a
 # recognized composite is one custom fusion and its body is never codegen'd, so
 # the tables run `digest`/`xof`/`keyed_digest`/`derive_key` — the entry points a
-# consumer calls, marker and all. Where it is absent the marker inlines and every
-# call compiles the whole unrolled body, at a cost super-linear in the
-# compression count: 0.83s at two blocks, 4.17s at four, 25.72s at eight, and at
-# one chunk it did not finish in eleven minutes (46 GB resident). The wall is
-# XLA's codegen of the unrolled hash rather than the marker — at one block a
-# marked call is 0.30s against 0.27s for a plain `frx.jit` of the same body — so
-# the marker did not introduce it, it only put it on every call. There the tables
-# read the decomposition, and what they give up is the marker standing between
-# them and the same arithmetic.
+# consumer calls, marker and all. Both shipped legs have an emitter, so that is
+# what runs everywhere today and the wrappers below forward straight through.
 #
-# **What pins the shipped path on either leg**: `MarkerTest`, which reads the
+# The other branch is what a leg without one costs, and is why the wrappers stay
+# rather than being inlined away: the marker inlines and every call compiles the
+# whole unrolled body, at a cost super-linear in the compression count — 0.83s at
+# two blocks, 4.17s at four, 25.72s at eight, and at one chunk it did not finish
+# in eleven minutes (46 GB resident). The wall is XLA's codegen of the unrolled
+# hash rather than the marker — at one block a marked call is 0.30s against 0.27s
+# for a plain `frx.jit` of the same body — so the marker did not introduce it, it
+# only put it on every call. A backend that gains a BLAKE3 arm gets the tables
+# for free by joining `HAS_BLAKE3_EMITTER`; one that has not still runs, reading
+# the decomposition and giving up only the marker standing between it and the
+# same arithmetic.
+#
+# **What pins the shipped path regardless**: `MarkerTest`, which reads the
 # lowered module rather than running it, plus the compiled cases at <= 4 blocks.
 def _unmarked(mode: Mode, msg: object, out_len: int = DIGEST_LEN) -> frx.Array:
     return unmarked_hash(msg, mode, out_len)
@@ -189,20 +200,22 @@ class _Composite(NamedTuple):
     regions: int
 
 
-def _composite(fn: object, *args: frx.Array) -> _Composite:
-    """The `hash_frx.blake3` marker a lowered `fn` carries: the first one's
-    operand types, result type and attribute text, plus how many there are.
+def _composite(fn: object, *args: frx.Array, marker: str = BLAKE3_MARKER) -> _Composite:
+    """The `marker` composite a lowered `fn` carries: the first one's operand
+    types, result type and attribute text, plus how many there are.
 
     Read off the lowered MLIR rather than the jaxpr, because the module is the
     artifact the XLA emitter reads — operand order included, which is the half of
     the ABI a name and a version do not carry.
+
+    The name is matched with its quotes, so `hash_frx.compress.blake3` does not
+    also match `hash_frx.compress.blake3_parent` — the two are separate markers
+    precisely so that a recognizer of one cannot claim the other.
     """
     text = frx.jit(fn).lower(*args).as_text()
-    lines = [
-        ln for ln in text.splitlines() if f'stablehlo.composite "{BLAKE3_MARKER}"' in ln
-    ]
+    lines = [ln for ln in text.splitlines() if f'stablehlo.composite "{marker}"' in ln]
     if not lines:
-        raise AssertionError(f"no {BLAKE3_MARKER} composite in the lowered module")
+        raise AssertionError(f"no {marker} composite in the lowered module")
     # The trailing `{attrs} : (operands) -> result`; the greedy first group runs
     # to the last `} : (`, which is the signature's own rather than one nested
     # inside `composite_attributes`.
@@ -788,7 +801,7 @@ _DECOMPOSITION_LENGTHS = (0, 1, BLOCK_LEN, 129) + (
 
 
 class MarkerTest(parameterized.TestCase):
-    """The `hash_frx.blake3` marker: that it is emitted, and what it carries.
+    """The `hash_frx.digest.blake3` marker: that it is emitted, and what it carries.
 
     A marker is a wire ABI shared with the Fractalyze XLA emitter, and losing it
     is silent — an unrecognized or absent marker inlines and computes the same
@@ -898,6 +911,187 @@ class MarkerTest(parameterized.TestCase):
             tree_hash,
             [functools.partial(keyed_digest, key, message) for key in keys],
         )
+
+
+class NonRootDigestTest(parameterized.TestCase):
+    """`non_root_digest` — the final node finished WITHOUT `ROOT`, marked.
+
+    A Merkle tree over BLAKE3's own semantics (flock-challenge's, and BLAKE3's
+    reference `merge_subtrees_non_root`) commits to leaf *chaining values*, not
+    root-finalized digests. This entry is that contract as one marked hash, so
+    an emitter can fuse a whole leaf level.
+    """
+
+    @parameterized.parameters(0, 1, BLOCK_LEN, 129)
+    def test_the_marked_cv_equals_its_decomposition(self, length: int) -> None:
+        # Same cap and same reasoning as MarkerTest's decomposition case: the
+        # marked side compiles its unrolled body, affordable under four blocks.
+        # The unmarked side is the exported primitives — `chaining_value` of the
+        # unrun tree node — which the fork fixtures already pin downstream.
+        message = _rows(official_input(length))
+        marked = np.asarray(non_root_digest(message))
+        inline = np.asarray(
+            unpack_le(chaining_value(tree_output(message, hash_mode())))
+        )
+        np.testing.assert_array_equal(marked, inline)
+
+    def test_the_cv_is_not_the_digest(self) -> None:
+        # ROOT is the only difference, and it must be a difference — equal
+        # outputs would mean the flag was dropped on both paths at once.
+        message = _rows(official_input(CHUNK_LEN))
+        self.assertFalse(
+            np.array_equal(np.asarray(non_root_digest(message)), _digest(message))
+        )
+
+    def test_the_marker_rides_version_1_with_the_non_root_attr(self) -> None:
+        # An attribute rather than a version bump: hash-frx and the emitters
+        # pin each other through the auto-bump chain, so no shipped emitter
+        # meets a marker it predates, and the version stays a rewrite-or-die
+        # gate rather than a finalization switch.
+        marker = _composite(non_root_digest, _rows(official_input(BLOCK_LEN)))
+        self.assertEqual(marker.regions, 1)
+        self.assertEqual(
+            marker.operands,
+            [f"tensor<1x{BLOCK_LEN}xui8>", "tensor<8xui32>", "tensor<8xui32>"],
+        )
+        self.assertEqual(marker.result, f"tensor<1x{DIGEST_LEN}xui8>")
+        self.assertIn("non_root = 1 : i64", marker.attrs)
+        self.assertIn(f"out_len = {DIGEST_LEN} : i64", marker.attrs)
+        self.assertIn("version = 1", marker.attrs)
+
+    def test_a_root_digest_carries_no_non_root_attr(self) -> None:
+        # The root path's wire is untouched: existing call sites emit the
+        # exact marker they always did.
+        marker = _composite(digest, _rows(official_input(BLOCK_LEN)))
+        self.assertIn("version = 1", marker.attrs)
+        self.assertNotIn("non_root", marker.attrs)
+
+    def test_rejects_an_out_len_other_than_32(self) -> None:
+        # A chaining value is one 32-byte value; extending output is the ROOT
+        # compression's mechanism, which non_root by definition never runs.
+        message = _rows(official_input(BLOCK_LEN))
+        with self.assertRaises(ValueError):
+            tree_hash(
+                message, hash_mode().key_words, out_len=64, flags=0, non_root=True
+            )
+
+
+class ParentDigestTest(absltest.TestCase):
+    """`parent_digest` — one non-root PARENT compression as a marked region.
+
+    A Merkle tree over BLAKE3's own semantics hashes its leaves with
+    `non_root_digest` and then compresses *pairs of chaining values* up the
+    levels. Both halves need a marker of their own: a parent is not the hash of
+    a 64-byte message, so the leaf entry cannot be pointed at it, and without a
+    second marker every level above the leaves runs the traced compressions
+    de-fused.
+    """
+
+    def _children(self, seed: int) -> tuple[frx.Array, frx.Array]:
+        rng = np.random.default_rng(seed)
+        return (
+            fnp.asarray(rng.integers(0, 2**32, size=(2, 8), dtype=_U32)),
+            fnp.asarray(rng.integers(0, 2**32, size=(2, 8), dtype=_U32)),
+        )
+
+    def _pairs(self, seed: int) -> frx.Array:
+        left, right = self._children(seed)
+        return fnp.concatenate([unpack_le(left), unpack_le(right)], axis=1)
+
+    def test_the_marked_parent_equals_its_decomposition(self) -> None:
+        # One compression either way — the marked side is cheap to compile here,
+        # unlike a message hash, because a parent is a single block by
+        # definition however deep the tree above it goes.
+        pairs = self._pairs(31)
+        np.testing.assert_array_equal(
+            np.asarray(parent_digest(pairs)),
+            np.asarray(unmarked_parent_hash(pairs, hash_mode())),
+        )
+
+    def test_it_is_the_spec_parent(self) -> None:
+        # The same four fixed operands `ParentNodeTest` pins on the primitive —
+        # key words in, counter zero, a full block, PARENT — read through the
+        # marked entry, so the entry cannot drift from the compression it wraps.
+        left, right = self._children(32)
+        got = np.asarray(parent_digest(self._pairs(32)))
+        want = ref.compress(
+            list(ref.IV),
+            [int(w) for w in np.asarray(left)[0]]
+            + [int(w) for w in np.asarray(right)[0]],
+            0,
+            BLOCK_LEN,
+            ref.PARENT,
+        )[:8]
+        self.assertEqual(
+            bytes(got[0]), b"".join(int(w).to_bytes(4, "little") for w in want)
+        )
+
+    def test_a_parent_is_not_the_hash_of_its_64_bytes(self) -> None:
+        # Why this entry exists at all. Pointing `non_root_digest` at the pair
+        # would fuse and produce well-formed wrong bytes: a message sets
+        # CHUNK_START|CHUNK_END and a real counter where a parent sets PARENT,
+        # a zero counter, and opens from the key words.
+        pairs = self._pairs(33)
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(parent_digest(pairs)), np.asarray(non_root_digest(pairs))
+            )
+        )
+
+    def test_the_children_are_ordered(self) -> None:
+        # Swapping them still produces a well-formed chaining value, so nothing
+        # about the shape catches an inverted pair.
+        left, right = self._children(34)
+        swapped = fnp.concatenate([unpack_le(right), unpack_le(left)], axis=1)
+        self.assertFalse(
+            np.array_equal(
+                np.asarray(parent_digest(self._pairs(34))),
+                np.asarray(parent_digest(swapped)),
+            )
+        )
+
+    def test_it_emits_its_own_marker_at_version_1(self) -> None:
+        marker = _composite(parent_digest, self._pairs(35), marker=BLAKE3_PARENT_MARKER)
+        self.assertEqual(marker.regions, 1)
+        self.assertEqual(
+            marker.operands,
+            [f"tensor<2x{2 * DIGEST_LEN}xui8>", "tensor<8xui32>", "tensor<8xui32>"],
+        )
+        self.assertEqual(marker.result, f"tensor<2x{DIGEST_LEN}xui8>")
+        self.assertIn("non_root = 1 : i64", marker.attrs)
+        self.assertIn(f"out_len = {DIGEST_LEN} : i64", marker.attrs)
+        self.assertIn("version = 1", marker.attrs)
+
+    def test_it_does_not_ride_the_message_marker(self) -> None:
+        # The load-bearing case, and the reason this is a name rather than an
+        # attribute. A recognizer matches by name and ignores attributes it does
+        # not know, so a parent riding `hash_frx.digest.blake3` would be claimed by any
+        # shipped message emitter and silently hashed as a 64-byte message —
+        # observed doing exactly that on frx 0.10.2.dev20260813075049. Under its
+        # own name an emitter that has not learned it simply inlines the
+        # decomposition, which is slow and right rather than fast and wrong.
+        text = frx.jit(parent_digest).lower(self._pairs(36)).as_text()
+        self.assertNotIn(f'stablehlo.composite "{BLAKE3_MARKER}"', text)
+
+    def test_a_message_hash_does_not_emit_the_parent_marker(self) -> None:
+        # The message path's wire is untouched: existing call sites emit the
+        # exact marker they always did.
+        text = (
+            frx.jit(non_root_digest).lower(_rows(official_input(BLOCK_LEN))).as_text()
+        )
+        self.assertNotIn(BLAKE3_PARENT_MARKER, text)
+        self.assertIn(f'stablehlo.composite "{BLAKE3_MARKER}"', text)
+
+    def test_rejects_a_pair_that_is_not_two_chaining_values(self) -> None:
+        # The operand is two 32-byte children end to end and nothing else. A
+        # wrong width would otherwise reach `pack_le` and be reported against a
+        # reshape the caller never wrote.
+        for name, bad in (
+            ("width", fnp.zeros((2, 63), dtype=fnp.uint8)),
+            ("rank", fnp.zeros(2 * DIGEST_LEN, dtype=fnp.uint8)),
+        ):
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                parent_digest(bad)
 
 
 class ValidationTest(absltest.TestCase):

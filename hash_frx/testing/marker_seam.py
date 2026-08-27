@@ -17,14 +17,14 @@ covered on purpose:
 - An implementation that emits *through* the attribute — `Poseidon`, `Poseidon2`,
   `SparsePoseidon` — cannot disagree by construction, which is the stronger
   arrangement and the reason to prefer it. Here this assertion degenerates to
-  "exactly one composite, and `has_dedicated_fusion` agrees"; the emission is
+  "exactly one composite, and `fusion_path` agrees"; the emission is
   pinned to the module constants by that instance's own marker-emission test, so
   the constant-to-attribute chain stays covered end to end.
 
-`has_dedicated_fusion` is checked in the same breath because it is defined as
-"the marker is not the generic one" — two ways of saying one thing, and this is
-where they are held to it. That half is independent of how the marker is emitted,
-so it holds for every implementation.
+`fusion_path` is checked in the same breath because it is defined as "the
+marker is not the generic one" — two ways of saying one thing, and this is
+where they are held to it. That half is independent of how the marker is
+emitted, so it holds for every implementation.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from typing import Any
 import frx
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
 
 
@@ -45,12 +45,12 @@ def _composite_lines(perm: Permutation, state: Array) -> list[str]:
 
 def assert_marker_matches_emission(test: Any, perm: Permutation, state: Array) -> None:
     """Assert `perm.fused_region_marker` names the composite `permute` emits, and
-    that `has_dedicated_fusion` agrees with it."""
+    that `fusion_path` agrees with it."""
     name, version = perm.fused_region_marker
     test.assertEqual(
-        perm.has_dedicated_fusion,
-        name != FUSED_REGION_MARKER,
-        f"has_dedicated_fusion disagrees with fused_region_marker {name!r}",
+        perm.fusion_path,
+        FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC,
+        f"fusion_path disagrees with fused_region_marker {name!r}",
     )
 
     lines = _composite_lines(perm, state)

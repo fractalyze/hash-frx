@@ -8,6 +8,7 @@ py_test(
     srcs = ["poseidon_test.py"],
     deps = [
         "//hash_frx:_composite",
+        "//hash_frx:fusion",
         "//hash_frx:permutation",
         "//hash_frx/poseidon",
         "//hash_frx/testing:marker_recognized",

@@ -1,0 +1,37 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+py_test(
+    name = "sha512_test",
+    # Compile-heavy like grostl_test: the traced sweep compiles the 80-round
+    # chain once per (batch, length) aval, and the GPU leg repeats it.
+    size = "large",
+    srcs = ["sha512_test.py"],
+    deps = [
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
+        "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_recognized",
+        "//hash_frx/testing:oracle",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "sha512_stream_test",
+    # Compile-heavy: sha256_stream_test's sweep at doubled block/window
+    # shapes — every (pending, length) aval compiles its own absorb schedule.
+    size = "large",
+    srcs = ["sha512_stream_test.py"],
+    deps = [
+        "//hash_frx/sha512",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

@@ -4,7 +4,7 @@ The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
 (`fused_region`): XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
 compiler pattern match. With the standard external matrix the region is named
-`hash_frx.poseidon2`, the permutation shape riding as `composite.attributes`
+`hash_frx.perm.poseidon2`, the permutation shape riding as `composite.attributes`
 (`width`/`external_rounds`/`internal_rounds`/`alpha`), and routes to XLA's
 dedicated, params-driven Poseidon2Fusion emitter; a non-standard external
 matrix falls back to the generic
@@ -26,7 +26,14 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
+from hash_frx.fusion import (
+    FUSED_REGION_MARKER,
+    FusionPath,
+    fused_region,
+    inert_region_spec,
+    permute_marker,
+    routing,
+)
 from hash_frx.poseidon2.linear import (
     apply_external_m4,
     apply_internal,
@@ -37,12 +44,34 @@ from hash_frx.poseidon2.params import Poseidon2Params
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
 
-POSEIDON2_MARKER = "hash_frx.poseidon2"
+POSEIDON2_MARKER = "hash_frx.perm.poseidon2"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker. v2: the J
 # scale is the `internal_j_scale` attribute, not an operand.
 POSEIDON2_MARKER_VERSION = 2
+
+# Whether the pinned Fractalyze XLA plugin ships the dedicated Poseidon2Fusion
+# emitters. Flipped together with the `frx>=` floor in `pyproject.toml`, like
+# `keccak.permutation._DEDICATED_EMITTER_AVAILABLE` (its comment carries the
+# family-wide rationale: below the floor the marker is emitted, ignored, and
+# computes the right bytes with none of the kernels).
+_DEDICATED_EMITTER_AVAILABLE = True
+
+# Which backends have those emitters — a different question from the pin, asked
+# alongside it. The `ZorchFusedRegionRewriter` runs in both the CPU and the GPU
+# compiler and both route the poseidon2 arm (`allow_extension_field_poseidon2`
+# covers the extension-field states on both), so this one carries both legs,
+# unlike `poseidon.sparse`'s GPU-only tuple. A backend absent here — Metal
+# today — is on the generic path until an emitter is written for it, and then it
+# joins this tuple and nothing else here moves.
+_EMITTER_BACKENDS = ("cpu", "gpu")
+
+
+def _routes_to_dedicated_emitter() -> bool:
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 class Poseidon2:
@@ -62,38 +91,41 @@ class Poseidon2:
         self._is_m4_structured = params.is_m4_block_structured
         self._external_m4 = params.external_m4 if self._is_m4_structured else None
         name = self._select_fused_region_name()
-        # A generic region carries no version: the recognizer reads only the name
-        # there, so a version would claim a contract the marker does not have.
-        self.fused_region_marker = (
-            name,
-            POSEIDON2_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
+        self.fused_region_marker = permute_marker(name, POSEIDON2_MARKER_VERSION)
         # Dedicated == permute lowers to a hash-named marker, not the generic
         # region one (which a vendor can't route, so a whole-region composite
-        # around it is unexpandable). Derived from the marker choice itself so the
-        # two can't drift if `_select_fused_region_name` grows another case.
-        self.has_dedicated_fusion = name != FUSED_REGION_MARKER
+        # around it is unexpandable).
+        self.fusion_path = FusionPath.from_marker(name)
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
         # seat in `DuplexTranscript` (docs/reference/conventions.md
-        # "Pytree registration").
+        # "Pytree registration"). The marker joins the key because it is not a
+        # function of the params alone (it tracks the emitter flags): without it
+        # a dedicated and a generic perm on the same params collide in the
+        # `_permute_body` static-arg cache (the arrangement `SparsePoseidon`
+        # states).
         if not isinstance(other, Poseidon2):
             return NotImplemented
-        return self._p == other._p
+        return (
+            self._p == other._p
+            and self.fused_region_marker == other.fused_region_marker
+        )
 
     def __hash__(self) -> int:
-        return hash(self._p)
+        return hash((self._p, self.fused_region_marker))
 
     def _select_fused_region_name(self) -> str:
         """Route to the dedicated Poseidon2Fusion for any `(I + J_blocks) ⊗ M4`
         external matrix — the emitter applies the M4 the marker carries as an
         attribute, so Plonky3's `circ(2,3,1,1)` and the HorizenLabs matrix both
-        take the dedicated path. A free-form matrix is not M4-block-structured, so
-        it keeps the generic marker (LoopFusion lowers the real body, staying
-        correct, just slow to compile).
+        take the dedicated path — where the pin *and* the backend carry the
+        emitter. A free-form matrix is not M4-block-structured, and a backend
+        without the arm cannot route the name, so both keep the generic marker
+        (LoopFusion lowers the real body, staying correct, just slow to
+        compile).
         """
-        if self._is_m4_structured:
+        if self._is_m4_structured and _routes_to_dedicated_emitter():
             return POSEIDON2_MARKER
         return FUSED_REGION_MARKER
 
@@ -115,7 +147,10 @@ class Poseidon2:
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
         """The Poseidon2Fusion ABI: operands `(leading, *round_constants)`, the
         M4-external + internal-diffusion permute, and attrs whose `external_m4`
-        names the M4. Dedicated (M4-structured) path only."""
+        names the M4. Dedicated path only (which implies M4-structured);
+        otherwise the shared inert stub."""
+        if not self.fusion_path.is_one_kernel:
+            return inert_region_spec(self, leading)
         p = self._p
         attrs: dict[str, Any] = {
             "permutation": "poseidon2",
@@ -139,11 +174,11 @@ def _permutation_body(
 ) -> Array:
     """The straight-line permute on a single `(width,)` state, taking the
     Poseidon2Fusion ABI operands explicitly: round constants flattened row-major,
-    int_rc the lane-0 column. The internal J scale rides as the `internal_j_scale`
-    marker attribute (a scalar constant survives `lax.scan`, where an operand is
-    hoisted).
+    int_rc one constant per partial round. The internal J scale rides as the
+    `internal_j_scale` marker attribute (a scalar constant survives `lax.scan`,
+    where an operand is hoisted).
 
-    The decomposition every `hash_frx.poseidon2` region runs, spliced inline (the
+    The decomposition every `hash_frx.perm.poseidon2` region runs, spliced inline (the
     generic marker's single-kernel requirement allows no call). A batch is
     `vmap(permute)`, which lowers to the same marker over a batched operand."""
     p = perm._p
@@ -207,7 +242,7 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
     return (
         state,
         p.external_constants_initial.reshape(-1),
-        p.internal_constants[:, 0],
+        p.internal_constants,
         p.external_constants_terminal.reshape(-1),
         p.internal_diag,
     )
@@ -217,8 +252,8 @@ def _external_m4_attr(perm: Poseidon2) -> np.ndarray:
     """The base M4 flattened row-major as a numpy int64 `(16,)`. A numpy value
     (not a Python list) so it lowers to a `dense<[..]> : tensor<16xi64>` the XLA
     recognizer can parse (a plain list lowers to an unparsed ArrayAttr). Caller
-    guards on `has_dedicated_fusion`."""
-    assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
+    guards on `fusion_path.is_one_kernel`."""
+    assert perm._external_m4 is not None  # dedicated ⇒ M4-structured
     return np.array(perm._external_m4, dtype=np.int64).flatten()
 
 
@@ -240,7 +275,7 @@ def _marker_attrs(perm: Poseidon2) -> dict[str, object]:
     `circ(2,3,1,1)`) and leaves any other matrix to inline its real body, so the
     attr is what identifies the matrix. The body ignores these attrs (metadata
     only); the generic marker stays attrs-free."""
-    if not perm.has_dedicated_fusion:
+    if not perm.fusion_path.is_one_kernel:
         return {}
     return {
         "width": perm.width,

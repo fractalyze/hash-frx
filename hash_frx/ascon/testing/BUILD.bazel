@@ -1,0 +1,71 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# The plain-python oracle: ints and bytes only, no frx, so the differential
+# tests hold the frx implementation to something that shares none of its
+# lowering rules (its S-box is the column-wise Table 6 lookup, not the
+# bitsliced circuit; its words are Python ints, not uint32 half pairs).
+py_library(
+    name = "reference",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "reference.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+)
+
+# No device work: plain python against the transcribed KAT, so the CUDA plugin
+# wheels would be ~430 MB of runfiles for nothing.
+py_test(
+    name = "reference_test",
+    size = "small",
+    srcs = ["reference_test.py"],
+    deps = [
+        ":reference",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
+    name = "ascon_test",
+    # Compile-heavy: the digest body splices twelve-round permutations per
+    # 8-byte block plus the squeeze chain, and the KAT + differential sweeps
+    # compile it once per (batch, length) aval.
+    size = "large",
+    srcs = ["ascon_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx/ascon",
+        "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:oracle",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "permutation_test",
+    # Compile-heavy: twelve unrolled rounds, compiled once per routing and per
+    # state aval, plus the exhaustive S-box circuit case.
+    size = "large",
+    srcs = ["permutation_test.py"],
+    deps = [
+        ":reference",
+        "//hash_frx:fusion",
+        "//hash_frx:permutation",
+        "//hash_frx:word",
+        "//hash_frx/ascon:permutation",
+        "//hash_frx/testing:fusion_ready",
+        "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_seam",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

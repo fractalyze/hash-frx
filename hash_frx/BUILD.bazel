@@ -1,13 +1,71 @@
 load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
-# The package marker. Carries `__version__`, which dev-release stamps; the
-# primitive libraries (Poseidon, SHA-256, BLAKE3, Keccak) land alongside it and
-# depend on this for the package init.
+# The package marker and the public API. Carries `__version__`, which
+# dev-release stamps, and the lazy re-exports every consumer imports through.
+#
+# The deps are what make `from hash_frx import Sha256` resolve for a Bazel
+# consumer: the re-export is lazy in Python, but the module it reaches for still
+# has to be in runfiles, and a consumer that deps only on this target has no
+# other way to get it. That is why the list is the whole package rather than a
+# subset — a missing entry fails at run time, in the consumer, on the one name
+# nobody exercised.
+#
+# It is deliberately NOT the plugin deps (`defs.bzl`'s GPU_PLUGIN_DEPS): nothing
+# here initializes a device, and `package_test` pins that importing this target
+# imports no hash at all.
 py_library(
     name = "hash_frx",
     srcs = ["__init__.py"],
     visibility = ["//visibility:public"],
+    deps = [
+        ":byte_hash",
+        ":compression",
+        ":duplex_sponge",
+        ":fusion",
+        ":markers",
+        ":permutation",
+        ":sponge",
+        "//hash_frx/adapter:block_size",
+        "//hash_frx/adapter:duplex",
+        "//hash_frx/adapter:hkdf",
+        "//hash_frx/adapter:hmac",
+        "//hash_frx/adapter:mgf1",
+        "//hash_frx/adapter:pbkdf2",
+        "//hash_frx/adapter:xof",
+        "//hash_frx/ascon",
+        "//hash_frx/blake2b",
+        "//hash_frx/blake2s",
+        "//hash_frx/blake3",
+        "//hash_frx/extension:md",
+        "//hash_frx/extension:sponge",
+        "//hash_frx/grostl",
+        "//hash_frx/keccak",
+        "//hash_frx/poseidon",
+        "//hash_frx/poseidon2",
+        "//hash_frx/poseidon2:standard",
+        "//hash_frx/ripemd160",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
+        "//hash_frx/sm3",
+        "//hash_frx/vision",
+    ],
+)
+
+# `__init__.py` alone, with none of the package's dependencies. `package_test`
+# needs exactly this: it imports the package — which, being lazy, pulls no hash —
+# and reads nothing else. Depending on `//hash_frx` there would drag every pip
+# requirement into a 4 ms test's runfiles, measured at +595 MB / +3347 files,
+# larger than the GPU plugin deps `defs.bzl` already calls too expensive to
+# attach reflexively.
+#
+# With frx absent from those runfiles the laziness is enforced rather than
+# merely asserted: an eager re-export cannot quietly initialize a backend here,
+# it fails to import at all.
+py_library(
+    name = "package_init",
+    srcs = ["__init__.py"],
+    visibility = ["//hash_frx:__subpackages__"],
 )
 
 # The one place `lax.composite` is spelled — every marker in this package routes
@@ -25,8 +83,19 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":_composite",
+        ":markers",
         requirement("frx"),
     ],
+)
+
+# The registry of every composite marker this package owns (name, version,
+# axis) — data only, no hash imports, so a consumer can read the wire surface
+# without pulling every hash's dependencies. `markers_test` holds the rows to
+# the emitting modules' constants.
+py_library(
+    name = "markers",
+    srcs = ["markers.py"],
+    visibility = ["//visibility:public"],
 )
 
 # The two seams a consumer codes against: a fixed-width permutation over a field
@@ -35,7 +104,10 @@ py_library(
     name = "permutation",
     srcs = ["permutation.py"],
     visibility = ["//visibility:public"],
-    deps = [requirement("frx")],
+    deps = [
+        ":fusion",
+        requirement("frx"),
+    ],
 )
 
 py_library(
@@ -43,6 +115,7 @@ py_library(
     srcs = ["byte_hash.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         requirement("frx"),
         requirement("numpy"),
     ],
@@ -64,23 +137,27 @@ py_library(
     deps = [requirement("frx")],
 )
 
-# Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash plus the `Sha256` /
-# `HostSha256` ByteHash implementations. A standalone hash, not a Permutation; no
-# zk_dtypes / x64 dependency.
+# RFC 7693 §2.8's parameter block, shared by the two BLAKE2 families: the
+# bytes each XORs into its IV to carry the digest length, key length, salt and
+# personalization. Host arithmetic over parameters and never a message, so it
+# pulls no frx and needs no device — `extension/pad.py`'s property, for the
+# same reason.
 py_library(
-    name = "sha256",
-    srcs = ["sha256.py"],
+    name = "blake2_params",
+    srcs = ["blake2_params.py"],
     visibility = ["//visibility:public"],
-    deps = [
-        ":byte_hash",
-        ":fusion",
-        ":word",
-        requirement("frx"),
-        requirement("numpy"),
-    ],
 )
 
-# Padding-free overwrite sponge — the Merkle leaf hasher over a Permutation.
+# `word.py`'s 64-bit sibling: the `(lo, hi)` uint32 half-pair helpers the
+# 64-bit-word hashes share (SHA-512's Σ/σ chain, BLAKE2b's G).
+py_library(
+    name = "word64",
+    srcs = ["word64.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
+)
+
+# Overwrite sponge over a Permutation — the Merkle leaf hasher.
 py_library(
     name = "sponge",
     srcs = ["sponge.py"],
@@ -88,6 +165,7 @@ py_library(
     deps = [
         ":fusion",
         ":permutation",
+        "//hash_frx/extension:sponge",
         requirement("frx"),
     ],
 )
@@ -99,6 +177,7 @@ py_library(
     srcs = ["duplex_sponge.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         ":permutation",
         requirement("frx"),
     ],
@@ -110,6 +189,7 @@ py_library(
     srcs = ["compression.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         ":permutation",
         requirement("frx"),
     ],

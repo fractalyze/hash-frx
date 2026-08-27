@@ -20,8 +20,8 @@ Like `Poseidon`, the whole permute is one straight-line function (rounds
 unrolled, linear layers via the normal-form helpers, no reduce/dot/gather) so it
 lowers to a single kernel under the generic `zorch.fused_region` marker.
 
-There is also a dedicated `hash_frx.sparse_poseidon` name-routed marker — mirroring
-`hash_frx.poseidon2` — whose emitter (`SparsePoseidonFusion`, in the Fractalyze XLA
+There is also a dedicated `hash_frx.perm.poseidon_sparse` name-routed marker — mirroring
+`hash_frx.perm.poseidon2` — whose emitter (`SparsePoseidonFusion`, in the Fractalyze XLA
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
@@ -49,7 +49,14 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
-from hash_frx.fusion import FUSED_REGION_MARKER, fused_region
+from hash_frx.fusion import (
+    FUSED_REGION_MARKER,
+    FusionPath,
+    fused_region,
+    inert_region_spec,
+    permute_marker,
+    routing,
+)
 from hash_frx.linear import apply_matrix
 from hash_frx.poseidon.linear import apply_sparse_partial
 from hash_frx.poseidon.params import SparsePoseidonParams
@@ -57,7 +64,7 @@ from hash_frx.poseidon.params import SparsePoseidonParams
 if TYPE_CHECKING:
     from hash_frx.permutation import Permutation
 
-POSEIDON_SPARSE_MARKER = "hash_frx.sparse_poseidon"
+POSEIDON_SPARSE_MARKER = "hash_frx.perm.poseidon_sparse"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker. Version 2
@@ -71,7 +78,7 @@ _U64_MAX = 2**64 - 1
 
 # Whether the pinned Fractalyze XLA plugin ships the dedicated
 # `SparsePoseidonFusion` emitter. When True, `permute` emits the dedicated
-# `hash_frx.sparse_poseidon` marker; when False it falls back to the generic
+# `hash_frx.perm.poseidon_sparse` marker; when False it falls back to the generic
 # `zorch.fused_region` marker (which fuses the same body to one kernel), because
 # emitting a marker the plugin cannot recognize fails every compile with
 # `custom op 'stablehlo.composite' is unknown`.
@@ -82,6 +89,18 @@ _DEDICATED_EMITTER_AVAILABLE = True
 # bit-cast i64s rather than degrading, hence a pin-tracking flag and not a data
 # property; flipped together with the pin, like `_DEDICATED_EMITTER_AVAILABLE`.
 _WIDE_ATTR_EMITTER_AVAILABLE = True
+
+# Which backends carry the emitter — a different question from the pin, per
+# #147. Mis-routing is not neutral: a DEDICATED fusion path also traces the
+# whole round chain as one composite, which a backend without the emitter can
+# only inline (zisk-zorch's Poseidon1 commit goldens, CPU: 275.9 s vs 18.0 s).
+_EMITTER_BACKENDS = ("gpu",)
+
+
+def _routes_to_dedicated_emitter() -> bool:
+    """Whether the pin *and* the backend both carry this emitter
+    (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
 class SparsePoseidon:
@@ -106,15 +125,9 @@ class SparsePoseidon:
             params.partial_col_rows,
         )
         name = self._select_fused_region_name(rows)
-        # A generic region carries no version: the recognizer reads only the name
-        # there, so a version would claim a contract the marker does not have.
-        self.fused_region_marker = (
-            name,
-            POSEIDON_SPARSE_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
-        )
-        # Derived from the marker choice itself so the two can't drift.
-        self.has_dedicated_fusion = name != FUSED_REGION_MARKER
-        if self.has_dedicated_fusion:
+        self.fused_region_marker = permute_marker(name, POSEIDON_SPARSE_MARKER_VERSION)
+        self.fusion_path = FusionPath.from_marker(name)
+        if self.fusion_path.is_one_kernel:
             (
                 self._mds_rows,
                 self._transition_rows,
@@ -125,9 +138,11 @@ class SparsePoseidon:
     def _select_fused_region_name(
         self, rows: tuple[tuple[tuple[int, ...], ...], ...]
     ) -> str:
-        """Route to the dedicated `SparsePoseidonFusion` when the pinned plugin
-        ships it AND the four matrices are representable in its int64 attributes,
-        else the generic marker so compiles don't fail on an unknown composite.
+        """Route to the dedicated `SparsePoseidonFusion` when the pin *and* the
+        backend ship it AND the four matrices are representable in its int64
+        attributes, else the generic marker so compiles don't fail on an unknown
+        composite — and so a backend without the emitter is not handed a
+        whole-permutation composite it can only inline.
 
         Every linear layer here is a matrix of field elements (unlike Poseidon2,
         whose one matrix attribute is the small structural M4). Values below 2^63
@@ -135,7 +150,7 @@ class SparsePoseidon:
         `p = 2^64 - 2^32 + 1` — ride as a u64 bit-cast, gated on
         `_WIDE_ATTR_EMITTER_AVAILABLE` (see its rationale). A wider field has
         nothing the attributes can carry and takes the generic marker."""
-        if not _DEDICATED_EMITTER_AVAILABLE:
+        if not _routes_to_dedicated_emitter():
             return FUSED_REGION_MARKER
         if all(_fits_i64(m) for m in rows):
             return POSEIDON_SPARSE_MARKER
@@ -178,10 +193,9 @@ class SparsePoseidon:
         """The SparsePoseidonFusion ABI: operands `(leading, *additive round
         constants)`, the operand-fed permute, and attrs whose four matrices
         (`mds` / `transition_matrix` / `partial_dot` / `partial_col`) name the
-        linear layers. Dedicated path only; otherwise an inert stub (non-dedicated,
-        so consumers never route a whole-region composite through it)."""
-        if not self.has_dedicated_fusion:
-            return (leading,), (lambda state, *ops: self.permute(state)), {}
+        linear layers. Dedicated path only; otherwise the shared inert stub."""
+        if not self.fusion_path.is_one_kernel:
+            return inert_region_spec(self, leading)
         attrs = _marker_attrs(self)
         return (
             _abi_operands(self, leading),
@@ -311,7 +325,7 @@ def _marker_attrs(perm: "SparsePoseidon") -> dict[str, object]:
     permutation, so no `permutation` discriminator here (that rides only in
     `fused_region_spec`, where a region could wrap any permutation). The body
     ignores these (metadata only); the generic marker stays attrs-free."""
-    if not perm.has_dedicated_fusion:
+    if not perm.fusion_path.is_one_kernel:
         return {}
     p = perm._p
     return {
@@ -334,7 +348,7 @@ def _marker_attrs(perm: "SparsePoseidon") -> dict[str, object]:
 @partial(frx.jit, static_argnames=("perm",), inline=True)
 def _permute_body(perm: SparsePoseidon, state: Array) -> Array:
     # `perm` is static, so this branch resolves at trace time (no HLO select).
-    if not perm.has_dedicated_fusion:
+    if not perm.fusion_path.is_one_kernel:
 
         def decomposition(s: Array) -> Array:
             return _permute_from_params(perm, s)

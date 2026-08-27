@@ -24,7 +24,7 @@ def _params() -> Poseidon2Params:
         internal_rounds=ir,
         external_constants_initial=fnp.zeros((er, w), dtype=F),
         external_constants_terminal=fnp.zeros((er, w), dtype=F),
-        internal_constants=fnp.zeros((ir, w), dtype=F),
+        internal_constants=fnp.zeros((ir,), dtype=F),
         internal_diag=fnp.ones((w,), dtype=F),
     )
 

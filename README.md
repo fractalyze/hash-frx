@@ -19,6 +19,11 @@ that adds native field and elliptic-curve types.
   equal-length byte messages to digests (SHA-256, BLAKE3, SHA-3). A
   consumer reads `width`/`dtype` or `digest_size` and calls `permute`/`digest` —
   it never names the hash it runs on.
+- **Primitive / extension / adapter.** A *primitive* is one of those two seams.
+  An *extension* is a schedule that turns a primitive into a hash — Merkle–Damgård,
+  a sponge, a tree — written once per construction rather than once per family. An
+  *adapter* (HMAC, HKDF, MGF1, PBKDF2) reads `digest` and nothing below it. So a
+  new family costs a round function and its constants, not a vertical.
 - **Fusion by construction.** A permutation call, a digest call, and each
   sponge `absorb`/`squeeze` lower to one fused kernel *by construction* — a
   `lax.composite` marker an XLA emitter recognizes — never by a per-primitive

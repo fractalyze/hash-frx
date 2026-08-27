@@ -107,12 +107,13 @@ class DuplexSpongeAbsorbSqueezeTest(absltest.TestCase):
 
 
 class DuplexSpongeContractTest(absltest.TestCase):
-    def test_has_dedicated_fusion_delegates_to_permutation(self) -> None:
-        # The construction names no hash; it forwards the permutation's flag so a
-        # region consumer can gate whole-region wrapping on it (mirrors Sponge).
+    def test_fusion_path_delegates_to_permutation(self) -> None:
+        # The construction names no hash; it forwards the permutation's path so
+        # a region consumer can gate whole-region wrapping on it (mirrors
+        # Sponge).
         perm = koalabear16_perm()
         sp = DuplexSponge(perm, rate=_RATE)
-        self.assertEqual(sp.has_dedicated_fusion, perm.has_dedicated_fusion)
+        self.assertIs(sp.fusion_path, perm.fusion_path)
 
     def test_rate_not_less_than_width_raises(self) -> None:
         with self.assertRaises(ValueError):
@@ -172,6 +173,38 @@ class DuplexSpongeContractTest(absltest.TestCase):
         batched = frx.vmap(run)(fnp.stack([a, b]))
         self.assertTrue(bool(fnp.array_equal(batched[0], run(a))))
         self.assertTrue(bool(fnp.array_equal(batched[1], run(b))))
+
+
+class SqueezeNeverRepeatsLanesTest(absltest.TestCase):
+    """Squeezed lanes are never re-emitted (#214).
+
+    ark-sponge 0.3 skipped the spill permute when the remaining request
+    equaled the rate, so squeeze(2) then squeeze(8) at rate 8 re-read the two
+    already-squeezed lanes from the same state — duplicated Fiat-Shamir
+    challenges. The fixed rule (ark-crypto-primitives 0.5) permutes between
+    blocks unconditionally, which makes a split squeeze equal one squeeze of
+    the total.
+    """
+
+    def test_split_squeeze_equals_one_squeeze_of_the_total(self) -> None:
+        perm = koalabear16_perm()
+        base = DuplexSponge(perm, rate=_RATE).absorb(fnp.arange(5, dtype=F))
+        sp, a = base.squeeze(2)
+        sp, b = sp.squeeze(_RATE)  # remaining == rate at the spill: the 0.3 trap
+        one, c = base.squeeze(2 + _RATE)
+        got = fnp.concatenate([a, b])
+        self.assertTrue(bool(fnp.array_equal(got, c)))
+        # No lane of the second read repeats the first two.
+        self.assertFalse(bool(fnp.array_equal(b[-2:], a)))
+
+    def test_long_absorb_does_not_recurse_per_block(self) -> None:
+        # rate 1 makes every element its own block; ~1200 blocks overflowed the
+        # recursion the absorb used to run per block.
+        perm = koalabear16_perm()
+        sp = DuplexSponge(perm, rate=1)
+        sp = sp.absorb(fnp.zeros(1200, dtype=F))
+        _, out = sp.squeeze(1)
+        self.assertEqual(out.shape, (1,))
 
 
 if __name__ == "__main__":

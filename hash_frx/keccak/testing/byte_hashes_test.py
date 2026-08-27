@@ -33,15 +33,13 @@ import numpy as np
 from absl.testing import absltest, parameterized
 
 from hash_frx.byte_hash import ByteHash
+from hash_frx.fusion import FusionPath
+from hash_frx.keccak import permutation as permutation_mod
 from hash_frx.keccak.byte_hashes import (
     SHA3_256_RATE,
     SHA3_512_RATE,
     SHAKE128_RATE,
     SHAKE256_RATE,
-    HostSha3_256,
-    HostSha3_512,
-    HostShake128,
-    HostShake256,
     Keccak256,
     Sha3_256,
     Sha3_512,
@@ -67,13 +65,11 @@ _SHA3_CASES = (
     (
         "sha3_256",
         lambda _out: Sha3_256(),
-        lambda _out: HostSha3_256(),
         lambda msg, _out: hashlib.sha3_256(msg).digest(),
     ),
     (
         "sha3_512",
         lambda _out: Sha3_512(),
-        lambda _out: HostSha3_512(),
         lambda msg, _out: hashlib.sha3_512(msg).digest(),
     ),
 )
@@ -82,13 +78,11 @@ _XOF_CASES = (
     (
         "shake128",
         Shake128,
-        HostShake128,
         lambda msg, out: hashlib.shake_128(msg).digest(out),
     ),
     (
         "shake256",
         Shake256,
-        HostShake256,
         lambda msg, out: hashlib.shake_256(msg).digest(out),
     ),
 )
@@ -96,7 +90,7 @@ _XOF_CASES = (
 # one table: a slice silently picks the wrong rows the moment one is inserted.
 _CASES = _SHA3_CASES + _XOF_CASES
 
-_Case = tuple[str, Callable[[int], ByteHash], Callable[[int], ByteHash], Callable]
+_Case = tuple[str, Callable[[int], ByteHash], Callable]
 
 
 def _message(length: int) -> np.ndarray:
@@ -108,7 +102,7 @@ class Fips202Test(parameterized.TestCase):
     def test_matches_hashlib_across_absorb_boundaries(
         self, case: _Case, length: int
     ) -> None:
-        name, device, _host, reference = case
+        name, device, reference = case
         msg = _message(length)
         with self.subTest(hash=name):
             got = bytes(np.asarray(device(64).digest(msg))[0])
@@ -116,24 +110,11 @@ class Fips202Test(parameterized.TestCase):
 
     @parameterized.product(case=_XOF_CASES, out=_SHAKE_OUTPUTS)
     def test_output_length_matches_hashlib(self, case: _Case, out: int) -> None:
-        name, device, _host, reference = case
+        name, device, reference = case
         msg = _message(200)
         with self.subTest(hash=name):
             got = bytes(np.asarray(device(out).digest(msg))[0])
             self.assertEqual(got, reference(bytes(msg[0]), out))
-
-    @parameterized.parameters(*_CASES)
-    def test_host_sibling_agrees_with_the_device_one(
-        self,
-        name: str,
-        device: Callable[[int], ByteHash],
-        host: Callable[[int], ByteHash],
-        _reference: Callable,
-    ) -> None:
-        msg = _message(300)
-        np.testing.assert_array_equal(
-            np.asarray(device(200).digest(msg)), np.asarray(host(200).digest(msg))
-        )
 
     def test_batched_equals_per_row(self) -> None:
         rng = np.random.default_rng(0)
@@ -141,6 +122,33 @@ class Fips202Test(parameterized.TestCase):
         got = np.asarray(Sha3_256().digest(batch))
         for i in range(batch.shape[0]):
             self.assertEqual(bytes(got[i]), hashlib.sha3_256(bytes(batch[i])).digest())
+
+    @parameterized.product(case=_CASES, outer=(1, 3))
+    def test_vmapped_equals_hashlib_per_row(self, case: _Case, outer: int) -> None:
+        # `digest` documents `[B, L]`, and a consumer that already batches
+        # reaches it under its own `frx.vmap` rather than by widening `B` —
+        # sig-frx's ML-DSA verification is `frx.vmap(_verify_one)` over the whole
+        # path. Inside the vmap the logical shape is still `[B, L]`, so the
+        # `ndim != 2` guard cannot see the outer axis and the marked region is
+        # emitted one rank deeper than its ABI once admitted.
+        #
+        # `outer=1` is not redundant with 3: a leading axis of one is the case a
+        # fix that squeezes rather than collapses would pass.
+        name, device, reference = case
+        rng = np.random.default_rng(0)
+        batch = rng.integers(0, 256, size=(outer, 5, 200), dtype=np.uint8)
+        with self.subTest(hash=name):
+            # 200 crosses every rate in the family, so the XOFs squeeze twice
+            # here; the fixed-output rows ignore it and keep their own size.
+            hash_ = device(200)
+            got = np.asarray(frx.vmap(hash_.digest)(batch))
+            self.assertEqual(got.shape, (outer, 5, hash_.digest_size))
+            for v in range(outer):
+                for i in range(batch.shape[1]):
+                    self.assertEqual(
+                        bytes(got[v, i]),
+                        reference(bytes(batch[v, i]), hash_.digest_size),
+                    )
 
     def test_the_two_shakes_differ_at_the_same_output_length(self) -> None:
         # Same suffix and output, different rate — so a rate mix-up cannot hide.
@@ -179,7 +187,6 @@ class TracedDigestTest(parameterized.TestCase):
         self,
         name: str,
         device: Callable[[int], ByteHash],
-        _host: Callable[[int], ByteHash],
         reference: Callable,
     ) -> None:
         msg = _message(64)
@@ -198,17 +205,36 @@ class SeamConformanceTest(absltest.TestCase):
             Shake128(32),
             Shake256(32),
             Keccak256(),
-            HostSha3_256(),
-            HostSha3_512(),
-            HostShake128(32),
-            HostShake256(32),
         ):
             with self.subTest(hash=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
-                # Pinned rather than merely type-checked: `False` on the device
-                # implementations too is the substantive claim this module's
-                # docstring makes, and only an assertion keeps it honest.
-                self.assertFalse(h.has_dedicated_fusion)
+
+    def test_the_rows_report_a_dedicated_fusion(self) -> None:
+        # Pinned rather than left to the docstring: a row lowers the whole
+        # padded absorb and squeeze to one `hash_frx.digest.keccak_sponge`
+        # kernel wherever that emitter can be reached.
+        #
+        # The device side is compared against the shipped condition rather than
+        # against True so the case follows the pin and the backend rather than
+        # restating them — it was written when the answer was False on the CPU
+        # leg. What that costs is the case's old ability to
+        # catch a pin that dropped below the `frx>=` floor — right bytes, no
+        # kernel, nothing else in the suite noticing. That half now lives in
+        # `permutation_test.EmitterGateTest`, which asserts the pin as its
+        # premise and then holds the backend to it.
+        expected = permutation_mod._routes_to_dedicated_emitter()
+        for device in (
+            Sha3_256(),
+            Sha3_512(),
+            Shake128(32),
+            Shake256(32),
+            Keccak256(),
+        ):
+            with self.subTest(device=type(device).__name__):
+                self.assertIs(
+                    device.fusion_path,
+                    FusionPath.DEDICATED if expected else FusionPath.GENERIC,
+                )
 
     def test_digest_size_matches_what_digest_returns(self) -> None:
         msg = _message(64)
@@ -217,8 +243,6 @@ class SeamConformanceTest(absltest.TestCase):
             Sha3_512(),
             Shake128(48),
             Shake256(48),
-            HostSha3_512(),
-            HostShake256(48),
         ):
             with self.subTest(hash=type(h).__name__):
                 out = np.asarray(h.digest(msg))
@@ -235,7 +259,6 @@ class SeamConformanceTest(absltest.TestCase):
         # Same rate and output, different function: distinct types must not
         # compare equal, or a consumer's pytree aux would confuse them.
         self.assertNotEqual(Shake256(32), Shake128(32))
-        self.assertNotEqual(Shake256(32), HostShake256(32))
         # The two SHA-3 rows share a suffix and differ only in rate and length,
         # so they are the pair most likely to be conflated by a `__eq__` written
         # over `digest_size` without the type.
@@ -276,6 +299,30 @@ class KeccakSpongeTest(parameterized.TestCase):
         self.assertEqual(SHA3_512_RATE, (1600 - 1024) // 8)
         self.assertEqual(SHAKE128_RATE, (1600 - 256) // 8)
         self.assertEqual(SHAKE256_RATE, (1600 - 512) // 8)
+
+
+class EmptyBatchTest(absltest.TestCase):
+    """A zero-row batch is a valid batch (#211): every row returns
+    uint8 [0, digest_size] instead of failing in a block-count reshape."""
+
+    def test_zero_rows_digest_to_zero_rows(self) -> None:
+        rows: list[tuple[ByteHash, int]] = [
+            (Sha3_256(), 32),
+            (Shake128(32), 32),
+            (Keccak256(), 32),
+        ]
+        for hasher, size in rows:
+            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+            self.assertEqual(got.shape, (0, size))
+            self.assertEqual(got.dtype, np.uint8)
+
+
+class XofSizeTest(absltest.TestCase):
+    """An XOF refuses a zero-length output (#215)."""
+
+    def test_zero_output_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "output_size"):
+            Shake128(0)
 
 
 if __name__ == "__main__":

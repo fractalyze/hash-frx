@@ -40,30 +40,30 @@ the CUDA libraries are `dlopen`ed lazily rather than linked. One line settles it
 ldconfig -p | grep libcudart
 ```
 
-`libcudart.so.13` and no `.so.12` means this box cannot run the GPU leg no matter
-what the card is — an idle RTX 5090 behind CUDA 13 is still a CPU-only box for
-these wheels. Run the GPU leg on a CUDA 12 machine, or install a CUDA 12 runtime
-alongside.
-
-## Run the GPU leg serialized on a card you are sharing
+`libcudart.so.13` and no `.so.12` means the *system* CUDA cannot serve these
+wheels. It does not mean the box is CPU-only: the plugin resolves CUDA by
+soname, so the `nvidia-*-cu12` wheels satisfy it just as well, and pointing
+`LD_LIBRARY_PATH` at their `lib` directories runs the GPU leg on that box —
+`bazel test` included.
 
 ```sh
-bazel test --test_env=FRX_PLATFORMS=cuda --local_test_jobs=1 -- //...
+NV=<venv>/lib/python3.11/site-packages/nvidia
+bazel test --test_env=FRX_PLATFORMS=cuda \
+           --test_env=LD_LIBRARY_PATH="$(ls -d $NV/*/lib | paste -sd:)" \
+           --test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false \
+           --local_test_jobs=1 //...
 ```
 
-Each test process opens its own CUDA context and pre-allocates against the
-*free* memory it sees, so several running at once starve each other. On a card
-another process is already using, that reads as `CUDA_ERROR_OUT_OF_MEMORY`
-across the tree — 20 of 30 targets in one run, including targets nothing in the
-change under test touches. The same tree passed 30 of 30 serialized.
+`frx-cuda12-plugin[with-cuda]` is what puts those wheels in a venv;
+[`requirements.in`](../../requirements.in) pins the plugin without that extra,
+so the lock carries none and the path has to be supplied per run.
 
-The tell that this is the environment rather than the code: the failed target's
-`test.log` ends in `Ran N tests ... OK` while Bazel still reports FAILED. The
-suite finished green and the process died afterwards, so the two verdicts
-disagree. When they do, serialize before reading the test body.
-
-CI's GPU leg runs on a dedicated box and needs none of this — it runs `//...`
-unserialized.
+**A green GPU leg is evidence only against a control.** `cuda` is strict here —
+it does not fall back — so the same target under
+`--test_env=LD_LIBRARY_PATH=/nonexistent` must *fail*, and the line proving it
+is the `Backend 'cuda' is not in the list of known backends: ['cpu', 'tpu']`
+above: `cpu` was available and the run died anyway. Without that control a
+CPU-fallback run reads as a passing GPU leg.
 
 ## Running against a local Fractalyze XLA build
 
@@ -112,6 +112,81 @@ the answer is rarely the exact commit you are looking for. Two wheels published
 two did not contain it — a bump to it would have looked like progress and
 changed nothing.
 
+## `bazel test` is one leg, not both
+
+`.bazelrc` pins `test --test_env=FRX_PLATFORMS=cpu`, so a plain `bazel test
+//...` runs the **CPU leg only**. The GPU leg is a second command:
+
+```sh
+bazel test //...                                            # CPU leg (the default)
+bazel test --test_env=FRX_PLATFORMS=cuda \
+           --local_test_jobs=1 //...                        # GPU leg
+```
+
+Where the box has no *system* CUDA 12, the GPU line also needs
+`LD_LIBRARY_PATH` pointed at the `nvidia-*-cu12` wheels
+([above](#the-gpu-path-needs-cuda-12-specifically)) — without it the leg fails
+whatever the card is.
+
+The two are different *programs*, not the same tests run twice: a family whose
+emitter is GPU-only routes `DEDICATED` on one leg and `GENERIC` on the other, so
+the marked region a step is meant to preserve exists on one leg and not the
+other ([`../README.md#the-fusion-contract`](../README.md#the-fusion-contract)).
+A change validated on one leg has been validated for half the wire surface.
+
+`bazel run` behaves differently from `bazel test` here: it inherits the client
+environment and lands on the real default backend, so forcing the other leg for
+a `run` target is a plain `FRX_PLATFORMS=cpu bazel run ...` prefix.
+
+**`--local_test_jobs=1` on the GPU leg is required, not tuning.** Concurrent
+test jobs each reserve a large fraction of free VRAM, and the ones that lose
+fail during device init. The message names the wrong thing:
+
+```text
+INTERNAL: RET_CHECK failure (gpu_compiler.cc:3064) dnn_support != nullptr
+RuntimeError: Bad StatusOr access: RESOURCE_EXHAUSTED: CUDA_ERROR_OUT_OF_MEMORY
+```
+
+The first line reads as a missing or mismatched cuDNN and sends you to
+`ldconfig`; the cause is the second. Measured on a 32 GB card: 42 of 60 targets
+failed in parallel, all 60 passed serially. Tells that it is contention rather
+than a real break — targets fail that the change never touched, and `nvidia-smi`
+shows the card empty afterwards because the hogs have exited. The
+`Could not get kernel mode driver version` warning printed on every GPU run is
+unrelated and benign.
+
+## The lowering gate, for a change that must not move the wire
+
+A refactor that is supposed to move code and nothing else needs a gate the
+byte-exactness suites cannot provide: a renamed marker, a moved operand, a
+dropped attribute or a lost composite all still compute the right digest,
+because an unrecognized or absent marker inlines its decomposition. The digest
+tests pass and the kernel is gone.
+[`hash_frx/testing/lowering_golden.py`](../../hash_frx/testing/lowering_golden.py)
+is the helper; the captures it takes are branch state, so the harness that
+drives it is written per step and deleted before the PR.
+
+```sh
+# 1. A py_binary under hash_frx/testing/ that walks every row the step can move
+#    x several message lengths x batch {1, 4}, json.dump()ing lowering_text()
+#    per case. Include every family a step TOUCHES, not just the one it is
+#    named for — a gate that stops at the family it was written for is not one.
+# 2. Capture on the base revision, before any change, on both legs:
+bazel run //hash_frx/testing:<capture> -- /tmp/golden-gpu.json
+FRX_PLATFORMS=cpu bazel run //hash_frx/testing:<capture> -- /tmp/golden-cpu.json
+# 3. Re-run with --compare after every commit, against both files.
+# 4. Delete the harness and its BUILD target before the PR.
+```
+
+**A failing gate is answered by reverting, not by re-capturing.** Emission order
+is part of what it pins, and re-baselining mid-refactor stops it protecting the
+steps that follow. One concrete constraint this exposes: a shared helper fixes
+emission order for all its callers, because Python evaluates a call's arguments
+before the body — so a helper taking a `block` argument always emits that
+block's ops before any slice it does internally. Two call sites that build the
+same ops in opposite order cannot both go through it, and the one to keep inline
+is whichever the gate says moved.
+
 ## The compile cache is per toolchain
 
 A persistent `FRX_COMPILATION_CACHE_DIR` skips recompiles across venv runs, which
@@ -127,7 +202,8 @@ in the shell reaches the venv loop and never the Bazel one.
 ## The pytest loop
 
 `bazel test //...` is the source of truth for "all tests pass"
-([`conventions.md`](conventions.md)). For an interactive loop over one file,
+([`conventions.md`](conventions.md)) — on the leg it runs; see above for the
+second one. For an interactive loop over one file,
 pytest is configured in [`pyproject.toml`](../../pyproject.toml) but is
 deliberately not a runtime pin, so install it into the venv:
 
@@ -135,3 +211,18 @@ deliberately not a runtime pin, so install it into the venv:
 pip install pytest
 pytest hash_frx/testing/sponge_test.py
 ```
+
+**A green target does not mean the cases you just wrote ran.** Test classes
+appended below a module's trailing `if __name__ == "__main__": absltest.main()`
+are never defined — `main()` exits first — so they are silently not collected
+and the target still passes. Appending to an existing test file is the usual
+way in; the runtime is the tell (a new suite that costs nothing). After editing
+one:
+
+```sh
+grep -n '^class \|^if __name__' hash_frx/.../foo_test.py | tail -20
+bazel test //hash_frx/...:foo_test --test_output=all 2>&1 | grep -E "^Ran [0-9]+ test"
+```
+
+Nothing should sit below the `__main__` block, and `Ran N tests` should match
+the `def test_` count.
