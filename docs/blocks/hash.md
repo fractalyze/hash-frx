@@ -263,6 +263,17 @@ key the hash twice under two different schedules. So
 parallel is `DuplexSponge` owning its `+`-merge rather than narrowing it into
 `Permutation`.
 
+The same rule puts **KMAC outside `adapter/`**, and it is worth stating because
+the name invites the opposite guess. SP 800-185's Keccak MAC keys a hash, but it
+keys it with `bytepad(encode_string(K), rate)` — and `rate` is the sponge's, well
+below `digest`. A construction that reads the rate is not over a finished hash,
+so KMAC lives with the family that has one
+([`keccak/kmac.py`](../../hash_frx/keccak/kmac.py)) rather than over the seam.
+That is also why it cannot be reached through `Hmac`: HMAC is the two-pass
+ipad/opad wrapper over a block-oriented hash, KMAC is a sponge absorbing a
+length-encoded key inside its own message, and no hash, block size or pad byte
+turns one into the other.
+
 ## What may live here at all
 
 The seams keep a *consumer* from naming a hash. The reverse obligation — keeping

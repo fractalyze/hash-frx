@@ -60,7 +60,12 @@ from frx.typing import ArrayLike
 from hash_frx.byte_hash import device_message
 from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE256_RATE, _KeccakHash
 from hash_frx.keccak.cshake import CSHAKE_SUFFIX, _prefix_block
-from hash_frx.keccak.encodings import bytepad, encode_string, left_encode, right_encode
+from hash_frx.keccak.encodings import (
+    bytepad,
+    bytepad_encoded_split,
+    encode_string,
+    right_encode,
+)
 from hash_frx.keccak.sponge import KeccakSponge
 
 if TYPE_CHECKING:
@@ -71,28 +76,24 @@ if TYPE_CHECKING:
 KMAC_NAME = b"KMAC"
 
 
-def _encoded_output_length(output_size: int, xof: bool) -> bytes:
-    """Section 4.3's trailing `right_encode(L)`, in BITS — or `right_encode(0)`
-    for the XOF form, which is the whole difference between the two functions
-    (section 4.3.1)."""
-    return right_encode(0 if xof else 8 * output_size)
+def _framing(
+    rate: int, output_size: int, customization: bytes, xof: bool
+) -> tuple[bytes, bytes]:
+    """§4.3's two constants: the cSHAKE prefix that opens the absorb, and the
+    `right_encode(L)` that closes it.
 
+    `N` is the constant "KMAC", so the prefix is never cSHAKE's empty-`N`-and-`S`
+    fallback — the domain byte is `0x04` whatever the customization is. The tail
+    is `right_encode(0)` for the XOF form, which is the whole of §4.3.1 and the
+    whole difference between the two functions.
 
-def _host_key_block(key: bytes, rate: int) -> bytes:
-    """`bytepad(encode_string(K), rate)` for a key known on the host."""
-    return bytepad(encode_string(key), rate)
-
-
-def _split_key_block(key_size: int, rate: int) -> tuple[bytes, int]:
-    """The same block for a key that is an *operand*: the host bytes that precede
-    it, and how many zero bytes follow.
-
-    Only the key's length reaches the encoding — `left_encode(8 * key_size)` —
-    and a length is a shape, static under `jit` even when the key's value is a
-    tracer. So the arithmetic stays on the host and the key stays an operand.
+    `L` is in BITS. A byte count is another legal encoding of a plausible number,
+    so the wrong unit is a self-consistent different hash (`encodings.py`).
     """
-    head = left_encode(rate) + left_encode(8 * key_size)
-    return head, -(len(head) + key_size) % rate
+    return (
+        _prefix_block(KMAC_NAME, customization, rate),
+        right_encode(0 if xof else 8 * output_size),
+    )
 
 
 def _const(data: bytes, rows: int) -> Array:
@@ -102,55 +103,76 @@ def _const(data: bytes, rows: int) -> Array:
     )
 
 
-def _kmac(
+def _bound_message(head: bytes, message: Array, tail: bytes) -> Array:
+    """§4.3's `newX` when the key is known on the host: the whole head — cSHAKE
+    prefix and key block together — collapses into one constant, so this is a
+    single three-way concatenate that XLA constant-folds through the first rate
+    block's permutation."""
+    rows = message.shape[0]
+    return fnp.concatenate([_const(head, rows), message, _const(tail, rows)], axis=-1)
+
+
+def _operand_message(
+    prefix: bytes, key: ArrayLike, message: Array, tail: bytes, rate: int
+) -> Array:
+    """§4.3's `newX` when the key is an operand, so one compiled program serves
+    every key value.
+
+    `bytepad(encode_string(K), rate)` is split around the key by
+    `encodings.bytepad_encoded_split`, which owns that arithmetic and is pinned
+    against `bytepad` itself — only the key's *length* reaches either encoding,
+    and a length is a shape.
+    """
+    rows = message.shape[0]
+    operand = fnp.asarray(key, dtype=fnp.uint8)
+    if operand.ndim == 1:
+        operand = operand[None, :]
+    if operand.ndim != 2:
+        raise ValueError(f"key must be [K] or [B, K], got shape {operand.shape}")
+    operand = fnp.broadcast_to(operand, (rows, operand.shape[1]))
+    framing, fill = bytepad_encoded_split(operand.shape[1], rate)
+
+    parts = [_const(prefix + framing, rows), operand]
+    # A key whose framed block already lands on a rate boundary asks for no
+    # fill; emitting a zero-width operand would put a dead broadcast in the
+    # lowered module for XLA to drop.
+    if fill:
+        parts.append(fnp.zeros((rows, fill), dtype=fnp.uint8))
+    parts += [message, _const(tail, rows)]
+    return fnp.concatenate(parts, axis=-1)
+
+
+def _kmac_with_operand_key(
     rate: int,
-    key: ArrayLike | bytes,
+    key: ArrayLike,
     msg: ArrayLike,
     output_size: int,
     customization: bytes,
     xof: bool,
 ) -> Array:
-    """Section 4.3 over the Keccak sponge, for both key shapes.
+    """The body the four free functions share.
 
-    The cSHAKE prefix, the key block's framing and the trailing length encoding
-    are all host constants, so a `bytes` key collapses the whole head into one
-    constant and the hash is a single three-way concatenate. An operand key
-    splits that head in two and lets the key sit between them.
+    Builds its own `KeccakSponge` because there is no row to hang one on — the
+    reason `sponge.py` gives for building `KeccakF1600` per call rather than at
+    import applies here too, and it is ~2 us of host work against a ~500 us
+    eager digest.
     """
-    message = device_message(msg)
-    rows = message.shape[0]
-    # `N` is never empty, so this is always cSHAKE's prefix and never the SHAKE
-    # fallback — the domain byte below is `0x04` unconditionally.
-    prefix = _prefix_block(KMAC_NAME, customization, rate)
-    tail = _encoded_output_length(output_size, xof)
-
     if isinstance(key, (bytes, bytearray, memoryview)):
-        head = prefix + _host_key_block(bytes(key), rate)
-        parts = [_const(head, rows), message, _const(tail, rows)]
-    else:
-        operand = fnp.asarray(key, dtype=fnp.uint8)
-        if operand.ndim == 1:
-            operand = operand[None, :]
-        if operand.ndim != 2:
-            raise ValueError(f"key must be [K] or [B, K], got shape {operand.shape}")
-        operand = fnp.broadcast_to(operand, (rows, operand.shape[1]))
-        head, fill = _split_key_block(operand.shape[1], rate)
-        parts = [
-            _const(prefix + head, rows),
-            operand,
-            fnp.zeros((rows, fill), dtype=fnp.uint8),
-            message,
-            _const(tail, rows),
-        ]
-
-    padded = fnp.concatenate(parts, axis=-1)
+        raise ValueError(
+            "key must be an array operand, not bytes: a host key belongs on a "
+            "row (Kmac128(key, ...)), where it is part of which hash this is. "
+            "Passing bytes here would bake it into the compiled program and "
+            "re-compile per key, which is what this surface exists to avoid"
+        )
+    message = device_message(msg)
+    prefix, tail = _framing(rate, output_size, customization, xof)
     return KeccakSponge(rate=rate, suffix=CSHAKE_SUFFIX, output_size=output_size).hash(
-        padded
+        _operand_message(prefix, key, message, tail, rate)
     )
 
 
 def kmac128(
-    key: ArrayLike | bytes,
+    key: ArrayLike,
     msg: ArrayLike,
     output_size: int,
     customization: bytes = b"",
@@ -160,53 +182,70 @@ def kmac128(
     `key` may be `[K]` (shared by the batch) or `[B, K]` (per message), and may
     be a tracer — one compiled program serves every key value of a given length.
     """
-    return _kmac(SHAKE128_RATE, key, msg, output_size, customization, xof=False)
+    return _kmac_with_operand_key(
+        SHAKE128_RATE, key, msg, output_size, customization, xof=False
+    )
 
 
 def kmac256(
-    key: ArrayLike | bytes,
+    key: ArrayLike,
     msg: ArrayLike,
     output_size: int,
     customization: bytes = b"",
 ) -> Array:
     """KMAC256 with the key as an operand — `kmac128`'s 136-byte-rate sibling."""
-    return _kmac(SHAKE256_RATE, key, msg, output_size, customization, xof=False)
+    return _kmac_with_operand_key(
+        SHAKE256_RATE, key, msg, output_size, customization, xof=False
+    )
 
 
 def kmac_xof128(
-    key: ArrayLike | bytes,
+    key: ArrayLike,
     msg: ArrayLike,
     output_size: int,
     customization: bytes = b"",
 ) -> Array:
     """KMACXOF128 — `kmac128` with the encoded output length set to zero, which
     makes it a different function rather than the same one read further."""
-    return _kmac(SHAKE128_RATE, key, msg, output_size, customization, xof=True)
+    return _kmac_with_operand_key(
+        SHAKE128_RATE, key, msg, output_size, customization, xof=True
+    )
 
 
 def kmac_xof256(
-    key: ArrayLike | bytes,
+    key: ArrayLike,
     msg: ArrayLike,
     output_size: int,
     customization: bytes = b"",
 ) -> Array:
     """KMACXOF256 — `kmac256`'s XOF form (section 4.3.1)."""
-    return _kmac(SHAKE256_RATE, key, msg, output_size, customization, xof=True)
+    return _kmac_with_operand_key(
+        SHAKE256_RATE, key, msg, output_size, customization, xof=True
+    )
 
 
 class _Kmac(_KeccakHash):
     """The shared body of the four KMAC rows.
 
     A subclass supplies `_rate` — the rate of the cSHAKE it is built on, and the
-    `w` both `bytepad`s fill — and `_xof`, which selects section 4.3.1's
-    `right_encode(0)` over section 4.3's `right_encode(L)`.
+    `w` both `bytepad`s fill — and `_xof`, which selects §4.3.1's
+    `right_encode(0)` over §4.3's `right_encode(L)`. Both are class attributes,
+    and so is `_suffix`: KMAC's domain byte is cSHAKE's `0x04` unconditionally,
+    because `N` is the constant "KMAC" and §3.3's both-empty fallback needs an
+    empty name. That is why this row does NOT need `_CShake`'s per-instance
+    suffix — there the byte is a function of the arguments, here it is a
+    function of the type.
 
-    `_suffix` is cSHAKE's `0x04` unconditionally: `N` is the constant `"KMAC"`,
-    so section 3.3's both-empty fallback cannot be reached from here.
+    With a key bound to the instance, *every* byte outside the message is fixed
+    at construction — the cSHAKE prefix, the key block and the trailing length
+    encoding. So the head and tail are built once here rather than per `digest`,
+    which is the arrangement `_CShake` states for its own prefix, and the hash
+    is one three-way concatenate over `_KeccakHash`'s own sponge.
     """
 
     _rate: int
     _xof: bool
+    _suffix = CSHAKE_SUFFIX
 
     def __init__(
         self,
@@ -217,23 +256,24 @@ class _Kmac(_KeccakHash):
     ) -> None:
         self._key = bytes(key)
         self._customization = bytes(customization)
-        self._suffix = CSHAKE_SUFFIX
         super().__init__(output_size)
+        prefix, self._tail = _framing(
+            self._rate, output_size, self._customization, self._xof
+        )
+        # `bytepad(encode_string(K), rate)` straight from `encodings`, not
+        # re-derived: the operand path reaches the same bytes through
+        # `bytepad_encoded_split`, and `encodings_test` pins the two together.
+        self._head = prefix + bytepad(encode_string(self._key), self._rate)
 
     def digest(self, msg: ArrayLike) -> Array:
-        return _kmac(
-            self._rate,
-            self._key,
-            msg,
-            self.digest_size,
-            self._customization,
-            self._xof,
+        return self._sponge.hash(
+            _bound_message(self._head, device_message(msg), self._tail)
         )
 
     def _parameters(self) -> tuple[object, ...]:
         # The key and the customization are both `which hash this is`, so both
-        # are the jit cache key. Omitting either would serve one MAC's compiled
-        # program for another's — with a key, silently and with the right shape.
+        # are the jit cache key. Two rows that compare equal share a compiled
+        # program — for a MAC, that is a key crossing a cache hit.
         return (*super()._parameters(), self._key, self._customization)
 
 

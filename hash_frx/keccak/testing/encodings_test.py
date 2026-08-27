@@ -41,6 +41,7 @@ from hash_frx.keccak import encodings
 from hash_frx.keccak.encodings import (
     MAX_ENCODE_EXCLUSIVE,
     bytepad,
+    bytepad_encoded_split,
     encode_string,
     left_encode,
     right_encode,
@@ -202,6 +203,54 @@ class BoundTest(absltest.TestCase):
             left_encode(-1)
         with self.assertRaisesRegex(ValueError, "0 <= x"):
             right_encode(-1)
+
+
+class BytepadSplitTest(parameterized.TestCase):
+    """`bytepad_encoded_split` against `bytepad` itself.
+
+    The split exists so a payload that is a device operand can sit between two
+    host halves. Its whole contract is that reassembling those halves gives
+    exactly what `bytepad(encode_string(S), w)` would have — so that is what is
+    asserted, at every length either side of a block boundary. Without this, the
+    §2.3.3 fill rule would be spelled in two modules with nothing holding them
+    together.
+    """
+
+    @parameterized.named_parameters(
+        ("shake128_rate", 168), ("shake256_rate", 136), ("small", 8), ("one", 1)
+    )
+    def test_it_reassembles_to_bytepad(self, w: int) -> None:
+        for size in range(0, 2 * w + 2):
+            payload = bytes(i % 256 for i in range(size))
+            head, fill = bytepad_encoded_split(size, w)
+            self.assertEqual(
+                head + payload + bytes(fill), bytepad(encode_string(payload), w)
+            )
+
+    @parameterized.named_parameters(("shake128_rate", 168), ("shake256_rate", 136))
+    def test_the_reassembly_is_rate_aligned(self, w: int) -> None:
+        for size in (0, 1, 32, w, w + 1):
+            head, fill = bytepad_encoded_split(size, w)
+            self.assertEqual((len(head) + size + fill) % w, 0)
+
+    def test_an_exact_fit_asks_for_no_fill(self) -> None:
+        # The fill is `-len(z) % w`, so it is 0 exactly when the framed payload
+        # already lands on a boundary. The head's own width grows with the
+        # payload (`left_encode(8 * size)` gains a byte at 8192 bits), so the
+        # fitting size is searched for rather than computed -- which is also
+        # what makes assuming a fixed head width a bug worth pinning.
+        w = 168
+        exact = next(
+            size for size in range(w) if bytepad_encoded_split(size, w)[1] == 0
+        )
+        head, fill = bytepad_encoded_split(exact, w)
+        self.assertEqual(fill, 0)
+        self.assertEqual(len(head) + exact, w)
+        self.assertLen(bytepad(encode_string(bytes(exact)), w), w)
+
+    def test_a_negative_length_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            bytepad_encoded_split(-1, 168)
 
 
 class BytepadTest(parameterized.TestCase):

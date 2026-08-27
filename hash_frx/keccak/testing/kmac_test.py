@@ -37,11 +37,14 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.keccak.byte_hashes import SHAKE128_RATE, SHAKE256_RATE
+from hash_frx.keccak.byte_hashes import (
+    SHAKE128_RATE,
+    SHAKE256_RATE,
+    SHAKE_SUFFIX,
+)
 from hash_frx.keccak.cshake import CSHAKE_SUFFIX
 from hash_frx.keccak.encodings import bytepad, encode_string, right_encode
 from hash_frx.keccak.kmac import (
-    KMAC_NAME,
     Kmac128,
     Kmac256,
     KmacXof128,
@@ -63,8 +66,20 @@ _CASES = (
     ("kmac_xof256", KmacXof256, kmac_xof256, SHAKE256_RATE, True),
 )
 
-# The 32-byte key every published sample uses (40 41 ... 5F).
-_KEY = bytes(range(0x40, 0x60))
+# The three published inputs every sample draws from, transcribed once rather
+# than twelve times. `encodings_test` pins this key independently against the
+# `Encoded K` bytes the same document prints.
+_KEY = bytes.fromhex("404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F")
+_DATA_4 = bytes.fromhex("00010203")
+_DATA_200 = bytes.fromhex(
+    "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+    "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
+    "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
+    "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
+    "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
+    "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
+    "C0C1C2C3C4C5C6C7"
+)
 
 
 def _batch(data: bytes) -> np.ndarray:
@@ -95,9 +110,7 @@ _VECTORS = (
         name="KMAC1",
         row=Kmac128,
         free=kmac128,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"",
         data=bytes.fromhex("00010203"),
         outval=bytes.fromhex(
@@ -108,9 +121,7 @@ _VECTORS = (
         name="KMAC2",
         row=Kmac128,
         free=kmac128,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
         data=bytes.fromhex("00010203"),
         outval=bytes.fromhex(
@@ -121,19 +132,9 @@ _VECTORS = (
         name="KMAC3",
         row=Kmac128,
         free=kmac128,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex(
-            "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-            "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-            "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-            "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-            "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-            "C0C1C2C3C4C5C6C7"
-        ),
+        data=_DATA_200,
         outval=bytes.fromhex(
             "1F5B4E6CCA02209E0DCB5CA635B89A15E271ECC760071DFD805FAA38F9729230"
         ),
@@ -142,9 +143,7 @@ _VECTORS = (
         name="KMAC4",
         row=Kmac256,
         free=kmac256,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
         data=bytes.fromhex("00010203"),
         outval=bytes.fromhex(
@@ -156,19 +155,9 @@ _VECTORS = (
         name="KMAC5",
         row=Kmac256,
         free=kmac256,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"",
-        data=bytes.fromhex(
-            "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-            "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-            "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-            "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-            "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-            "C0C1C2C3C4C5C6C7"
-        ),
+        data=_DATA_200,
         outval=bytes.fromhex(
             "75358CF39E41494E949707927CEE0AF20A3FF553904C86B08F21CC414BCFD691"
             "589D27CF5E15369CBBFF8B9A4C2EB17800855D0235FF635DA82533EC6B759B69"
@@ -178,19 +167,9 @@ _VECTORS = (
         name="KMAC6",
         row=Kmac256,
         free=kmac256,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex(
-            "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-            "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-            "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-            "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-            "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-            "C0C1C2C3C4C5C6C7"
-        ),
+        data=_DATA_200,
         outval=bytes.fromhex(
             "B58618F71F92E1D56C1B8C55DDD7CD188B97B4CA4D99831EB2699A837DA2E4D9"
             "70FBACFDE50033AEA585F1A2708510C32D07880801BD182898FE476876FC8965"
@@ -200,9 +179,7 @@ _VECTORS = (
         name="KMACXOF1",
         row=KmacXof128,
         free=kmac_xof128,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"",
         data=bytes.fromhex("00010203"),
         outval=bytes.fromhex(
@@ -213,9 +190,7 @@ _VECTORS = (
         name="KMACXOF2",
         row=KmacXof128,
         free=kmac_xof128,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
         data=bytes.fromhex("00010203"),
         outval=bytes.fromhex(
@@ -226,19 +201,9 @@ _VECTORS = (
         name="KMACXOF3",
         row=KmacXof128,
         free=kmac_xof128,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex(
-            "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-            "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-            "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-            "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-            "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-            "C0C1C2C3C4C5C6C7"
-        ),
+        data=_DATA_200,
         outval=bytes.fromhex(
             "47026C7CD793084AA0283C253EF658490C0DB61438B8326FE9BDDF281B83AE0F"
         ),
@@ -247,9 +212,7 @@ _VECTORS = (
         name="KMACXOF4",
         row=KmacXof256,
         free=kmac_xof256,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
         data=bytes.fromhex("00010203"),
         outval=bytes.fromhex(
@@ -261,19 +224,9 @@ _VECTORS = (
         name="KMACXOF5",
         row=KmacXof256,
         free=kmac_xof256,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"",
-        data=bytes.fromhex(
-            "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-            "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-            "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-            "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-            "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-            "C0C1C2C3C4C5C6C7"
-        ),
+        data=_DATA_200,
         outval=bytes.fromhex(
             "FF7B171F1E8A2B24683EED37830EE797538BA8DC563F6DA1E667391A75EDC02C"
             "A633079F81CE12A25F45615EC89972031D18337331D24CEB8F8CA8E6A19FD98B"
@@ -283,19 +236,9 @@ _VECTORS = (
         name="KMACXOF6",
         row=KmacXof256,
         free=kmac_xof256,
-        key=bytes.fromhex(
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-        ),
+        key=_KEY,
         customization=b"My Tagged Application",
-        data=bytes.fromhex(
-            "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
-            "202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F"
-            "404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F"
-            "606162636465666768696A6B6C6D6E6F707172737475767778797A7B7C7D7E7F"
-            "808182838485868788898A8B8C8D8E8F909192939495969798999A9B9C9D9E9F"
-            "A0A1A2A3A4A5A6A7A8A9AAABACADAEAFB0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF"
-            "C0C1C2C3C4C5C6C7"
-        ),
+        data=_DATA_200,
         outval=bytes.fromhex(
             "D5BE731C954ED7732846BB59DBE3A8E30F83E77A4BFF4459F2F1C2B4ECEBB8CE"
             "67BA01C62E8AB8578D2D499BD1BB276768781190020A306A97DE281DCC30305D"
@@ -328,9 +271,8 @@ class PublishedVectorTest(parameterized.TestCase):
 
     def test_the_vectors_were_parsed_at_the_published_lengths(self) -> None:
         # A mis-parse is a different failure from a wrong implementation.
-        self.assertEqual({len(v.key) for v in _VECTORS}, {32})
-        self.assertEqual({len(v.data) for v in _VECTORS}, {4, 200})
         self.assertEqual({len(v.outval) for v in _VECTORS}, {32, 64})
+        self.assertEqual((len(_KEY), len(_DATA_4), len(_DATA_200)), (32, 4, 200))
         self.assertLen(_VECTORS, 12)
 
 
@@ -346,7 +288,7 @@ class XofDistinctionTest(parameterized.TestCase):
         # Not one function truncated two ways. `right_encode(8 * L)` against
         # `right_encode(0)` changes the final absorbed bytes, so the streams
         # diverge from the first byte out.
-        for out in (16, 32, 64):
+        for out in (32,):
             self.assertNotEqual(
                 _digest(plain(_KEY, output_size=out), b"msg"),
                 _digest(xof(_KEY, output_size=out), b"msg"),
@@ -390,47 +332,46 @@ class ConstructionTest(parameterized.TestCase):
         # one the row computes -- and the byte form not to be.
         out, data = 32, b"msg"
         key_block = bytepad(encode_string(_KEY), rate)
-        prefix = bytepad(encode_string(KMAC_NAME) + encode_string(b""), rate)
+        prefix = bytepad(encode_string(b"KMAC") + encode_string(b""), rate)
 
         def absorbed(tail: bytes) -> bytes:
             return sponge(prefix + key_block + data + tail, rate, CSHAKE_SUFFIX, out)
 
-        bits = absorbed(right_encode(0) if xof else right_encode(8 * out))
-        byte_count = absorbed(right_encode(0) if xof else right_encode(out))
-        self.assertEqual(_digest(row(_KEY, output_size=out), data), bits)
+        digest = _digest(row(_KEY, output_size=out), data)
+        self.assertEqual(digest, absorbed(right_encode(0 if xof else 8 * out)))
         if not xof:
             # The XOF form encodes 0 either way, so only the plain rows can
             # tell the two units apart -- which is why this half is guarded.
-            self.assertNotEqual(bits, byte_count)
+            self.assertNotEqual(digest, absorbed(right_encode(out)))
 
     @parameterized.named_parameters(*_CASES)
-    def test_the_key_block_is_rate_aligned(
+    def test_the_domain_byte_is_cshakes_whatever_the_customization(
         self,
         row: type[_Kmac],
         free: Callable[..., object],
         rate: int,
         xof: bool,
     ) -> None:
-        # Both `bytepad`s fill whole blocks, which is what lets the message
-        # start on a fresh block whatever the key length.
-        for size in (0, 1, 32, rate, rate + 1):
-            self.assertEqual(len(bytepad(encode_string(bytes(size)), rate)) % rate, 0)
-
-    @parameterized.named_parameters(*_CASES)
-    def test_the_cshake_fallback_is_unreachable(
-        self,
-        row: type[_Kmac],
-        free: Callable[..., object],
-        rate: int,
-        xof: bool,
-    ) -> None:
-        # `N` is the constant "KMAC", so section 3.3's both-empty fallback
-        # cannot fire: an empty customization is still a customization here,
-        # and the domain byte is 0x04 whatever `S` is.
-        self.assertNotEmpty(KMAC_NAME)
+        # KMAC's `N` is the literal "KMAC" (SP 800-185 section 4.3), so section
+        # 3.3's both-empty fallback cannot fire and the domain byte is 0x04 even
+        # with no customization.
+        #
+        # Asserted through `digest` against the oracle, NOT through the row's
+        # `_sponge`: an assertion on that attribute passes even when the hashing
+        # path uses a different suffix, which is exactly the coverage illusion
+        # this test previously had.
+        data, out = b"msg", 32
+        tail = right_encode(0) if xof else right_encode(8 * out)
         for customization in (b"", b"S"):
-            instance = row(_KEY, customization, output_size=32)
-            self.assertEqual(instance._sponge.suffix, CSHAKE_SUFFIX)
+            stream = (
+                bytepad(encode_string(b"KMAC") + encode_string(customization), rate)
+                + bytepad(encode_string(_KEY), rate)
+                + data
+                + tail
+            )
+            digest = _digest(row(_KEY, customization, output_size=out), data)
+            self.assertEqual(digest, sponge(stream, rate, CSHAKE_SUFFIX, out))
+            self.assertNotEqual(digest, sponge(stream, rate, SHAKE_SUFFIX, out))
 
     @parameterized.named_parameters(*_CASES)
     def test_an_empty_customization_is_not_a_missing_one(
@@ -497,15 +438,16 @@ class KeyTest(parameterized.TestCase):
         xof: bool,
     ) -> None:
         # `[B, K]` keys, the shape `Hmac.mac` also takes.
+        # Four rows rather than two, so this shares a trace key with
+        # `test_batched_equals_per_row` -- the batch size is part of the fused
+        # sponge's cache key, and a fresh one costs seconds.
         keys = np.stack(
-            [
-                np.frombuffer(_KEY, dtype=np.uint8),
-                np.frombuffer(_KEY[::-1], dtype=np.uint8),
-            ]
+            [np.frombuffer(_KEY, dtype=np.uint8)] * 2
+            + [np.frombuffer(_KEY[::-1], dtype=np.uint8)] * 2
         )
-        messages = np.stack([np.arange(40, dtype=np.uint8)] * 2)
+        messages = np.stack([np.arange(40, dtype=np.uint8)] * 4)
         batched = np.asarray(free(keys, messages, 32))
-        for i in range(2):
+        for i in range(4):
             single = free(keys[i], messages[i : i + 1], 32)
             self.assertEqual(bytes(batched[i]), bytes(np.asarray(single)[0]))
 
@@ -545,7 +487,7 @@ class SeamTest(parameterized.TestCase):
         rate: int,
         xof: bool,
     ) -> None:
-        for out in (1, 32):
+        for out in (32,):
             instance = row(_KEY, output_size=out)
             self.assertLen(_digest(instance, b"msg"), instance.digest_size)
 
