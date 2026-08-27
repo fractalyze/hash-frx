@@ -116,21 +116,24 @@ BLAKE2B_MARKER = "hash_frx.digest.blake2b"
 # ABI change ships as a NEW name, the way `sha256_bytes` did.
 BLAKE2B_MARKER_VERSION = 1
 
-# Whether the pinned Fractalyze XLA plugin ships a dedicated BLAKE2b emitter,
-# and on which backends. None exists yet — the pre-emitter half of the keccak
-# arrangement (`keccak.permutation._DEDICATED_EMITTER_AVAILABLE` carries the
-# family-wide rationale), the posture the blake2s sibling and the other
-# emitterless digests hold: both flags flip together with the `frx>=` floor in
-# `pyproject.toml` when an emitter lands, and `fusion_path_test`'s matrix law
+# Whether the pinned Fractalyze XLA plugin routes BLAKE2b, and on which
+# backends. It does, on both: the plugin's raw-bytes Merkle-Damgard envelope
+# drives any compression in its primitive registry, so BLAKE2b cost a registry
+# row and a round function rather than an emitter per backend. The 64-bit words
+# cost a row and not a 64-bit envelope — the wire carries u32 halves and the
+# compression joins them, exactly as SHA-512 rides the words-in envelope.
+#
+# These flip together with the `frx>=` floor in `pyproject.toml` and with
+# `markers._OPERATION_NAMED_BYTES_DIGEST`, and `fusion_path_test`'s matrix law
 # holds them to agree. The marker is emitted regardless — there is no
-# per-block routing alternative for a whole-hash digest — and unrecognized it
-# inlines its decomposition: right bytes, `GENERIC` fusion path.
-_DEDICATED_EMITTER_AVAILABLE = False
+# per-block routing alternative for a whole-hash digest — so below the floor
+# it inlines its decomposition: right bytes, `GENERIC` fusion path.
+_DEDICATED_EMITTER_AVAILABLE = True
 
 # Which backends have that emitter — a different question from the pin, asked
-# alongside it. Empty until one is written; a backend gaining an arm joins
-# this tuple and nothing else here moves (the keccak/poseidon2 pattern).
-_EMITTER_BACKENDS: tuple[str, ...] = ()
+# alongside it. Both, because the envelope is shared rather than per-family
+# (the keccak/poseidon2 pattern, arriving with both arms at once).
+_EMITTER_BACKENDS: tuple[str, ...] = ("cpu", "gpu")
 
 
 # RFC 7693 §2.1: BLAKE2b digests are 1..64 bytes.

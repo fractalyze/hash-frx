@@ -206,10 +206,8 @@ instead of a marked permute per block with the glue between them left outside.
 
 The markers wait for the toolchain in two different ways, because the cost of
 being early is not the same for both. `hash_frx.digest.blake3`,
-`hash_frx.digest.sha256`, `hash_frx.digest.sha512`, `hash_frx.digest.grostl256`,
-`hash_frx.digest.ascon_hash256`, `hash_frx.digest.ripemd160`,
-`hash_frx.digest.blake2b`, `hash_frx.digest.blake2s` and
-`hash_frx.digest.sm3` are emitted
+`hash_frx.digest.sha256`, `hash_frx.digest.grostl256` and
+`hash_frx.digest.ascon_hash256` are emitted
 whether or not the pinned plugin recognizes the name: an
 unrecognized *name* only inlines, so being early costs the fusion and nothing
 else, and the hash reports `fusion_path = GENERIC` while carrying its marker.
@@ -223,6 +221,13 @@ also decides whether a `Sponge` over it wraps its whole hash as
 `hash_frx.digest.field_sponge` — and that marker carries a `permutation` discriminator
 a plugin without the arm rejects outright, which is a failed compile rather
 than a lost kernel.
+
+The five Merkle–Damgård families have left the first group entirely. SHA-512 and
+SM3 ride `hash_frx.digest`, RIPEMD-160, BLAKE2b and BLAKE2s ride
+`hash_frx.digest_bytes`, and all five are recognized on both legs, so they report
+`fusion_path = DEDICATED` and no longer name themselves on the wire. What is
+still waiting is Ascon and Vision, and neither is an MD family — a sponge pads
+differently, so it needs an envelope of its own rather than an entry in this one.
 
 `hash_frx.digest.sha256_bytes` is gated the same way and for a third reason, and
 `hash_frx.digest.grostl256` now carries the same gate for the same reason. Each

@@ -183,12 +183,17 @@ class OperationNamedMdDigestTest(absltest.TestCase):
 
 
 class OperationNamedBytesDigestTest(absltest.TestCase):
-    """The raw-bytes flip, still OFF.
+    """The raw-bytes flip, now shipped ON.
 
-    `OperationNamedMdDigestTest`'s sibling one schema over, and currently in the
-    opposite state: that flag ships ON, this one waits for a `frx>=` floor
-    carrying the recognizer (fractalyze/xla#635) and the registry entries it
-    resolves through (#636/#639/#642).
+    `OperationNamedMdDigestTest`'s sibling one schema over, and no longer in the
+    opposite state: the `frx>=` floor now carries the recognizer
+    (fractalyze/xla#635) and the registry entries it resolves through
+    (#636/#639/#642), so both digest flags ship ON and only the permute one is
+    still off.
+
+    That this flag agrees with the three family routing gates is
+    `fusion_path_test`'s matrix law to enforce, not this class's: duplicating
+    the tuples here would make a rollback a four-place edit.
     """
 
     # Membership is hand-listed -- nothing in `MARKERS` distinguishes the
@@ -202,33 +207,30 @@ class OperationNamedBytesDigestTest(absltest.TestCase):
     )
 
     def test_off_reports_the_familys_own_spelling(self) -> None:
-        # Unpatched -- the shipped state. A fallback that altered the name
-        # would silently change the wire on a pin still reading the old one.
-        for name, version in self._FAMILIES:
-            with self.subTest(marker=name):
-                self.assertEqual(
-                    markers.bytes_in_digest_marker(name, version), (name, version)
-                )
+        # Patched off, because the flag now ships ON. Kept rather than deleted
+        # -- it is the rollback path, and the one that fails if the fallback
+        # ever stops returning the family's own spelling verbatim.
+        with mock.patch.object(markers, "_OPERATION_NAMED_BYTES_DIGEST", False):
+            for name, version in self._FAMILIES:
+                with self.subTest(marker=name):
+                    self.assertEqual(
+                        markers.bytes_in_digest_marker(name, version), (name, version)
+                    )
 
     def test_on_reports_the_operation_name_for_every_family(self) -> None:
         # One name and version whatever the family was; the plugin resolves
         # it through the `primitive` attribute instead.
-        with mock.patch.object(markers, "_OPERATION_NAMED_BYTES_DIGEST", True):
-            for name, version in self._FAMILIES:
-                with self.subTest(marker=name):
-                    self.assertEqual(
-                        markers.bytes_in_digest_marker(name, version),
-                        (
-                            markers.BYTES_DIGEST_MARKER,
-                            markers.BYTES_DIGEST_MARKER_VERSION,
-                        ),
-                    )
-
-    def test_the_flag_is_off_until_the_pin_carries_the_recognizer(self) -> None:
-        # Flipping early does not fail -- the families swap one unrecognized
-        # name for another and keep inlining. Pinned so it moves in the same
-        # commit as the floor and the routing gates.
-        self.assertFalse(markers._OPERATION_NAMED_BYTES_DIGEST)
+        # Unpatched: this is the shipped state now, so the assertion runs
+        # against the flag as configured rather than against a mocked one.
+        for name, version in self._FAMILIES:
+            with self.subTest(marker=name):
+                self.assertEqual(
+                    markers.bytes_in_digest_marker(name, version),
+                    (
+                        markers.BYTES_DIGEST_MARKER,
+                        markers.BYTES_DIGEST_MARKER_VERSION,
+                    ),
+                )
 
 
 class OperationNamedPermuteTest(absltest.TestCase):

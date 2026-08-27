@@ -41,6 +41,7 @@ py_test(
         "//hash_frx:fusion",
         "//hash_frx/ripemd160",
         "//hash_frx/testing:jit_cache",
+        "//hash_frx/testing:marker_recognized",
         "//hash_frx/testing:oracle",
         requirement("absl_py"),
         requirement("frx"),

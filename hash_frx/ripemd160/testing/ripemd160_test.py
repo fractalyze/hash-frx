@@ -11,9 +11,11 @@ passes no case here beyond the empty message.
 
 The lowering assertions are the usual half that values cannot see: the digest
 must emit exactly one composite carrying the registered name, version, and
-the three-operand ABI with no captured constants. No backend routes the name
-yet, so recognition is not asserted — emission and the ABI are what an
-emitter will read, pinned before it exists (the Vision/Grøstl arrangement).
+the three-operand ABI with no captured constants. Both backends route it now,
+through the plugin's shared raw-bytes Merkle-Damgard envelope rather than an
+emitter of this family's own, so recognition IS asserted — against the
+compiled module, where a recognized marker becomes a `kCustom` fusion and an
+unrecognized one silently inlines to the same bytes.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
+from hash_frx import markers
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.ripemd160 import ripemd160
@@ -35,6 +38,10 @@ from hash_frx.ripemd160.ripemd160 import Ripemd160
 from hash_frx.ripemd160.testing.reference import VECTORS
 from hash_frx.ripemd160.testing.reference import ripemd160 as _ripemd160_oracle
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import (
+    assert_marker_recognized,
+    emitted_composites,
+)
 from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths for the differential sweep: 0/1 (empty + tiny),
@@ -112,23 +119,45 @@ def _composite(fn: Any, *args: Any) -> Any:
     return eqns[0]
 
 
+_HAS_RIPEMD160_EMITTER = ripemd160._routes_to_dedicated_emitter()
+
+
 class Ripemd160MarkerTest(absltest.TestCase):
-    def test_no_leg_routes_a_ripemd160_marker_yet(self) -> None:
-        # The pre-emitter pin (the Vision/Grøstl arrangement): both module
-        # flags say "no emitter", so every unpatched instance reads GENERIC on
-        # every backend. When an emitter lands these flip with the frx floor
-        # and this case flips to the keccak-style backend gate.
-        self.assertFalse(ripemd160._DEDICATED_EMITTER_AVAILABLE)
-        self.assertEqual(ripemd160._EMITTER_BACKENDS, ())
-        self.assertIs(Ripemd160().fusion_path, FusionPath.GENERIC)
+    def test_routing_is_the_pin_and_the_backend(self) -> None:
+        # Both halves are pinned because they move together with the `frx>=`
+        # floor, and both backends because the envelope is shared rather than
+        # per-family — it arrived with its CPU and GPU arms at once.
+        self.assertTrue(ripemd160._DEDICATED_EMITTER_AVAILABLE)
+        self.assertEqual(ripemd160._EMITTER_BACKENDS, ("cpu", "gpu"))
+        self.assertIs(
+            Ripemd160().fusion_path, FusionPath.from_routing(_HAS_RIPEMD160_EMITTER)
+        )
 
     def test_digest_emits_one_composite_with_the_digest_name(self) -> None:
-        # The contract's unit: an absent or split marker still computes the
-        # right bytes, so only the lowered module shows it.
+        # An absent or split marker still computes the right bytes, so only
+        # the lowered module can catch it. The wire now carries the shared
+        # operation name, with RIPEMD-160 named by the `primitive` attribute;
+        # the list length is the composite count, so one assertion pins both.
         msg = np.zeros((2, 100), dtype=np.uint8)
-        txt = frx.jit(ripemd160.digest).lower(msg).as_text()
-        self.assertIn(ripemd160.RIPEMD160_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
+        self.assertEqual(
+            emitted_composites(ripemd160.digest, msg), [markers.BYTES_DIGEST_MARKER]
+        )
+
+    def test_the_digest_compiles_to_a_custom_fusion(self) -> None:
+        # What the routing flags CLAIM, checked against what the plugin does.
+        # The bytes cannot show it — an unrecognized marker inlines and
+        # computes the same digest — so this reads the compiled module, where
+        # a recognized marker becomes a kCustom fusion named for the envelope.
+        if not _HAS_RIPEMD160_EMITTER:
+            self.skipTest(f"no RIPEMD-160 emitter on {frx.default_backend()}")
+        # (1, 56) is the aval `Ripemd160TracedTest` already drives through
+        # `frx.jit(ripemd160.digest)`, so the two share one compile — the only
+        # aval here that does, since the differential sweep calls `digest`
+        # eagerly and so compiles a different function object.
+        msg = fnp.asarray(np.zeros((1, 56), dtype=np.uint8))
+        assert_marker_recognized(
+            self, "ripemd160", ripemd160.digest, msg, envelope_key="bytes_digest"
+        )
 
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         # The wire surface an emitter will read: name, version, and the
@@ -140,11 +169,8 @@ class Ripemd160MarkerTest(absltest.TestCase):
         # slices, never as lifted table arrays.
         msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
         eqn = _composite(ripemd160.digest, msg)
-        self.assertEqual(eqn.params["name"], ripemd160.RIPEMD160_MARKER)
-        self.assertEqual(eqn.params["version"], ripemd160.RIPEMD160_MARKER_VERSION)
-        # Pinned while the marker still rides its own spelling: a family that
-        # quietly stopped emitting `primitive` would pass every assertion above
-        # and then decline into its decomposition at flip time rather than fail.
+        self.assertEqual(eqn.params["name"], markers.BYTES_DIGEST_MARKER)
+        self.assertEqual(eqn.params["version"], markers.BYTES_DIGEST_MARKER_VERSION)
         attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
         self.assertEqual(attrs["primitive"], "ripemd160")
         self.assertLen(eqn.invars, 3)
@@ -200,14 +226,16 @@ class Ripemd160ByteHashTest(absltest.TestCase):
         self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # GENERIC (pre-emitter, every backend), and the traceability tie to
-        # the return type: the row returns an `Array` and takes a tracer
-        # (`byte_hash.py`'s rule).
+        # The routed path where the pin and backend carry the envelope, and
+        # the traceability tie to the return type: the row returns an `Array`
+        # and takes a tracer (`byte_hash.py`'s rule).
         # A (1, 1) message: the "a" vector already compiled that aval, so the
         # plumbing check costs no fresh compile of the digest body.
         msg = np.zeros((1, 1), dtype=np.uint8)
         device = Ripemd160()
-        self.assertIs(device.fusion_path, FusionPath.GENERIC)
+        self.assertIs(
+            device.fusion_path, FusionPath.from_routing(_HAS_RIPEMD160_EMITTER)
+        )
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
