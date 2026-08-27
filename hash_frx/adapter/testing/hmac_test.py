@@ -18,6 +18,7 @@ import hmac as stdlib_hmac
 import frx
 import numpy as np
 from absl.testing import absltest, parameterized
+from frx import Array
 
 from hash_frx.adapter.hmac import Hmac
 from hash_frx.sha256.sha256 import Sha256
@@ -201,6 +202,15 @@ class HmacTest(parameterized.TestCase):
         # being true. `_require_batch_rank` states the invariant.
         with self.assertRaisesRegex(ValueError, r"msg must be 2-D uint8 \[B, L\]"):
             _hmac_sha256().mac(np.zeros(16, np.uint8), np.zeros(40, np.uint8))
+
+    def test_mac_returns_a_device_array(self) -> None:
+        # The seam's law (`byte_hash.ByteHash.digest`) reaching the keyed
+        # construction: `mac` hands the underlying `digest` straight back, so
+        # what it returns is an `Array` and nothing widens it on the way out.
+        # `row_conformance_test` sweeps the byte-hash registry for this, which
+        # `Hmac` is not in — it keys a byte hash rather than being one.
+        out = _hmac_sha256().mac(np.zeros(16, np.uint8), np.zeros((2, 40), np.uint8))
+        self.assertIsInstance(out, Array)
 
     def test_a_wrong_rank_is_rejected_before_any_conversion(self) -> None:
         # The reason the shared helper checks first: a wrong rank must not reach

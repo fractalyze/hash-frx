@@ -29,7 +29,6 @@ correctness property.
 from __future__ import annotations
 
 import frx.numpy as fnp
-import numpy as np
 from frx import Array
 from frx.typing import ArrayLike
 
@@ -96,7 +95,7 @@ class Hmac(Row):
             key = fnp.concatenate([key, pad], axis=1)
         return key
 
-    def mac(self, key: ArrayLike, msg: ArrayLike) -> Array | np.ndarray:
+    def mac(self, key: ArrayLike, msg: ArrayLike) -> Array:
         """`HMAC(key, msg)` per message: msg uint8 `[B, L]`, key uint8 `[K]`
         (shared by the batch) or `[B, K]` (per message) -> uint8
         `[B, digest_size]`, the underlying hash's output order.
