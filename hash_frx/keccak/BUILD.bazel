@@ -1,6 +1,16 @@
 load("@hash_frx_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
+# SP 800-185 §2.3's length encodings — the prefixes cSHAKE, KMAC and TupleHash
+# are built from. Host arithmetic over lengths and never a message, so it pulls
+# no frx and needs no device, which is `blake2_params.py`'s property for the
+# same reason.
+py_library(
+    name = "encodings",
+    srcs = ["encodings.py"],
+    visibility = ["//visibility:public"],
+)
+
 py_library(
     name = "keccak",
     srcs = [

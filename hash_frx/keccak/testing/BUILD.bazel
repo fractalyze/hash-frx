@@ -112,3 +112,16 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+# SP 800-185 §2.3's encodings. Host-only and substrate-free — the module under
+# test pulls no frx, so this target takes neither the frx requirement nor the
+# GPU plugin, which is itself part of what the suite asserts.
+py_test(
+    name = "encodings_test",
+    size = "small",
+    srcs = ["encodings_test.py"],
+    deps = [
+        "//hash_frx/keccak:encodings",
+        requirement("absl_py"),
+    ],
+)
