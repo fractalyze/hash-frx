@@ -98,11 +98,12 @@ byte. [Testing](#testing) is where the enforcement is.
 ## A type per named member, a parameter per choice within one
 
 **Where a standard names its members, each name is a type.** FIPS 202 names
-SHA3-256, SHA3-512, SHAKE128, SHAKE256; the BLAKE3 spec names `hash`,
-`keyed_hash`, `derive_key`. Those become `Sha3_256` / `Sha3_512` / `Shake128` /
-`Shake256` and `Blake3` / `Blake3Keyed` / `Blake3DeriveKey`, sharing a body and
-differing by the constants the standard attaches to the name — a rate, a
-domain-separation byte, a mode flag. What a caller then chooses *within* one named member rides as a
+four SHA-3 functions and two SHAKEs; the BLAKE3 spec names `hash`,
+`keyed_hash`, `derive_key`. Those become `Sha3_224` / `Sha3_256` / `Sha3_384` /
+`Sha3_512` / `Shake128` / `Shake256` and `Blake3` / `Blake3Keyed` /
+`Blake3DeriveKey`, sharing a body and differing by the constants the standard
+attaches to the name — a rate, a domain-separation byte, a mode flag. What a
+caller then chooses *within* one named member rides as a
 constructor parameter: an output length, a key, a context string.
 
 A member can carry both, and BLAKE3's keyed row does. The standard fixes its
