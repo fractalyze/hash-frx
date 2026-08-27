@@ -40,19 +40,34 @@ classifiers = [
 # platform choice, offered through frx's own `cuda12` extra.
 dependencies = [
     "numpy",
-    # Floor = the first wheel carrying BOTH halves of the Merkle-Damgard
-    # stream-finalize routing: the emitter (fractalyze/xla#641), and
-    # fractalyze/xla#634, which resolves a marker's operand through the call
-    # frame a `lax.scan` leaves behind. The emitter alone routes the hop at top
-    # level and declines it inside a scan.
+    # Floor = one wheel, required by two independent things that landed within
+    # hours of each other.
     #
-    # Un-fused rather than wrong or slower, unlike the two Grøstl floors below:
-    # the marker is ungated, so beneath this floor it inlines to the
+    # First, BOTH halves of the Merkle-Damgard stream-finalize routing: the
+    # emitter (fractalyze/xla#641), and fractalyze/xla#634, which resolves a
+    # marker's operand through the call frame a `lax.scan` leaves behind. The
+    # emitter alone routes the hop at top level and declines it inside a scan.
+    #
+    # Un-fused rather than wrong or slower, unlike the two Grostl floors below:
+    # that marker is ungated, so beneath this floor it inlines to the
     # decomposition it replaced. `sha256_stream_test.FinalizeRoutedTest` reads
     # the COMPILED module and fails below it, at both call depths.
     #
-    # It subsumes the first wheel whose Grøstl-256 emitter accepts the RUNTIME-LENGTH
-    # operand form (fractalyze/xla#599, merged as PR #600), which
+    # Second, the raw-bytes Merkle-Damgard operation name
+    # (`hash_frx.digest_bytes`, fractalyze/xla#635) and the three registry
+    # entries it resolves through -- RIPEMD-160 (xla#636), BLAKE2s (xla#639)
+    # and BLAKE2b (xla#642). Below this floor those three advertise
+    # `fusion_path = DEDICATED` over a body that still inlines; each family's
+    # `test_the_digest_compiles_to_a_custom_fusion` reads the COMPILED module
+    # and fails there.
+    #
+    # Check this wheel by COMMIT, never by version suffix: the wheel one below
+    # it carries an XLA three hours OLDER than #635 despite a later timestamp.
+    # This one is `jax@7c87d0ed79f1`, whose `third_party/xla/revision.bzl` pins
+    # `ebf98af1a2f9...` (#642), with `98b21c88...` (#635) an ancestor.
+    #
+    # It subsumes the first wheel whose Grostl-256 emitter accepts the
+    # RUNTIME-LENGTH operand form (fractalyze/xla#599, merged as PR #600), which
     # `grostl.grostl256_bytes` now emits and has no static-tail form to fall
     # back to.
     #

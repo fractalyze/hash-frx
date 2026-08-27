@@ -22,10 +22,11 @@ that is not a boundary.
 The lowering assertions are the usual half that values cannot see: the digest
 must emit exactly one composite carrying the registered name, version, and
 the four-operand ABI with no captured constants — including the zero-length
-tail at a block-multiple length, the ABI's one degenerate shape. No backend
-routes the name yet, so recognition is not asserted — emission and the ABI
-are what an emitter will read, pinned before it exists (the Vision/Grøstl
-arrangement).
+tail at a block-multiple length, the ABI's one degenerate shape. Both backends
+route it now, through the plugin's shared raw-bytes Merkle-Damgard envelope
+rather than an emitter of this family's own, so recognition IS asserted —
+against the compiled module, where a recognized marker becomes a `kCustom`
+fusion and an unrecognized one silently inlines to the same bytes.
 """
 
 from __future__ import annotations
@@ -40,11 +41,16 @@ import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
 
+from hash_frx import markers
 from hash_frx.blake2b import blake2b
 from hash_frx.blake2b.blake2b import MAX_DIGEST_SIZE, Blake2b, Blake2bKeyed
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.testing.jit_cache import assert_single_trace
+from hash_frx.testing.marker_recognized import (
+    assert_marker_recognized,
+    emitted_composites,
+)
 from hash_frx.testing.oracle import oracle_digest
 
 # Padding-boundary lengths for the differential sweep: 0 (the dd = 1 all-zero
@@ -143,26 +149,48 @@ def _composite(fn: Any, *args: Any) -> Any:
     return eqns[0]
 
 
+_HAS_BLAKE2B_EMITTER = blake2b._routes_to_dedicated_emitter()
+
+
 class Blake2bMarkerTest(absltest.TestCase):
-    def test_no_leg_routes_a_blake2b_marker_yet(self) -> None:
-        # The pre-emitter pin (the Vision/Grøstl arrangement): both module
-        # flags say "no emitter", so every unpatched instance reads GENERIC
-        # on every backend. When an emitter lands these flip with the frx
-        # floor and this case flips to the keccak-style backend gate.
-        self.assertFalse(blake2b._DEDICATED_EMITTER_AVAILABLE)
-        self.assertEqual(blake2b._EMITTER_BACKENDS, ())
+    def test_routing_is_the_pin_and_the_backend(self) -> None:
+        # Both halves are pinned because they move together with the `frx>=`
+        # floor, and both backends because the envelope is shared rather than
+        # per-family — it arrived with its CPU and GPU arms at once.
+        self.assertTrue(blake2b._DEDICATED_EMITTER_AVAILABLE)
+        self.assertEqual(blake2b._EMITTER_BACKENDS, ("cpu", "gpu"))
         # One instance suffices: the path reads the two flags alone, and the
         # size sweeps elsewhere already construct every length.
-        self.assertIs(Blake2b().fusion_path, FusionPath.GENERIC)
+        self.assertIs(
+            Blake2b().fusion_path, FusionPath.from_routing(_HAS_BLAKE2B_EMITTER)
+        )
 
     def test_digest_emits_one_composite_with_the_digest_name(self) -> None:
         # The contract's unit: an absent or split marker still computes the
         # right bytes, so only the lowered module shows it. (4, 127) is the
         # differential sweep's aval, so the marker cases add no fresh trace.
+        # The wire now carries the shared operation name, with BLAKE2b named by
+        # the `primitive` attribute; the list length is the composite count.
         msg = np.zeros((4, 127), dtype=np.uint8)
-        txt = frx.jit(blake2b.digest).lower(msg).as_text()
-        self.assertIn(blake2b.BLAKE2B_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
+        self.assertEqual(
+            emitted_composites(blake2b.digest, msg), [markers.BYTES_DIGEST_MARKER]
+        )
+
+    def test_the_digest_compiles_to_a_custom_fusion(self) -> None:
+        # What the routing flags CLAIM, checked against what the plugin does.
+        # The bytes cannot show it — an unrecognized marker inlines and
+        # computes the same digest — so this reads the compiled module, where
+        # a recognized marker becomes a kCustom fusion named for the envelope.
+        if not _HAS_BLAKE2B_EMITTER:
+            self.skipTest(f"no BLAKE2b emitter on {frx.default_backend()}")
+        # (4, 129) is the aval `Blake2bTracedTest` already drives through
+        # `frx.jit(blake2b.digest)`, so the two share one compile — the only
+        # aval here that does, since the differential sweep calls `digest`
+        # eagerly and so compiles a different function object.
+        msg = fnp.asarray(np.zeros((4, 129), dtype=np.uint8))
+        assert_marker_recognized(
+            self, "blake2b", blake2b.digest, msg, envelope_key="bytes_digest"
+        )
 
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         # The wire surface an emitter will read: name, version, and the
@@ -174,11 +202,8 @@ class Blake2bMarkerTest(absltest.TestCase):
         # trace-time tuples, never as lifted table arrays.
         msg = fnp.asarray(np.zeros((4, 127), dtype=np.uint8))
         eqn = _composite(blake2b.digest, msg)
-        self.assertEqual(eqn.params["name"], blake2b.BLAKE2B_MARKER)
-        self.assertEqual(eqn.params["version"], blake2b.BLAKE2B_MARKER_VERSION)
-        # Pinned while the marker still rides its own spelling: a family that
-        # quietly stopped emitting `primitive` would pass every assertion above
-        # and then decline into its decomposition at flip time rather than fail.
+        self.assertEqual(eqn.params["name"], markers.BYTES_DIGEST_MARKER)
+        self.assertEqual(eqn.params["version"], markers.BYTES_DIGEST_MARKER_VERSION)
         attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
         self.assertEqual(attrs["primitive"], "blake2b")
         self.assertLen(eqn.invars, 4)
@@ -250,13 +275,13 @@ class Blake2bByteHashTest(absltest.TestCase):
         self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
-        # GENERIC (pre-emitter, every backend), and the traceability tie to
-        # the return type: the row returns an `Array` and takes a tracer
-        # (`byte_hash.py`'s rule). The (1, 3) message rides the "abc"
-        # vector's aval, so the plumbing check costs no fresh compile.
+        # The routed path where the pin and backend carry the envelope, and
+        # the traceability tie to the return type: the row returns an `Array`
+        # and takes a tracer (`byte_hash.py`'s rule). The (1, 3) message rides
+        # the "abc" vector's aval, so the plumbing check costs no fresh compile.
         msg = np.zeros((1, 3), dtype=np.uint8)
         device = Blake2b()
-        self.assertIs(device.fusion_path, FusionPath.GENERIC)
+        self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_BLAKE2B_EMITTER))
         out = device.digest(msg)
         self.assertNotIsInstance(out, np.ndarray)
         self.assertIsInstance(out, Array)
@@ -475,7 +500,7 @@ class Blake2bKeyedRowTest(absltest.TestCase):
     def test_rows_satisfy_the_seam_and_agree(self) -> None:
         rows = np.frombuffer(b"abc", dtype=np.uint8).reshape(1, 3)
         device: ByteHash = Blake2bKeyed(_KAT_KEY, 32, salt=_SALT, person=_PERSON)
-        self.assertIs(device.fusion_path, FusionPath.GENERIC)
+        self.assertIs(device.fusion_path, FusionPath.from_routing(_HAS_BLAKE2B_EMITTER))
         np.testing.assert_array_equal(
             np.asarray(device.digest(rows)),
             oracle_digest(
@@ -542,13 +567,12 @@ class Blake2bKeyedMarkerTest(absltest.TestCase):
         # The claim the module docstring makes — keying is a longer message
         # and a different `h0` VALUE, not a new marker and not a second one.
         msg = np.zeros((4, 127), dtype=np.uint8)
-        txt = (
-            frx.jit(functools.partial(blake2b.digest, digest_size=64, key=_KAT_KEY))
-            .lower(msg)
-            .as_text()
+        self.assertEqual(
+            emitted_composites(
+                functools.partial(blake2b.digest, digest_size=64, key=_KAT_KEY), msg
+            ),
+            [markers.BYTES_DIGEST_MARKER],
         )
-        self.assertIn(blake2b.BLAKE2B_MARKER, txt)
-        self.assertEqual(txt.count("stablehlo.composite"), 1)
 
     def test_the_operand_abi_is_unchanged_with_the_key_block_folded_in(
         self,
@@ -561,7 +585,7 @@ class Blake2bKeyedMarkerTest(absltest.TestCase):
         eqn = _composite(
             functools.partial(blake2b.digest, digest_size=64, key=_KAT_KEY), msg
         )
-        self.assertEqual(eqn.params["name"], blake2b.BLAKE2B_MARKER)
+        self.assertEqual(eqn.params["name"], markers.BYTES_DIGEST_MARKER)
         self.assertLen(eqn.invars, 4)
         shapes = [tuple(v.aval.shape) for v in eqn.invars]
         # 128 (key block) + 127 = 255, padding to two blocks with a 1-byte tail.

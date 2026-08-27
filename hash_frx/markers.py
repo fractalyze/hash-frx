@@ -177,20 +177,17 @@ BYTES_DIGEST_MARKER = "hash_frx.digest_bytes"
 # `consts...` is zero or more: RIPEMD-160 carries none, the BLAKE2 pair one each.
 BYTES_DIGEST_MARKER_VERSION = 1
 
-# Emitted only where the pinned plugin recognizes it. The recognizer landed in
-# fractalyze/xla#635 over the #632 envelope, and the entries it resolves through
-# in #636 (RIPEMD-160), #639 (BLAKE2s) and #642 (BLAKE2b); this stays False
-# until the `frx>=` floor moves to a wheel carrying them.
+# ON: the `frx>=` floor carries the recognizer (fractalyze/xla#635, over the
+# #632 envelope) and the entries it resolves through -- #636 (RIPEMD-160), #639
+# (BLAKE2s), #642 (BLAKE2b) -- so the operation name reaches a real emitter
+# rather than inlining.
 #
-# **Unlike both siblings, flipping this early would do nothing at all** -- the
-# three families emit names no recognizer matches, and an old plugin matches the
-# operation name no better, so they inline either way. So the flag is not what
-# makes the flip safe; the ORDERING is, and the hazard sits on the family
-# `_DEDICATED_EMITTER_AVAILABLE` gates: turning one on before the floor carries
-# its entry makes `fusion_path` advertise a kernel over a body that still
-# inlines, which is what `fusion_path_test`'s matrix law catches. This rides
-# with those gates so the rename and the routing claim land in one commit.
-_OPERATION_NAMED_BYTES_DIGEST = False
+# This moves with the three family `_DEDICATED_EMITTER_AVAILABLE` gates and the
+# floor, because the hazard is a SPLIT rather than any one value: a gate ahead
+# of the floor makes `fusion_path` advertise a kernel over a body that still
+# inlines, which `fusion_path_test`'s matrix law catches. The flag alone is
+# never the unsafe half -- an unrecognized name inlines either spelling.
+_OPERATION_NAMED_BYTES_DIGEST = True
 
 
 def dedicated_permute_marker(name: str, version: int) -> tuple[str, int]:

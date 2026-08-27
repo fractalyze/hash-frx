@@ -61,15 +61,15 @@ from hash_frx.vision.vision import Vision
 # The matrix rows: which backends the pinned plugin's dedicated emitters cover,
 # per family. They run wherever the ZorchFusedRegionRewriter (cpu+gpu
 # compilers) routes them — except sparse Poseidon, whose CPU mis-routing cost
-# is measured in `poseidon.sparse`, and Vision, Ascon, RIPEMD-160 and the
-# BLAKE2 pair, for which no plugin ships an emitter at all.
+# is measured in `poseidon.sparse`, and Vision and Ascon, for which no plugin
+# ships an emitter at all.
 #
-# SHA-512 and SM3 arrive with BOTH arms at once, unlike every family above
-# them. They are not per-family emitters: the plugin routes them through its
-# shared words-in Merkle-Damgard envelope, which both compilers already gate
-# on, so registering the compression lit up cpu and gpu in one step. That is
-# also why neither could ship one backend at a time the way Grøstl did — there
-# is no per-backend arm to ship separately.
+# The five Merkle-Damgard families arrive with BOTH arms at once, unlike every
+# family above them: they have no emitter of their own, but ride two shared
+# envelopes — words-in for SHA-512 and SM3, raw-bytes for RIPEMD-160 and the
+# BLAKE2 pair — that both compilers already gate on, so a registry row lights
+# up cpu and gpu together. None of the five could ship one backend at a time
+# the way Grøstl did; there is no per-backend arm to ship.
 #
 # Keccak covers both legs only from the wheel carrying the CPU sponge emitter.
 # Its two arms had to arrive together: one tuple gates the permute marker and
@@ -87,9 +87,9 @@ _MATRIX = {
     blake3_rows: ("cpu", "gpu"),
     grostl_mod: ("cpu", "gpu"),
     ascon_mod: (),
-    ripemd160_mod: (),
-    blake2b_mod: (),
-    blake2s_mod: (),
+    ripemd160_mod: ("cpu", "gpu"),
+    blake2b_mod: ("cpu", "gpu"),
+    blake2s_mod: ("cpu", "gpu"),
     sm3_mod: ("cpu", "gpu"),
 }
 
