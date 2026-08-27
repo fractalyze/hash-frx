@@ -1,0 +1,116 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Input block sizes for the block-keyed constructions. A table rather than a
+# `ByteHash` attribute — `hmac.py` argues why, and `block_size.py` records the
+# decision.
+#
+# Deps NOTHING, and the seam import is annotation-only for that reason: a
+# runtime `from hash_frx.byte_hash import ByteHash` pulls frx transitively, so
+# reading the table cost 273 ms and 891 modules where it now costs 1.3 ms and
+# 77, with frx never imported. `extension/pad.py` records the same lesson from
+# the other direction — 536 MB of runfiles for a host `np.zeros`.
+py_library(
+    name = "block_size",
+    srcs = [
+        "__init__.py",
+        "block_size.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# HMAC (FIPS 198-1) over any `ByteHash`.
+py_library(
+    name = "hmac",
+    srcs = [
+        "__init__.py",
+        "hmac.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":block_size",
+        "//hash_frx:byte_hash",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
+# HKDF (RFC 5869) — extract-then-expand over HMAC, the KDF the composition
+# standards (HPKE, TLS-style schedules) name.
+py_library(
+    name = "hkdf",
+    srcs = [
+        "__init__.py",
+        "hkdf.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":hmac",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
+# PBKDF2 (RFC 8018) — the iterated KDF over HMAC as a traced c-loop, with a
+# midstate fast path over the SHA-2 modules' public compress machinery
+# (hence the sha256/sha512 deps — the one construction that names hashes).
+py_library(
+    name = "pbkdf2",
+    srcs = [
+        "__init__.py",
+        "pbkdf2.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":block_size",
+        ":hmac",
+        "//hash_frx/sha256",
+        "//hash_frx/sha512",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
+# MGF1 (RFC 8017 B.2.1) — a `ByteHash` stretched into a mask by a counter
+# suffix. The counter is a host constant, so `seed` stays an operand.
+py_library(
+    name = "mgf1",
+    srcs = [
+        "__init__.py",
+        "mgf1.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:byte_hash",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)
+
+# `Xof` — the type a variable-output family is held as, before a length is
+# chosen. Deps NOTHING, and the seam import is annotation-only for that reason:
+# the `ByteHash` in the alias is a forward reference, so a purely-typing consumer
+# reads the name without pulling frx (`block_size` above records what that
+# costs).
+py_library(
+    name = "xof",
+    srcs = [
+        "__init__.py",
+        "xof.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Named duplex conventions — which released implementation a sponge reproduces.
+# The axes live on the construction (`//hash_frx:duplex_sponge`); only the
+# members that pair them with ark-sponge 0.3 / ark-crypto-primitives 0.5 are
+# here, because a convention is a claim about an external codebase.
+py_library(
+    name = "duplex",
+    srcs = [
+        "__init__.py",
+        "duplex.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["//hash_frx:duplex_sponge"],
+)

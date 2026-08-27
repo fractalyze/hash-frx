@@ -52,10 +52,12 @@ _SHAKE128_LONG = KeccakSponge(
 def _routing(dedicated: bool) -> Iterator[None]:
     """Pin which marker the permutation picks, whatever this leg would pick.
 
-    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`: the
-    emitters are GPU-only, so on the CPU leg patching the pin alone leaves both
-    arms generic and the whole-hash assertions below stop testing anything. Every
-    case here reads the jaxpr, so neither arm needs the emitter to exist.
+    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`: on
+    a leg absent from `_EMITTER_BACKENDS`, patching the pin alone leaves both
+    arms generic and the whole-hash assertions below stop testing anything. That
+    holds whatever the tuple says, which is why the decision is patched rather
+    than one of its inputs. Every case here reads the jaxpr, so neither arm needs
+    the emitter to exist.
     """
     with mock.patch.object(
         permutation_mod, "_routes_to_dedicated_emitter", lambda: dedicated
@@ -85,6 +87,14 @@ def _composites(fn: Any, *args: frx.Array) -> list[Any]:
 def _message(batch: int, length: int) -> frx.Array:
     rng = np.random.default_rng(0)
     return fnp.asarray(rng.integers(0, 256, size=(batch, length), dtype=np.uint8))
+
+
+def _stacked(outer: int, batch: int, length: int) -> frx.Array:
+    """A `[outer, B, L]` message, the shape a caller's own `vmap` hands `hash`."""
+    rng = np.random.default_rng(0)
+    return fnp.asarray(
+        rng.integers(0, 256, size=(outer, batch, length), dtype=np.uint8)
+    )
 
 
 class KeccakSpongeMarkerTest(absltest.TestCase):
@@ -171,11 +181,63 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         np.testing.assert_array_equal(plain, marked)
 
 
+class VmappedMarkerTest(absltest.TestCase):
+    """The rank contract, which only a caller's own `vmap` exercises.
+
+    `hash` guards `msg.ndim != 2`, but under `frx.vmap` a tracer's *logical* ndim
+    is 2 while the lowered operand carries the batch axis — so the guard passes
+    and the region reaches the emitter one rank deeper than the shape it was
+    written against. A Python rank check cannot protect a wire ABI.
+
+    Nothing vmapped a marked *sponge* before this: the only `vmap` coverage in
+    the repo is on the permutation (`permutation_test`), which is one vmap deep
+    by construction and so was rank-tolerant from the start. On the dedicated
+    path the sponge is the OUTERMOST marker, so it is the one nobody batched —
+    which is how a whole-hash marker admitting exactly rank 2 shipped and took
+    every consumer that batches with `vmap` down on GPU while CPU stayed green.
+    """
+
+    def test_a_vmapped_hash_is_still_one_region_a_rank_deeper(self) -> None:
+        # Two absorb blocks and two squeezes, so the region is the whole chain
+        # rather than a single permute, and vmap's axis stays outermost ahead of
+        # the sponge's own batch.
+        with _dedicated_emitter():
+            eqns = _composites(frx.vmap(_SHAKE128_LONG.hash), _stacked(3, 2, 200))
+        self.assertLen(eqns, 1)
+        self.assertEqual(eqns[0].params["name"], KECCAK_SPONGE_MARKER)
+        # 200 B at rate 168 pads to two blocks, under both batch axes.
+        self.assertEqual(eqns[0].invars[0].aval.shape, (3, 2, 2 * SHAKE128_RATE))
+        self.assertEqual(eqns[0].invars[0].aval.dtype, fnp.uint8)
+
+    def test_a_leading_axis_of_one_is_still_a_rank_it_has_to_admit(self) -> None:
+        # The degenerate case a fix that squeezes rather than collapses would
+        # pass, so it is pinned apart from the case above.
+        with _dedicated_emitter():
+            eqns = _composites(frx.vmap(_SHA3_256.hash), _stacked(1, 3, 64))
+        self.assertLen(eqns, 1)
+        self.assertEqual(eqns[0].invars[0].aval.shape, (1, 3, 136))
+
+    def test_a_vmapped_hash_matches_its_flattening(self) -> None:
+        # What the collapse has to preserve: vmapping over `[V, B, L]` is the
+        # same set of digests as hashing `[V*B, L]` in one go, just reshaped.
+        # Both routings, since the marker chooses a kernel and never a result.
+        stacked = _stacked(3, 2, 200)
+        flat = fnp.reshape(stacked, (3 * 2, 200))
+        for label, ctx in (
+            ("generic", _generic_emitter()),
+            ("dedicated", _dedicated_emitter()),
+        ):
+            with self.subTest(routing=label), ctx:
+                got = np.asarray(frx.jit(frx.vmap(_SHAKE128_LONG.hash))(stacked))
+                want = np.asarray(frx.jit(_SHAKE128_LONG.hash)(flat))
+                np.testing.assert_array_equal(got.reshape(want.shape), want)
+
+
 class WholeHashRoutingTest(absltest.TestCase):
     """What the backend gate is actually protecting.
 
     `hash` routes to the whole-chain `keccak_sponge` region only when the
-    permutation reports `has_dedicated_fusion`, and that region is the expensive
+    permutation reports a `DEDICATED` fusion path, and that region is the expensive
     thing to trace: it unrolls the entire padded absorb and squeeze into one
     composite. Where the emitter exists that buys one kernel; where it does not
     it buys nothing and the trace is spent anyway.
@@ -276,6 +338,68 @@ class MarkerRecognizedTest(absltest.TestCase):
         # permutes would otherwise sit outside the region.
         assert_marker_recognized(
             self, "keccak_sponge", _SHAKE128_LONG.hash, _message(1, 200)
+        )
+
+    def test_a_vmapped_hash_is_still_one_custom_fusion(self) -> None:
+        # The rank the emitter has to admit, and the case that has to COMPILE
+        # rather than merely lower: the rewriter collapses the leading axes into
+        # `B` instead of rejecting the operand. Before it did, this was a hard
+        # INVALID_ARGUMENT on GPU that no CPU leg could see, because CPU declines
+        # the marker and inlines it before any ABI is checked.
+        assert_marker_recognized(
+            self, "keccak_sponge", frx.vmap(_SHA3_256.hash), _stacked(3, 2, 64)
+        )
+
+    def test_a_vmapped_multi_block_hash_is_still_one_custom_fusion(self) -> None:
+        # The same collapse where the region spans two absorb blocks and two
+        # squeezes, so a fix that only handled the single-block shape is caught.
+        assert_marker_recognized(
+            self, "keccak_sponge", frx.vmap(_SHAKE128_LONG.hash), _stacked(2, 3, 200)
+        )
+
+
+class XorIntoRateTest(absltest.TestCase):
+    """The merge, whose whole point is that one spelling serves both ranks.
+
+    The one-shot sponge absorbs into `[B, 50]` lanes and the incremental SHAKE
+    into an unbatched `(50,)`; those were two transcriptions of this
+    slice-and-concatenate until the trailing-axis form replaced both. A version
+    indexed on axis 0 would silently merge along the BATCH axis instead, which
+    the batched KAT would catch but the unbatched one would not.
+    """
+
+    def test_only_the_rate_prefix_changes(self) -> None:
+        state = fnp.asarray(np.arange(10, dtype=np.uint32))
+        block = fnp.asarray(np.array([0xFF, 0xFF, 0xFF], dtype=np.uint32))
+        want = np.arange(10, dtype=np.uint32)
+        want[:3] ^= np.uint32(0xFF)
+        np.testing.assert_array_equal(
+            np.asarray(sponge_mod._xor_into_rate(state, block)), want
+        )
+
+    def test_one_spelling_serves_both_state_ranks(self) -> None:
+        row = np.arange(10, dtype=np.uint32)
+        blk = np.array([1, 2, 3], dtype=np.uint32)
+        unbatched = np.asarray(
+            sponge_mod._xor_into_rate(fnp.asarray(row), fnp.asarray(blk))
+        )
+        batched = np.asarray(
+            sponge_mod._xor_into_rate(
+                fnp.asarray(np.stack([row, row + 100])),
+                fnp.asarray(np.stack([blk, blk])),
+            )
+        )
+        np.testing.assert_array_equal(batched[0], unbatched)
+
+    def test_a_full_width_block_leaves_no_capacity(self) -> None:
+        np.testing.assert_array_equal(
+            np.asarray(
+                sponge_mod._xor_into_rate(
+                    fnp.asarray(np.zeros(4, dtype=np.uint32)),
+                    fnp.asarray(np.arange(4, dtype=np.uint32)),
+                )
+            ),
+            np.arange(4, dtype=np.uint32),
         )
 
 

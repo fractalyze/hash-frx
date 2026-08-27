@@ -12,23 +12,27 @@
 # the binary-field dtypes (tower t0..t7 + flat GHASH) in the frontend, which
 # requires zk_dtypes >= 0.0.10.
 #
+# The pin is exact rather than that floor because a bzlmod consumer mirrors it:
+# such a consumer resolves this module's pip dependencies from this lock and its
+# own from its own, and only equal versions keep one zk_dtypes on a test's
+# sys.path. So the pin may run ahead of the floor to satisfy a consumer, and
+# lowering it back to the floor is not a cleanup.
+#
 # The frx pin must satisfy the `frx>=` floor in pyproject.toml (see the
 # rationale there).
 #
 # `blake3` is the BLAKE3 team's own Rust binding, and the one runtime dependency
-# here that is not frx or numpy. It backs the `HostBlake3*` rows, which need a
-# native BLAKE3 the way the other host rows need `hashlib` — the standard library
-# ships `blake2b`/`blake2s` and will not ship BLAKE3. Taking it rather than the
-# in-tree `blake3/testing/reference.py` oracle is deliberate twice over: the
-# oracle is test-only code and orders of magnitude slower than the device
-# dispatch a host row exists to beat, and a differential test against this tree's
-# own transcription of the spec proves far less than one against the reference
-# the published vectors come from (`docs/reference/conventions.md`, byte-exactness).
+# here that is not frx or numpy, and since the host rows went (#324) it is a TEST
+# dependency rather than a runtime one — `pyproject.toml` no longer lists it.
+# The BLAKE3 suites hash against it because a differential test against this
+# tree's own transcription of the spec proves far less than one against the
+# reference the published vectors come from (`docs/reference/conventions.md`,
+# byte-exactness), and the standard library has no BLAKE3 to stand in.
 absl-py
 numpy
 blake3
-frx==0.10.2.dev20260818121310
-frxlib==0.10.2.dev20260818121310
-frx-cuda12-pjrt==0.10.2.dev20260818121310
-frx-cuda12-plugin==0.10.2.dev20260818121310
-zk-dtypes==0.0.10
+frx==0.10.2.dev20260826215637
+frxlib==0.10.2.dev20260826215637
+frx-cuda12-pjrt==0.10.2.dev20260826215637
+frx-cuda12-plugin==0.10.2.dev20260826215637
+zk-dtypes==0.0.17

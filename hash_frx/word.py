@@ -9,10 +9,10 @@ families, where `unrolled_sum` plays the same role.
 
 **The packers split on byte order, not on hash family.** FIPS 202 and BLAKE3
 both read four bytes into a word little-endian, so they are the *same* function
-and share `pack_le`; SHA-256 is big-endian and genuinely cannot, which is why
-`sha256.serialize_digest` stays where it is. Reading that split as "each hash
-owns its own packing" is what produces a fourth transcription of a shift chain
-no reviewer can check by eye.
+and share `pack_le`; the SHA-2 family reads big-endian and shares `pack_be` the
+same way (sha256 and sha512 are the two consumers). Reading that split as "each
+hash owns its own packing" is what produces a fourth transcription of a shift
+chain no reviewer can check by eye.
 
 Each of these is a plain Python function inlined at trace time, so sharing them
 costs nothing at the fusion contract: no `func.call` appears in a marked body,
@@ -55,6 +55,16 @@ def rotr(x: Array, n: int) -> Array:
     return (x >> U32(n)) | (x << U32(32 - n))
 
 
+def rotl(x: Array, n: int) -> Array:
+    """Rotate each `uint32` lane LEFT by `n`, `0 < n < 32` — `rotr`'s mirror,
+    for the standards whose tables are written as left-rotation counts
+    (RIPEMD-160's rol_s, SM3's ROTL): spelled directly rather than as
+    `rotr(x, 32 - n)` so every call site reads as the spec's own entry.
+    Began module-local to ripemd160 and lifted when SM3 became the second
+    literal consumer (the charter word64.py states)."""
+    return (x << U32(n)) | (x >> U32(32 - n))
+
+
 def roll(x: Array, shift: int, axis: int = 0) -> Array:
     """`fnp.roll` along `axis` written as the two static slices it is.
 
@@ -85,7 +95,9 @@ def pack_le(data: Array) -> Array:
             f"trailing axis must be a multiple of {BYTES_PER_WORD}, "
             f"got {data.shape[-1]}"
         )
-    w = data.reshape(*data.shape[:-1], -1, BYTES_PER_WORD).astype(U32)
+    w = data.reshape(
+        *data.shape[:-1], data.shape[-1] // BYTES_PER_WORD, BYTES_PER_WORD
+    ).astype(U32)
     return (
         w[..., 0]
         | (w[..., 1] << U32(8))
@@ -105,4 +117,40 @@ def unpack_le(words: Array) -> Array:
         ],
         axis=-1,
     ).astype(fnp.uint8)
-    return out.reshape(*words.shape[:-1], -1)
+    return out.reshape(*words.shape[:-1], words.shape[-1] * BYTES_PER_WORD)
+
+
+def pack_be(data: Array) -> Array:
+    """uint8 `[..., 4n]` -> uint32 `[..., n]`, four bytes per word big-endian.
+
+    `pack_le`'s other-byte-order twin, shared by the SHA-2 family the same way
+    that one is shared by FIPS 202 and BLAKE3.
+    """
+    if data.shape[-1] % BYTES_PER_WORD:
+        raise ValueError(
+            f"trailing axis must be a multiple of {BYTES_PER_WORD}, "
+            f"got {data.shape[-1]}"
+        )
+    w = data.reshape(
+        *data.shape[:-1], data.shape[-1] // BYTES_PER_WORD, BYTES_PER_WORD
+    ).astype(U32)
+    return (
+        (w[..., 0] << U32(24))
+        | (w[..., 1] << U32(16))
+        | (w[..., 2] << U32(8))
+        | w[..., 3]
+    )
+
+
+def unpack_be(words: Array) -> Array:
+    """uint32 `[..., n]` -> uint8 `[..., 4n]` — `pack_be` inverted."""
+    out = fnp.stack(
+        [
+            (words >> U32(24)) & U32(0xFF),
+            (words >> U32(16)) & U32(0xFF),
+            (words >> U32(8)) & U32(0xFF),
+            words & U32(0xFF),
+        ],
+        axis=-1,
+    ).astype(fnp.uint8)
+    return out.reshape(*words.shape[:-1], words.shape[-1] * BYTES_PER_WORD)

@@ -1,12 +1,13 @@
-"""Sponge over a Permutation — contract + correctness (padding-free + Merkle-Damgard).
+"""Sponge over a Permutation — contract + correctness, over both chaining rules.
 
 The koalabear-16 poseidon2 is the golden permutation (byte-matches Plonky3
-4318eba). The expected outputs below replay the padding-free absorb step by step
+4318eba). The expected outputs below replay Plonky3's padding-free absorb step by step
 (replace state[:rate], permute; a partial final block overwrites only its lanes,
 no padding) against that golden permutation — pinning block boundaries, absorb
 semantics, and the partial-block rule. An independent Plonky3-generated sponge
-vector is added in the golden-vector slice. The construction-level Merkle-Damgard
-tests live here too, since the construction is the Sponge's, not a permutation's.
+vector is added in the golden-vector slice. The digest-in-capacity chaining rule
+is exercised here too, since it belongs to the Sponge rather than to any one
+permutation.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import functools
 
 import frx
 import frx.numpy as fnp
+import numpy as np
 from absl.testing import absltest
 from frx import export
 from zk_dtypes import koalabear_mont as F
@@ -29,8 +31,8 @@ from hash_frx.poseidon2.testing.koalabear16 import (
 from hash_frx.sponge import (
     SPONGE_HASH_MARKER,
     Sponge,
+    SpongeChaining,
     SpongeParams,
-    SpongeType,
     _hash_body,
 )
 from hash_frx.testing.jit_cache import assert_single_trace
@@ -173,13 +175,13 @@ class SpongeTest(absltest.TestCase):
         self.assertTrue(bool(fnp.array_equal(batched[1], s.hash(b))))
 
 
-def _ref_merkle_damgard(
+def _ref_digest_in_capacity(
     perm: Permutation, x: fnp.ndarray, rate: int, out: int
 ) -> fnp.ndarray:
-    """Independent Merkle-Damgard reference: per-block unroll — zero-pad a short
-    final block, chain the prior digest state[:out] into capacity [rate:rate+out].
-    Permutation-agnostic, so it cross-checks Sponge.hash(MERKLE_DAMGARD) over any
-    permutation."""
+    """Independent digest-in-capacity reference: per-block unroll — zero-pad a
+    short final block, chain the prior digest state[:out] into capacity
+    [rate:rate+out]. Permutation-agnostic, so it cross-checks
+    Sponge.hash(DIGEST_IN_CAPACITY) over any permutation."""
     w = perm.width
     n = int(x.shape[0])
     st = fnp.zeros(w, dtype=x.dtype)
@@ -218,32 +220,36 @@ class SpongeTraceCacheTest(absltest.TestCase):
         assert_single_trace(self, _hash_body, calls)
 
 
-# Permutations the construction is exercised over — add a row to cover another
-# (the Merkle-Damgard construction is the Sponge's, so one test serves all).
+# Permutations the rule is exercised over — add a row to cover another (the rule
+# is the Sponge's, so one test serves all).
 # (permutation, rate, out) with rate + out == width.
-_MD_CASES = ((koalabear16_perm(), 8, 8),)
+_DIGEST_IN_CAPACITY_CASES = ((koalabear16_perm(), 8, 8),)
 
 
-class MerkleDamgardTest(absltest.TestCase):
-    """The Merkle-Damgard construction lives in Sponge, so it is tested here once
-    (over any permutation) rather than per hash."""
+class DigestInCapacityTest(absltest.TestCase):
+    """The digest-in-capacity chaining rule lives in Sponge, so it is tested here
+    once (over any permutation) rather than per hash."""
 
     def test_matches_stepwise_reference(self) -> None:
-        for perm, rate, out in _MD_CASES:
+        for perm, rate, out in _DIGEST_IN_CAPACITY_CASES:
             s = Sponge(perm, SpongeParams(rate=rate, out=out))
             # one full block, two full, then two partial-tail lengths.
             for n in (rate, 2 * rate, rate + rate // 2, 2 * rate + rate // 2):
                 x = fnp.arange(n, dtype=F)
-                got = s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD)
+                got = s.hash(x, chaining=SpongeChaining.DIGEST_IN_CAPACITY)
                 self.assertTrue(
-                    bool(fnp.array_equal(got, _ref_merkle_damgard(perm, x, rate, out))),
+                    bool(
+                        fnp.array_equal(
+                            got, _ref_digest_in_capacity(perm, x, rate, out)
+                        )
+                    ),
                     f"width {perm.width}, len {n}",
                 )
 
     def test_requires_rate_plus_out_equals_width(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=4))  # 8 + 4 != 16
         with self.assertRaises(ValueError):
-            s.hash(fnp.arange(8, dtype=F), sponge_type=SpongeType.MERKLE_DAMGARD)
+            s.hash(fnp.arange(8, dtype=F), chaining=SpongeChaining.DIGEST_IN_CAPACITY)
 
     def test_lowers_under_symbolic_length(self) -> None:
         # Rides the shared while_loop absorb, so a symbolic `len(input)` lowers
@@ -251,7 +257,7 @@ class MerkleDamgardTest(absltest.TestCase):
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         (n,) = export.symbolic_shape("n")
         txt = (
-            frx.jit(lambda x: s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD))
+            frx.jit(lambda x: s.hash(x, chaining=SpongeChaining.DIGEST_IN_CAPACITY))
             .lower(frx.ShapeDtypeStruct((n,), F))
             .as_text()
         )
@@ -284,6 +290,22 @@ class MerkleDamgardTest(absltest.TestCase):
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         x = fnp.arange(16, dtype=F)
         assert_marker_recognized(self, "sponge_hash", s.hash, x)
+
+
+class EmptyInputTest(absltest.TestCase):
+    """The hash of the empty input is the zero-state squeeze (#211).
+
+    Zero absorbed blocks leave the state at its zero initialization, so the
+    digest is the zero prefix — Plonky3's PaddingFreeSponge over an empty
+    iterator. Without the static guard the absorb gather slices a length-0
+    input and fails instead of returning the defined value.
+    """
+
+    def test_empty_input_hashes_to_zeros(self) -> None:
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        for chaining in SpongeChaining:
+            got = np.asarray(s.hash(fnp.zeros(0, dtype=F), chaining))
+            np.testing.assert_array_equal(got, np.zeros(8, dtype=got.dtype))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """Incremental BLAKE3 — byte-exact against the reference binding, and threadable.
 
-`HostBlake3` is the oracle, as it is for the `ByteHash` differential sweep: it
+The `blake3` binding is the oracle, as it is for the `ByteHash` sweep: it
 wraps the BLAKE3 team's own Rust implementation, so agreement is agreement with
 something outside this tree rather than two readings of one spec
 (`docs/reference/conventions.md`).
@@ -22,27 +22,27 @@ both.
 
 from __future__ import annotations
 
+import blake3 as blake3_py
 import frx
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
-from hash_frx.blake3 import blake3
-from hash_frx.blake3.blake3 import (
+from hash_frx.blake3.modes import BLOCK_LEN, CHUNK_LEN, DIGEST_LEN
+from hash_frx.blake3.rows import BLAKE3_MARKER
+from hash_frx.blake3.streaming import (
     BLAKE3_COMPRESS_MARKER,
-    BLOCK_LEN,
-    CHUNK_LEN,
-    DIGEST_LEN,
+    Blake3Stream,
+    blake3_stream_init,
 )
-from hash_frx.blake3.byte_hashes import HostBlake3
-from hash_frx.blake3.streaming import Blake3Stream, blake3_stream_init
 
 
 def _u8(data: bytes) -> np.ndarray:
     return np.frombuffer(data, dtype=np.uint8)
 
 
-def _host(msg: bytes, out_len: int = DIGEST_LEN) -> bytes:
-    return bytes(np.asarray(HostBlake3(out_len).digest(_u8(msg)[None, :]))[0])
+def _oracle(msg: bytes, out_len: int = DIGEST_LEN) -> bytes:
+    return blake3_py.blake3(msg).digest(out_len)
 
 
 def _device(pieces: list[bytes], out_len: int = DIGEST_LEN) -> bytes:
@@ -94,7 +94,7 @@ class Blake3StreamTest(absltest.TestCase):
         rng = np.random.default_rng(0)
         for n in self.LENGTHS:
             msg = rng.integers(0, 256, size=n, dtype=np.uint8).tobytes()
-            want = _host(msg)
+            want = _oracle(msg)
             for pieces in _splits(msg):
                 with self.subTest(n=n, pieces=[len(p) for p in pieces]):
                     self.assertEqual(_device(pieces).hex(), want.hex())
@@ -108,7 +108,7 @@ class Blake3StreamTest(absltest.TestCase):
         for out_len in (1, 16, 31, 32, 33, 64, 96):
             with self.subTest(out_len=out_len):
                 self.assertEqual(
-                    _device([msg], out_len).hex(), _host(msg, out_len).hex()
+                    _device([msg], out_len).hex(), _oracle(msg, out_len).hex()
                 )
 
     def test_finalize_does_not_consume_the_state(self) -> None:
@@ -118,14 +118,14 @@ class Blake3StreamTest(absltest.TestCase):
         head, tail = b"the first half..", b"..and the second"
         state = blake3_stream_init().absorb(frx.device_put(_u8(head)))
         first = bytes(np.asarray(state.finalize(DIGEST_LEN)))
-        self.assertEqual(first.hex(), _host(head).hex())
+        self.assertEqual(first.hex(), _oracle(head).hex())
         self.assertEqual(
             bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), first.hex()
         )
         resumed = state.absorb(frx.device_put(_u8(tail)))
         self.assertEqual(
             bytes(np.asarray(resumed.finalize(DIGEST_LEN))).hex(),
-            _host(head + tail).hex(),
+            _oracle(head + tail).hex(),
         )
 
 
@@ -159,7 +159,7 @@ class PytreeThreadingTest(absltest.TestCase):
             return state.finalize(DIGEST_LEN)
 
         got = bytes(np.asarray(run(frx.device_put(piece))))
-        self.assertEqual(got.hex(), _host(piece.tobytes() * 10).hex())
+        self.assertEqual(got.hex(), _oracle(piece.tobytes() * 10).hex())
 
     def test_the_state_is_a_jit_boundary_argument(self) -> None:
         # A state built outside a zone and absorbed into inside it, which is the
@@ -171,16 +171,16 @@ class PytreeThreadingTest(absltest.TestCase):
         msg = b"handed across the boundary"
         state = step(blake3_stream_init(), frx.device_put(_u8(msg)))
         self.assertEqual(
-            bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), _host(msg).hex()
+            bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), _oracle(msg).hex()
         )
 
     def test_the_node_finishing_hops_are_marked(self) -> None:
-        # Counted, not found: a resumable state cannot reach `hash_frx.blake3`,
+        # Counted, not found: a resumable state cannot reach `hash_frx.digest.blake3`,
         # so every node it finishes has to carry its own region, and an
         # `assertIn` passes with one of them marked and the rest inline — which
         # is exactly the state this replaced. Three hops finish a node (the
         # absorb path's block, the subtree merge, finalize's stack fold); the
-        # root read is a batch of output blocks and stays with `blake3.py`.
+        # root read is a batch of output blocks and stays with `modes.py`.
         block = frx.device_put(_u8(b"x" * BLOCK_LEN))
 
         def absorb_then_finalize(part: frx.Array) -> frx.Array:
@@ -190,7 +190,23 @@ class PytreeThreadingTest(absltest.TestCase):
         self.assertEqual(text.count(f'"{BLAKE3_COMPRESS_MARKER}"'), 3)
         # A whole-hash marker here would mean the resumable path fell back to
         # the one region that cannot express it.
-        self.assertNotIn(f'"{blake3.BLAKE3_MARKER}"', text)
+        self.assertNotIn(f'"{BLAKE3_MARKER}"', text)
+
+
+class AbsorbValidationTest(absltest.TestCase):
+    """`absorb` rejects what it cannot hash rather than coercing it (#215).
+
+    Coercing returned a well-formed digest of a *different* message: an int32
+    payload narrows mod 256, a `[B, L]` one flattens into a single stream.
+    """
+
+    def test_rejects_a_payload_that_is_not_bytes(self) -> None:
+        with self.assertRaisesRegex(TypeError, "uint8"):
+            blake3_stream_init().absorb(fnp.asarray([1, 2], dtype=fnp.int32))
+
+    def test_rejects_a_batched_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "1-D"):
+            blake3_stream_init().absorb(fnp.zeros((2, 4), dtype=fnp.uint8))
 
 
 if __name__ == "__main__":

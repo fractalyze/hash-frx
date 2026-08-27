@@ -1,0 +1,96 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# The shipped rules, shared by both pad suites so neither hand-copies them.
+# Deps `:pad` alone and pulls no frx, so the frx-free suite can take it.
+py_library(
+    name = "rules",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "rules.py",
+    ],
+    deps = ["//hash_frx/extension:pad"],
+)
+
+# Vectors read off the seven hand-written `_padding_tail` functions before they
+# were deleted, plus one case per `PadRule` axis. Deps `:pad` rather than `:md`,
+# which is the point of the split: the padding is host arithmetic, so this test
+# needs neither frx nor a device, and taking them would have cost 536 MB of
+# runfiles — above the GPU-plugin figure `defs.bzl` calls too expensive to
+# attach reflexively.
+py_test(
+    name = "pad_test",
+    size = "small",
+    srcs = ["pad_test.py"],
+    deps = [
+        ":rules",
+        "//hash_frx/extension:pad",
+        requirement("absl_py"),
+        requirement("numpy"),
+    ],
+)
+
+# `nblocks` under a tracer. Split from `pad_test` rather than folded into it:
+# `pad.py` pulls no frx and `pad_test` is what proves a rule can be read and
+# tested without a backend, so only the cases that genuinely need one pay for
+# it. This one does need one — it calls `frx.jit`, so it takes the plugin deps
+# too, and on the GPU leg those are what make `cuda` a known backend at all.
+py_test(
+    name = "pad_traced_test",
+    size = "small",
+    srcs = ["pad_traced_test.py"],
+    deps = [
+        ":rules",
+        "//hash_frx/extension:md",
+        "//hash_frx/extension:pad",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# The schedules against a recording fake rather than against a family. Deps
+# `:sponge` alone: `absorb_squeeze` emits no array op — every one reaches it
+# through the caller's callbacks — so its rules are checked over plain Python
+# values, and only the two frx helpers need a backend.
+py_test(
+    name = "sponge_test",
+    size = "small",
+    srcs = ["sponge_test.py"],
+    deps = [
+        "//hash_frx/extension:sponge",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# The tree schedule over plain Python values. Deps `:tree` alone and nothing
+# else — no frx, no numpy, no backend: the module emits no array op, so its
+# rules are checkable without one. The central case holds the bottom-up pairing
+# equal to an independent model of the spec's largest-power-of-two recursion.
+py_test(
+    name = "tree_test",
+    size = "small",
+    srcs = ["tree_test.py"],
+    deps = [
+        "//hash_frx/extension:tree",
+        requirement("absl_py"),
+    ],
+)
+
+# Calls `frx.jit` over a traced `live`, so it takes the plugin deps for the same
+# reason `pad_traced_test` does.
+py_test(
+    name = "md_test",
+    size = "small",
+    srcs = ["md_test.py"],
+    deps = [
+        "//hash_frx/extension:md",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

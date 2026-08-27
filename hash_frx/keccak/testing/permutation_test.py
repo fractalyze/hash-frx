@@ -24,7 +24,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
-from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.keccak import permutation as permutation_mod
 from hash_frx.keccak.permutation import (
     KECCAK_F_MARKER,
@@ -178,10 +178,13 @@ def _routing(dedicated: bool) -> Iterator[None]:
     """Pin which marker `KeccakF1600` picks, whatever this leg would pick.
 
     Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`,
-    because the pin is only half of it — the emitters are GPU-only, so on the CPU
-    leg patching the pin alone leaves both arms on the generic marker and the
-    dedicated assertions below become vacuous. These cases are all read off the
-    jaxpr or the lowered module, so neither arm needs the emitter to exist.
+    because the pin is only half of it: on a leg absent from
+    `_EMITTER_BACKENDS`, patching the pin alone leaves both arms on the generic
+    marker and the dedicated assertions below become vacuous. Both legs carry the
+    Keccak arms today, so that is currently unreachable here — but the patch
+    holds whatever the tuple says, which is the point of patching the decision
+    rather than one of its inputs. These cases are all read off the jaxpr or the
+    lowered module, so neither arm needs the emitter to exist.
 
     The decision is read in `__init__`, so this has to wrap construction rather
     than just the call.
@@ -251,7 +254,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # what says the marker claims nothing an emitter could read.
         with _generic_emitter():
             k = KeccakF1600()
-            self.assertFalse(k.has_dedicated_fusion)
+            self.assertIs(k.fusion_path, FusionPath.GENERIC)
             self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
             eqn = _composite(k.permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
@@ -306,7 +309,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         self.assertNotEqual(generic, dedicated)
         self.assertNotEqual(hash(generic), hash(dedicated))
         # Which of the two an unpatched construction equals is this leg's
-        # question, not a constant — the emitters are GPU-only.
+        # question, not a constant — the pin and the tuple both move.
         expected = dedicated if _HAS_KECCAK_EMITTER else generic
         self.assertEqual(expected, KeccakF1600())
 
@@ -328,12 +331,15 @@ class EmitterGateTest(absltest.TestCase):
             "premise: this asserts the backend half is what decides, so the pin "
             "half has to be True for the case to mean anything",
         )
-        self.assertEqual(KeccakF1600().has_dedicated_fusion, _HAS_KECCAK_EMITTER)
+        self.assertIs(
+            KeccakF1600().fusion_path,
+            FusionPath.DEDICATED if _HAS_KECCAK_EMITTER else FusionPath.GENERIC,
+        )
 
     def test_a_backend_without_an_arm_takes_the_generic_marker(self) -> None:
         with mock.patch.object(permutation_mod, "_EMITTER_BACKENDS", ("nonesuch",)):
             perm = KeccakF1600()
-        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
         self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
 
     def test_the_pin_still_vetoes_a_backend_that_has_the_arm(self) -> None:
@@ -344,14 +350,14 @@ class EmitterGateTest(absltest.TestCase):
             mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False),
         ):
             perm = KeccakF1600()
-        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
 
     def test_both_halves_true_is_what_routes_dedicated(self) -> None:
         with mock.patch.object(
             permutation_mod, "_EMITTER_BACKENDS", (frx.default_backend(),)
         ):
             perm = KeccakF1600()
-        self.assertTrue(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.DEDICATED)
         self.assertEqual(
             perm.fused_region_marker, (KECCAK_F_MARKER, KECCAK_F_MARKER_VERSION)
         )

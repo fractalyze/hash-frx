@@ -1,0 +1,24 @@
+load("@hash_frx_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+# Byte-oriented BLAKE2s (RFC 7693): BLAKE2b's 32-bit sibling at
+# native uint32 — the `digest` batch hash behind the `hash_frx.digest.blake2s`
+# marker plus the `Blake2s` ByteHash. A standalone hash,
+# not a Permutation; no zk_dtypes / x64 dependency.
+py_library(
+    name = "blake2s",
+    srcs = [
+        "__init__.py",
+        "blake2s.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//hash_frx:blake2_params",
+        "//hash_frx:byte_hash",
+        "//hash_frx:fusion",
+        "//hash_frx:word",
+        "//hash_frx/extension:pad",
+        requirement("frx"),
+        requirement("numpy"),
+    ],
+)

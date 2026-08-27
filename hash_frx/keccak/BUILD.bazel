@@ -18,6 +18,8 @@ py_library(
         "//hash_frx:fusion",
         "//hash_frx:permutation",
         "//hash_frx:word",
+        "//hash_frx/extension:pad",
+        "//hash_frx/extension:sponge",
         requirement("frx"),
         requirement("numpy"),
     ],

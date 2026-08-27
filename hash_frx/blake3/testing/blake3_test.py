@@ -27,37 +27,39 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.blake3.blake3 import (
-    BLAKE3_MARKER,
-    BLAKE3_PARENT_MARKER,
+from hash_frx.blake3.compress import (
+    CHUNK_START,
+    DERIVE_KEY_CONTEXT,
+    DERIVE_KEY_MATERIAL,
+    KEYED_HASH,
+)
+from hash_frx.blake3.modes import (
     BLOCK_LEN,
     CHUNK_LEN,
     DIGEST_LEN,
     Mode,
     chaining_value,
     chunk_output,
-    derive_key,
     derive_key_mode,
-    digest,
     hash_mode,
-    keyed_digest,
     keyed_mode,
-    keyed_xof,
-    non_root_digest,
-    parent_digest,
     parent_output,
     root_words,
-    tree_hash,
     tree_output,
     unmarked_hash,
     unmarked_parent_hash,
-    xof,
 )
-from hash_frx.blake3.compress import (
-    CHUNK_START,
-    DERIVE_KEY_CONTEXT,
-    DERIVE_KEY_MATERIAL,
-    KEYED_HASH,
+from hash_frx.blake3.rows import (
+    BLAKE3_MARKER,
+    BLAKE3_PARENT_MARKER,
+    derive_key,
+    digest,
+    keyed_digest,
+    keyed_xof,
+    non_root_digest,
+    parent_digest,
+    tree_hash,
+    xof,
 )
 from hash_frx.blake3.testing import reference as ref
 from hash_frx.blake3.testing.emitter import HAS_BLAKE3_EMITTER
@@ -85,7 +87,7 @@ from hash_frx.word import split, unpack_le
 _U32 = np.uint32
 
 
-# `blake3.unmarked_hash` under each mode — the same implementation the shipped
+# `modes.unmarked_hash` under each mode — the same implementation the shipped
 # entry points run, without the marker around it. Read directly where a case
 # wants the body rather than the composite, and stood in for the shipped names by
 # the wrappers below on a leg that cannot afford to compile it.
@@ -206,9 +208,9 @@ def _composite(fn: object, *args: frx.Array, marker: str = BLAKE3_MARKER) -> _Co
     artifact the XLA emitter reads — operand order included, which is the half of
     the ABI a name and a version do not carry.
 
-    The name is matched with its quotes, so `hash_frx.blake3` does not also
-    match `hash_frx.blake3_parent` — the two are separate markers precisely so
-    that a recognizer of one cannot claim the other.
+    The name is matched with its quotes, so `hash_frx.compress.blake3` does not
+    also match `hash_frx.compress.blake3_parent` — the two are separate markers
+    precisely so that a recognizer of one cannot claim the other.
     """
     text = frx.jit(fn).lower(*args).as_text()
     lines = [ln for ln in text.splitlines() if f'stablehlo.composite "{marker}"' in ln]
@@ -799,7 +801,7 @@ _DECOMPOSITION_LENGTHS = (0, 1, BLOCK_LEN, 129) + (
 
 
 class MarkerTest(parameterized.TestCase):
-    """The `hash_frx.blake3` marker: that it is emitted, and what it carries.
+    """The `hash_frx.digest.blake3` marker: that it is emitted, and what it carries.
 
     A marker is a wire ABI shared with the Fractalyze XLA emitter, and losing it
     is silent — an unrecognized or absent marker inlines and computes the same
@@ -1063,7 +1065,7 @@ class ParentDigestTest(absltest.TestCase):
     def test_it_does_not_ride_the_message_marker(self) -> None:
         # The load-bearing case, and the reason this is a name rather than an
         # attribute. A recognizer matches by name and ignores attributes it does
-        # not know, so a parent riding `hash_frx.blake3` would be claimed by any
+        # not know, so a parent riding `hash_frx.digest.blake3` would be claimed by any
         # shipped message emitter and silently hashed as a 64-byte message —
         # observed doing exactly that on frx 0.10.2.dev20260813075049. Under its
         # own name an emitter that has not learned it simply inlines the

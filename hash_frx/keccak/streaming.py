@@ -32,6 +32,11 @@ schedule: `permute` is the marked region and stays straight-line, while the
 glue around it lowers to ordinary `gather`/`dynamic_slice` exactly as
 `sha256_stream_absorb` does.
 
+**A block-aligned caller need not pay for the offset at all.**
+`ShakeBlockSqueeze`, reached from `ShakeAbsorb.finalize_blocks`, drops the field
+rather than leaving it at zero. What that saves, and why the field cannot simply
+be pinned to zero in place, is on the class.
+
 **The upper bound costs permutations, and that is the price of a traced
 counter.** An absorb runs the fold `ceil((rate - 1 + L) / rate)` times where a
 known pending length would need `(pending + L) // rate`, and a squeeze of `n`
@@ -51,38 +56,37 @@ import frx.numpy as fnp
 from frx import Array, lax
 from frx.tree_util import register_dataclass
 
+from hash_frx.extension.sponge import squeeze_blocks as _blocks_for_bytes
 from hash_frx.keccak.byte_hashes import (
     SHAKE128_RATE,
     SHAKE256_RATE,
     SHAKE_SUFFIX,
 )
 from hash_frx.keccak.permutation import KeccakF1600
+from hash_frx.keccak.sponge import _xor_into_rate, validate_sponge_params
 from hash_frx.word import BYTES_PER_WORD, pack_le, unpack_le
 
 _PERMUTE = KeccakF1600().permute
 _STATE_WIDTH = KeccakF1600.width
 
 
-def _blocks_of(nbytes: int, rate: int) -> int:
-    """Blocks a `nbytes` run spans, rounded up."""
-    return -(-nbytes // rate)
-
-
-def _xor_block(state: Array, block: Array) -> Array:
-    """XOR a packed rate block into the state prefix — the unbatched sibling of
-    `sponge._xor_into_rate`, kept here because the streaming state is one row."""
-    n = block.shape[0]
-    return fnp.concatenate([state[:n] ^ block, state[n:]])
-
-
 def _absorb_block(state: Array, block_bytes: Array) -> Array:
-    """XOR one rate block of bytes into the state and permute."""
-    return _PERMUTE(_xor_block(state, pack_le(block_bytes)))
+    """XOR one rate block of bytes into the state and permute.
+
+    `sponge._xor_into_rate` is indexed on the trailing axis, so the unbatched
+    state this carries and the `[B, 50]` one the one-shot sponge absorbs into go
+    through one spelling of the slice-and-concatenate."""
+    return _PERMUTE(_xor_into_rate(state, pack_le(block_bytes)))
+
+
+def _rate_words(state: Array, rate: int) -> Array:
+    """The state's rate prefix, still packed — one squeeze block as words."""
+    return state[: rate // BYTES_PER_WORD]
 
 
 def _rate_bytes(state: Array, rate: int) -> Array:
     """The state's rate prefix as bytes — one squeeze block."""
-    return unpack_le(state[: rate // BYTES_PER_WORD])
+    return unpack_le(_rate_words(state, rate))
 
 
 @partial(
@@ -136,6 +140,9 @@ class ShakeAbsorb:
         # One pass to the upper bound. `active` is `min_blocks` or `max_blocks`
         # and nothing else, and the `min_blocks` answer is the state partway
         # through this chain — so snapshot it rather than folding twice.
+        # `extension.md.MdStream.absorb` runs the same schedule over a
+        # compression function and reaches the same result a different way
+        # (chain the prefix, then continue); the two are worth reading together.
         state = self.state
         lower = state
         for i in range(max_blocks):
@@ -156,8 +163,8 @@ class ShakeAbsorb:
         )
         return ShakeAbsorb(merged, pending, tail_len, rate, self.suffix)
 
-    def finalize(self) -> "ShakeSqueeze":
-        """Pad, absorb the final block, and hand over to the squeezing half.
+    def _padded_state(self) -> Array:
+        """The state after FIPS 202's pad10*1 and the final absorb.
 
         The pad position is traced — it is the pending length — so `suffix` is
         placed by comparison rather than by index, and the `0x80` terminator is
@@ -172,7 +179,25 @@ class ShakeAbsorb:
         block = block ^ fnp.where(
             slot == rate - 1, fnp.uint8(0x80), fnp.uint8(0)
         ).astype(fnp.uint8)
-        return ShakeSqueeze(_absorb_block(self.state, block), fnp.int32(0), rate)
+        return _absorb_block(self.state, block)
+
+    def finalize(self) -> "ShakeSqueeze":
+        """Pad, absorb the final block, and hand over to the squeezing half.
+
+        Returns the general squeezer, which takes arbitrary byte counts. A
+        caller that only ever takes whole rate blocks — a rejection sampler —
+        wants `finalize_blocks` instead, for the reasons on `ShakeBlockSqueeze`.
+        """
+        return self.finalize_blocks().widen()
+
+    def finalize_blocks(self) -> "ShakeBlockSqueeze":
+        """`finalize`, handing back the whole-block squeezer.
+
+        The narrow type is reachable only from here, and that is the point —
+        see `ShakeBlockSqueeze` for why that is a constraint rather than an
+        accident of the API.
+        """
+        return ShakeBlockSqueeze(self._padded_state(), self.rate)
 
 
 @partial(
@@ -203,17 +228,26 @@ class ShakeSqueeze:
             raise ValueError(f"nbytes ({nbytes}) must be >= 1")
         rate = self.rate
 
-        # `offset + nbytes` spans two static block counts at most, so emit to the
-        # upper one and slice. The chain is walked once and every prefix kept,
-        # because the state to carry forward is one of those prefixes.
-        upper = _blocks_of(rate - 1 + nbytes, rate)
+        # `offset + nbytes` spans two static block counts at most, so emit the
+        # BYTES to the upper one and slice. The permutation count is smaller:
+        # block i's bytes need i permutations (block 0 is the live prefix), and
+        # the carried state can only be `chain[k]` for
+        # k <= (offset + nbytes) // rate <= (rate - 1 + nbytes) // rate — so a
+        # permute after the last block is reachable only when `rate - 1 +
+        # nbytes` divides evenly (nbytes ≡ 1 mod rate). Emitting the ceil
+        # unconditionally ran one dead permutation on every other length —
+        # notably the whole-block squeeze a rejection sampler loops on — that
+        # the traced select kept XLA from removing.
+        upper = _blocks_for_bytes(rate - 1 + nbytes, rate)
+        nperms = (rate - 1 + nbytes) // rate
         state = self.state
         chain = [state]
         blocks = []
-        for _ in range(upper):
+        for i in range(upper):
             blocks.append(_rate_bytes(state, rate))
-            state = _PERMUTE(state)
-            chain.append(state)
+            if i < nperms:
+                state = _PERMUTE(state)
+                chain.append(state)
 
         stream = blocks[0] if len(blocks) == 1 else fnp.concatenate(blocks)
         out = lax.dynamic_slice(stream, (self.offset,), (nbytes,))
@@ -226,8 +260,99 @@ class ShakeSqueeze:
         return ShakeSqueeze(carried, end % rate, rate), out
 
 
+@partial(
+    register_dataclass,
+    data_fields=["state"],
+    meta_fields=["rate"],
+)
+@dataclass(frozen=True)
+class ShakeBlockSqueeze:
+    """The squeezing half for a caller that only takes WHOLE rate blocks.
+
+    Same schedule as `ShakeSqueeze` with the offset removed, and removing it is
+    the whole point rather than a simplification. `ShakeSqueeze` carries how much
+    of the live block a previous call consumed, and because that counter is
+    traced it costs two things per call that a block-aligned caller pays for
+    nothing:
+
+    - the emitted stream runs to the upper block count and the output is
+      `dynamic_slice`d out of it, so a whole-block squeeze extracts and
+      concatenates two rate blocks to return one;
+    - the carried state is selected out of a chain rather than being the last
+      permute.
+
+    Measured at rate 168, the schedule around the permutation shrinks from 41
+    jaxpr equations to 16 for a one-block squeeze, and from 95 to 23 at four —
+    the gap widens with the block count because this collects words and unpacks
+    once where the general form unpacks per block. The lowered module also loses
+    the `dynamic_slice` and four `select`s. It does NOT
+    change the permutation count, which #218 already made minimal, and the
+    lowered op count moves ~2% because the permutation dominates it — the win is
+    in what a caller re-traces per shape and carries per iteration, not in the
+    kernel.
+
+    A rejection sampler is exactly the block-aligned caller: FIPS 204's
+    `RejNTTPoly` takes one rate block at a time. Its `lax.scan` carry is a
+    squeezer, so the offset is not merely unused there — it is in the carry, and
+    the select is what maintains it.
+
+    **Reachable only from `ShakeAbsorb.finalize_blocks`.** The type's soundness
+    is that the offset is zero, which holds by construction after a pad-and-
+    absorb and is uncheckable once traced — so there is no narrowing conversion
+    from `ShakeSqueeze`, only `widen` in the other direction. That is the same
+    move the absorb/squeeze split makes one level up: a type that cannot express
+    the illegal call is cheaper than one that rejects it at runtime.
+    """
+
+    state: Array  # uint32[50]
+    rate: int
+
+    def squeeze_blocks(self, nblocks: int) -> tuple["ShakeBlockSqueeze", Array]:
+        """Take `nblocks` (static) whole blocks: `(next, uint8[nblocks * rate])`.
+
+        The unit is BLOCKS, unlike `ShakeSqueeze.squeeze`'s bytes, and the name
+        says so — two squeezers whose methods differed only in what the integer
+        meant would be a trap worth more than the brevity.
+
+        `nblocks` blocks cost `nblocks` permutations: the state's rate prefix is
+        block 0, and the permutation after the last block is what leaves the
+        carry pointing at the next one.
+        """
+        if nblocks < 1:
+            raise ValueError(f"nblocks ({nblocks}) must be >= 1")
+        state = self.state
+        words = []
+        for _ in range(nblocks):
+            words.append(_rate_words(state, self.rate))
+            state = _PERMUTE(state)
+        # Collected as words and unpacked once rather than per block, which is
+        # the rule `keccak.sponge._absorb_squeeze` states for the same reason:
+        # `unpack_le` is 14 equations however wide its operand, so calling it in
+        # the loop multiplies them by `nblocks` for identical bytes.
+        out = unpack_le(words[0] if nblocks == 1 else fnp.concatenate(words))
+        return ShakeBlockSqueeze(state, self.rate), out
+
+    def widen(self) -> ShakeSqueeze:
+        """The same position as a general squeezer, for arbitrary byte counts.
+
+        One direction only. This state is block-aligned so the offset it gains is
+        zero; the reverse needs an offset that is traced, and a narrowing that
+        cannot check its own precondition is one that pushes a silent wrong
+        answer onto the caller.
+
+        Not free: the offset it gains is zero but TRACED, so the general
+        schedule re-derives its block count from `rate - 1 + nbytes` and the
+        `dynamic_slice` and select chain come back. At rate 168 a 37-byte tail
+        through here costs one permutation the same read off a static offset
+        would not. That is the price of one escape hatch rather than a second
+        byte-taking method, and it is worth paying only for a tail.
+        """
+        return ShakeSqueeze(self.state, fnp.int32(0), self.rate)
+
+
 def shake_init(rate: int, suffix: int = SHAKE_SUFFIX) -> ShakeAbsorb:
     """A fresh incremental sponge at `rate` bytes with `suffix` domain bits."""
+    validate_sponge_params(rate, suffix)
     return ShakeAbsorb(
         state=fnp.zeros(_STATE_WIDTH, dtype=fnp.uint32),
         pending=fnp.zeros(rate, dtype=fnp.uint8),

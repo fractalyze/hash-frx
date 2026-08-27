@@ -26,7 +26,7 @@ from zk_dtypes import (
 )
 from zk_dtypes import koalabear_mont as G  # a distinct field, for dtype-guard tests
 
-from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
 from hash_frx.poseidon import sparse as sparse_mod
 from hash_frx.poseidon.params import SparsePoseidonParams
@@ -190,7 +190,7 @@ class SparsePoseidonPermuteShapeTest(absltest.TestCase):
         self.assertEqual(perm.width, _WIDTH)
         self.assertEqual(perm.dtype, F)
         # The shipped emitter routes the permute to the dedicated sparse marker.
-        self.assertTrue(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.DEDICATED)
 
     def test_permute_shape_and_vmap(self) -> None:
         perm = _dedicated_perm()
@@ -271,7 +271,7 @@ class SparsePoseidonEmitterRoutingTest(absltest.TestCase):
     def test_a_generic_backend_emits_the_generic_marker(self) -> None:
         with mock.patch.object(frx, "default_backend", lambda: "cpu"):
             perm = SparsePoseidon(_params())
-        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
         self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
 
 
@@ -282,7 +282,7 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         # no compile fails on an unknown composite; the normal-form body still fuses.
         # The dedicated (default) path is covered by SparsePoseidonDedicatedMarkerTest.
         perm = _generic_perm()
-        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
@@ -323,7 +323,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # Exactly the 6 ABI operands: the closed-over matrices must stay inline
         # in the decomposition (frx#218), never surface as leading operands.
         perm = _dedicated_perm()
-        self.assertTrue(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.DEDICATED)
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
@@ -404,7 +404,7 @@ class SparsePoseidonWideFieldTest(absltest.TestCase):
 
     def test_wide_matrix_takes_dedicated_marker(self) -> None:
         perm = _dedicated_perm(_wide_field_params())
-        self.assertTrue(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.DEDICATED)
         self.assertEqual(
             perm.fused_region_marker,
             (POSEIDON_SPARSE_MARKER, POSEIDON_SPARSE_MARKER_VERSION),
@@ -420,7 +420,7 @@ class SparsePoseidonWideFieldTest(absltest.TestCase):
         # `_rows_to_i64` builds an attribute (OverflowError past that point).
         with mock.patch.object(sparse_mod, "_WIDE_ATTR_EMITTER_AVAILABLE", False):
             perm = _dedicated_perm(_wide_field_params())
-        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
         self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
         state = _wide_fld(tuple(range(_WIDTH)))
         txt = frx.jit(perm.permute).lower(state).as_text()
