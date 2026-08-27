@@ -33,7 +33,19 @@ py_test(
     # Compile-heavy: the digest body splices twelve-round permutations per
     # 8-byte block plus the squeeze chain, and the KAT + differential sweeps
     # compile it once per (batch, length) aval.
+    #
+    # `timeout = "eternal"` on top of `large`, because the suite outgrew the
+    # 900 s that size carries. Measured on the CI executor: 380-407 s before
+    # Ascon-CXOF128 joined it, 740-790 s after — the third hash roughly doubled
+    # the sweeps and nothing re-sized the target. At 88 % of budget `main` is
+    # one slow worker from red, which is what it went when an unrelated branch
+    # invalidated this target's cache and forced a real run.
+    #
+    # Headroom rather than a trim: the added coverage is the 1089-row CXOF KAT
+    # and it is worth its seconds. If this has to come back down, the sweeps
+    # are the place to look, not the vectors.
     size = "large",
+    timeout = "eternal",
     srcs = ["ascon_test.py"],
     deps = [
         ":reference",
