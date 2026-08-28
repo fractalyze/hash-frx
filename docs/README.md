@@ -165,22 +165,23 @@ pin instead of leading it. The other operation names the relayering adds
 consume them.
 
 The Merkle–Damgård operation names are one per **wire-ABI schema**, not one per
-family. There are three, and a fourth schema that stays primitive-named:
+family. There are four, and a fifth schema that stays primitive-named:
 
 | name | operands | the message is |
 | --- | --- | --- |
 | `hash_frx.digest` | `[h0, consts…, blocks W[…, nblocks, w]]` | already padded and packed by the producer |
 | `hash_frx.digest_bytes` | `[h0, consts…, msg u8[…, L], tail u8[P]]` | unpadded: the padding runs inside the region, and `L` is a shape |
 | `hash_frx.stream_finalize` | `[h, consts…, pending u8[block], counts s32[2], extras u8[…, E]]` | a stream POSITION: `pending[:counts[0]] ‖ extras` |
+| `hash_frx.stream_absorb` | `[h, consts…, pending u8[block], counts s32[2], data u8[L]]` | a stream POSITION continued: `pending[:counts[0]] ‖ data` |
 
-The fourth is the **runtime-length** raw-bytes form, which carries the length as
+The fifth is the **runtime-length** raw-bytes form, which carries the length as
 a scalar operand and synthesizes its padding from it — so its block count is a
 runtime value rather than a shape property. `hash_frx.digest.sha256_bytes` and
 `hash_frx.digest.grostl256` are both in it and both keep their per-family names,
 the SHA-256 one because its recognizer dispatches on operands rather than on the
 name, which is what lets two ABIs ride under it.
 
-Note `digest_bytes` and that fourth schema are both "raw bytes" — what separates
+Note `digest_bytes` and that fifth schema are both "raw bytes" — what separates
 them is **static versus runtime length**, not padded versus unpadded. Wiring a
 runtime-length family behind `digest_bytes` would hand it an envelope with no
 length operand.
@@ -191,6 +192,20 @@ claims `total_len + E`, the whole stream, where the fold covers only
 `pending_len + E`: Merkle–Damgård's resume property, and the reason a resumed
 digest equals a one-shot one over the same bytes. `markers.py` carries why the
 position rides as an operand at all, and why the name is flat.
+
+`stream_absorb` shares that runtime `counts` operand and is the only MD schema
+whose output is the **state** rather than a digest — three leaves,
+`(h, pending u8[block], counts s32[2])`, which is what `MarkerKind.STREAM`
+names. It pads nothing and folds only COMPLETE blocks, so it needs no
+strengthening field; `counts` is what it advances. Unbatched on both sides:
+`data` is rank-1 and the state leaves are rank-1 in and out.
+
+The position is an operand for a sharper reason here than on the finalize. The
+live block count is `(counts[0] + L) // block`, so the decomposition emits BOTH
+static candidates and selects — and the number of emitted kernels therefore
+tracks `L % block` (6 when `L // block == (block - 1 + L) // block`, 9 when it
+does not) rather than the hashing. An emitter handed the position runs the one
+count the position implies, which collapses the split rather than optimizing it.
 
 `E` is bounded above at `block_size - reserve` — `pending_len` is runtime data,
 so only a tail that fits the two-block layout at *every* reachable offset is

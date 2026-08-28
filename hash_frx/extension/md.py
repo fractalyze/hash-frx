@@ -23,6 +23,8 @@ from frx import Array
 from hash_frx.extension.pad import PadRule, Trailer
 from hash_frx.fusion import fused_region
 from hash_frx.markers import (
+    STREAM_ABSORB_MARKER,
+    STREAM_ABSORB_MARKER_VERSION,
     STREAM_FINALIZE_MARKER,
     STREAM_FINALIZE_MARKER_VERSION,
 )
@@ -416,62 +418,103 @@ class MdStream:
         """
         block = self.pad.block_size
         length = data.shape[0]
-        pl = state.pending_len
-        combined_src = fnp.concatenate([state.pending, data.astype(fnp.uint8)])
-        new_len = pl + fnp.int32(length)
-        active_blocks = new_len // block
-        max_blocks = (block - 1 + length) // block  # static upper bound
 
-        # Drop the pending buffer's invalid gap [pending_len:block] from the
-        # stream: for stream position j the source index is j while
-        # j < pending_len, and shifted past the gap after that.
-        total_slots = (max_blocks + 1) * block
-        pos = fnp.arange(total_slots, dtype=fnp.int32)
-        src_idx = pos + fnp.where(pos < pl, fnp.int32(0), block - pl)
-        src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
-        combined = combined_src[src_idx]  # valid prefix [0:new_len]
+        def decomposition(
+            h: Array,
+            constants: Array,
+            pending: Array,
+            counts: Array,
+            data: Array,
+            **_attrs: object,
+        ) -> Any:
+            pl = counts[0]
+            combined_src = fnp.concatenate([pending, data.astype(fnp.uint8)])
+            new_len = pl + fnp.int32(length)
+            active_blocks = new_len // block
+            max_blocks = (block - 1 + length) // block  # static upper bound
 
-        # The live block count depends on pending_len by AT MOST one — (pl + L)
-        # // block spans {L // block, (block - 1 + L) // block} — so both static
-        # candidates are computed and selected between. The discarded one is the
-        # only thing that ever sees the gap-shifted junk tail block.
+            # Drop the pending buffer's invalid gap [pending_len:block] from the
+            # stream: for stream position j the source index is j while
+            # j < pending_len, and shifted past the gap after that.
+            total_slots = (max_blocks + 1) * block
+            pos = fnp.arange(total_slots, dtype=fnp.int32)
+            src_idx = pos + fnp.where(pos < pl, fnp.int32(0), block - pl)
+            src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
+            combined = combined_src[src_idx]  # valid prefix [0:new_len]
+
+            # The live block count depends on pending_len by AT MOST one — (pl + L)
+            # // block spans {L // block, (block - 1 + L) // block} — so both static
+            # candidates are computed and selected between. The discarded one is the
+            # only thing that ever sees the gap-shifted junk tail block.
+            #
+            # This select is what the marker exists to remove: which candidate is
+            # live depends on `counts[0]`, which is runtime data, so the count of
+            # emitted kernels tracks `L % block` rather than the hashing. An
+            # emitter handed the position as an operand runs the one count the
+            # position implies.
+            #
+            # The two candidates share a PREFIX, which is what keeps this from
+            # costing two full passes: the low one is the chain over the first
+            # `min_blocks`, and the high one continues from it over the single block
+            # that separates them. That composition is just Merkle-Damgard's resume
+            # property, the same one that lets a stream pick up from a midstate.
+            # Running both from `h` instead costs min + max compressions — 2N - 1,
+            # measured at 31 for a 1000-byte absorb where 16 suffice.
+            #
+            # `keccak.streaming.ShakeAbsorb.absorb` has done this since it was
+            # written, snapshotting the carry mid-fold rather than folding twice.
+            # The MD copies did not, and this one was re-derived rather than read
+            # off it — the two absorbs are close enough that neither should be
+            # changed without looking at the other.
+            min_blocks = length // block
+            h_new = h
+            if max_blocks:
+                words = self.block_to_words(
+                    combined[: max_blocks * block].reshape(1, max_blocks * block)
+                )
+                if min_blocks:
+                    h_new = self.deserialize(
+                        self.chain(h_new, words[:, :min_blocks], constants)
+                    )[0]
+                if max_blocks > min_blocks:
+                    h_hi = self.deserialize(
+                        self.chain(h_new, words[:, min_blocks:], constants)
+                    )[0]
+                    h_new = fnp.where(active_blocks == max_blocks, h_hi, h_new)
+
+            tail_len = new_len - active_blocks * block
+            tail = frx.lax.dynamic_slice(combined, (active_blocks * block,), (block,))
+            slot = fnp.arange(block, dtype=fnp.int32)
+            new_pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
+            # One fused counter update: [pending_len', total'] = [tail_len, total+L].
+            new_counts = fnp.stack([tail_len, counts[1] + fnp.int32(length)])
+            return self.make_state(h_new, new_pending, new_counts)
+
+        # The whole absorb as ONE region, and the first marked region here whose
+        # output is the STATE rather than a digest — three leaves, which is what
+        # `markers.MarkerKind.STREAM` names.
         #
-        # The two candidates share a PREFIX, which is what keeps this from
-        # costing two full passes: the low one is the chain over the first
-        # `min_blocks`, and the high one continues from it over the single block
-        # that separates them. That composition is just Merkle-Damgard's resume
-        # property, the same one that lets a stream pick up from a midstate.
-        # Running both from `h` instead costs min + max compressions — 2N - 1,
-        # measured at 31 for a 1000-byte absorb where 16 suffice.
+        # `constants` is threaded down rather than captured, for the reason
+        # `md_chain` and the finalize region both state: a captured table is
+        # lifted into an unnamed operand AHEAD of the declared ones and lands at
+        # position 0, so the region would advertise one table and fold another
+        # with nothing holding them equal.
         #
-        # `keccak.streaming.ShakeAbsorb.absorb` has done this since it was
-        # written, snapshotting the carry mid-fold rather than folding twice.
-        # The MD copies did not, and this one was re-derived rather than read
-        # off it — the two absorbs are close enough that neither should be
-        # changed without looking at the other.
-        min_blocks = length // block
-        h_new = state.h
-        if max_blocks:
-            words = self.block_to_words(
-                combined[: max_blocks * block].reshape(1, max_blocks * block)
-            )
-            if min_blocks:
-                h_new = self.deserialize(
-                    self.chain(h_new, words[:, :min_blocks], self.constants)
-                )[0]
-            if max_blocks > min_blocks:
-                h_hi = self.deserialize(
-                    self.chain(h_new, words[:, min_blocks:], self.constants)
-                )[0]
-                h_new = fnp.where(active_blocks == max_blocks, h_hi, h_new)
-
-        tail_len = new_len - active_blocks * block
-        tail = frx.lax.dynamic_slice(combined, (active_blocks * block,), (block,))
-        slot = fnp.arange(block, dtype=fnp.int32)
-        pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
-        # One fused counter update: [pending_len', total'] = [tail_len, total+L].
-        counts = fnp.stack([tail_len, state.total_len + fnp.int32(length)])
-        return self.make_state(h_new, pending, counts)
+        # Emitted whether or not the pinned plugin knows the name — an
+        # unrecognized marker only inlines, so being early costs the fusion and
+        # nothing else. Nothing gates it, for the reason the finalize region
+        # gives: this marker decides nothing about how anything ELSE lowers.
+        return fused_region(
+            decomposition,
+            state.h,
+            self.constants,
+            state.pending,
+            state.counts,
+            data,
+            name=STREAM_ABSORB_MARKER,
+            version=STREAM_ABSORB_MARKER_VERSION,
+            primitive=self.primitive,
+        )
 
     def finalize(self, state: _Midstate, extras: Array) -> Array:
         """`H(absorbed ‖ extras[b])` for each row of `extras` (uint8 [B, E], E

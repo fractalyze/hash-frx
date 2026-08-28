@@ -15,7 +15,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
-from hash_frx.markers import STREAM_FINALIZE_MARKER
+from hash_frx.markers import STREAM_ABSORB_MARKER, STREAM_FINALIZE_MARKER
 from hash_frx.sha256 import sha256
 from hash_frx.sha256.sha256 import (
     Sha256State,
@@ -266,6 +266,75 @@ class FinalizeRoutedTest(absltest.TestCase):
         self.assertLen(
             routed, 1, f"stream_finalize was not routed in a scan:\n{compiled[:2000]}"
         )
+
+
+class AbsorbMarkerTest(parameterized.TestCase):
+    """The absorb is ONE marked region, for every MD family.
+
+    `FinalizeMarkerTest`'s sibling on the other half of a transcript hop, and
+    the same division of labour: this asserts what reaches the wire, and a
+    routed test asserts what the pinned plugin does with it. There is no absorb
+    routed test yet — the pinned plugin does not recognize the name, so the
+    region inlines and computes identical bytes, which is the designed
+    behaviour for a marker that ships ahead of its emitter.
+
+    Byte-neutrality is not re-asserted here: every absorb in this file already
+    goes through the marked region, so `Sha256StreamTest` above IS the
+    evidence, against a one-shot `hashlib`.
+
+    Both families, for `FinalizeMarkerTest`'s reason — SHA-512's inner marker is
+    the family-less `hash_frx.digest`, so `primitive` is its only discriminator
+    and a mis-threaded attribute shows up here and nowhere else.
+    """
+
+    @parameterized.named_parameters(
+        ("sha256", sha256, "sha256", 64),
+        ("sha512", sha512, "sha512", 128),
+    )
+    def test_the_absorb_is_one_region_naming_its_primitive(
+        self, family: object, primitive: str, block: int
+    ) -> None:
+        init = getattr(family, f"{primitive}_stream_init")
+        absorb = getattr(family, f"{primitive}_stream_absorb")
+        data = fnp.zeros(block + 36, dtype=fnp.uint8)
+        names = emitted_composites(lambda d: absorb(init(), d), data)
+        # The outer region comes first and does not swallow the inner chains —
+        # the whole list is pinned for `FinalizeMarkerTest`'s reason.
+        self.assertEqual(names[0], STREAM_ABSORB_MARKER)
+        self.assertTrue(
+            frx.jit(lambda d: absorb(init(), d))
+            .lower(data)
+            .as_text()
+            .count(f'primitive = "{primitive}"')
+        )
+
+    @parameterized.named_parameters(
+        ("sha256", sha256, "sha256", 64),
+        ("sha512", sha512, "sha512", 128),
+    )
+    def test_the_candidate_count_tracks_the_block_alignment(
+        self, family: object, primitive: str, block: int
+    ) -> None:
+        """The split this marker exists to remove, pinned while it is still here.
+
+        Which candidate is live depends on `pending_len`, which is runtime data,
+        so the decomposition emits both and selects — and the number of inner
+        chains therefore tracks `L % block` rather than the hashing. A routed
+        absorb runs the one count the position implies, so this is the
+        assertion that has to CHANGE when the emitter lands, which is the point
+        of stating it now.
+        """
+        init = getattr(family, f"{primitive}_stream_init")
+        absorb = getattr(family, f"{primitive}_stream_absorb")
+        for length in (0, 1, block, block + 36, 2 * block, 1000):
+            with self.subTest(length=length):
+                min_blocks = length // block
+                max_blocks = (block - 1 + length) // block
+                chains = (min_blocks > 0) + (max_blocks > min_blocks)
+                names = emitted_composites(
+                    lambda d: absorb(init(), d), fnp.zeros(length, dtype=fnp.uint8)
+                )
+                self.assertLen(names, 1 + chains)
 
 
 if __name__ == "__main__":
