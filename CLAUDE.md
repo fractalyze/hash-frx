@@ -40,3 +40,22 @@ rules every change must respect.
   the right bytes, so only the GPU leg catches it. What the unit is, which
   markers exist, and how a body is held to the rule is stated once in the
   [fusion contract](docs/README.md#the-fusion-contract).
+
+  **The unit comes from a *recognized* marker, never from the fallback.** A bare
+  `zorch.fused_region` carries no live-width operand, and the rewriter declines
+  those on purpose, so it inlines and ordinary fusion materializes the
+  intermediates — a single permutation lands as ~70 fusions rather than one. So
+  `has_dedicated_fusion = False` means *no kernel*, not *a slower kernel*, and
+  the straight-line rule above is what keeps a body wrappable **for when** its
+  emitter ships, not something that buys a unit on its own.
+
+  **Reachable is two questions, not one**: does the pinned plugin carry the
+  emitter, and does the backend being compiled for. Each switch tracks the
+  `frx>=` floor in `pyproject.toml` for the first, and an explicit backend list
+  for the second — the Keccak arms are GPU-only, so a CPU build takes the
+  fallback no matter what the pin says. Routing to an emitter the backend lacks
+  is not free the way an unrecognized name is: a whole-hash marker traces the
+  entire chain into one composite, and where nothing honours it that trace is
+  spent for nothing. Byte equality holds throughout, so the only case that can
+  see any of this is one reading the *compiled* module for `kind=kCustom`, on a
+  leg that has the emitter.
