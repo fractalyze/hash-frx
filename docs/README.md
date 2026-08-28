@@ -205,6 +205,21 @@ layout `fused_region_spec` hands out. That is what keeps a construction from
 naming the permutation's constants, and what makes a whole absorb one region
 instead of a marked permute per block with the glue between them left outside.
 
+**A marked body needs a jit zone, and the coarser the marker the more it needs
+one.** `lax.composite` re-traces its decomposition on every emission, so what a
+marker costs to *emit* scales with what it wraps: a permutation's is one body, a
+whole sponge hash's is every block's permute and the glue between them. A caller
+inside its own trace pays that once; an eager caller pays it per call, which is
+where it stops being a rounding error — measured at 200-800x the unmarked path
+for a byte sponge, silently, with every published vector still passing. So each
+marked body sits behind `@partial(frx.jit, inline=True)` keyed on whatever fixes
+its shape, with the permutation itself among the static keys, since a marker is
+not a function of its permutation's parameters and two routings would otherwise
+collide in one cache. `inline=True` splices the cached jaxpr into the enclosing
+trace, so the emitted module is unchanged and the zone is invisible to a traced
+caller — which is what a test that counts *top-level* composite eqns will catch
+if it ever stops being true.
+
 The markers wait for the toolchain in two different ways, because the cost of
 being early is not the same for both. `hash_frx.digest.blake3`,
 `hash_frx.digest.sha256`, `hash_frx.digest.grostl256` and
