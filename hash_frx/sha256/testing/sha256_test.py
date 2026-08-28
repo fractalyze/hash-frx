@@ -314,11 +314,11 @@ class Sha224Test(parameterized.TestCase):
 class Sha224ByteHashTest(parameterized.TestCase):
     """The `Sha224` row against the seam, `hashlib`, and its parent."""
 
-    def test_impls_satisfy_the_seam(self) -> None:
-        h = Sha224()
-        self.assertIsInstance(h, ByteHash)
-        self.assertEqual(h.digest_size, 28)
-        self.assertIsInstance(h.fusion_path, FusionPath)
+    def test_digest_size_is_the_standards(self) -> None:
+        # The row sweep in `testing/row_conformance_test.py` holds every
+        # registered row to the protocol and to digest_size-matches-output;
+        # what it cannot know is that FIPS 180-4 fixes this one at 28.
+        self.assertEqual(Sha224().digest_size, 28)
 
     def test_fusion_path_is_inherited_from_the_parent(self) -> None:
         # An IV row over the same marker, so it routes wherever SHA-256 routes
@@ -334,17 +334,6 @@ class Sha224ByteHashTest(parameterized.TestCase):
         np.testing.assert_array_equal(
             got, oracle_digest(lambda b: hashlib.sha224(b).digest(), 28, msgs)
         )
-
-    def test_value_identity_is_by_type(self) -> None:
-        self.assertEqual(Sha224(), Sha224())
-        self.assertEqual(hash(Sha224()), hash(Sha224()))
-        # Never equal to its parent, or a consumer holding both would collide.
-        self.assertNotEqual(Sha224(), Sha256())
-
-    def test_zero_rows_digest_to_zero_rows(self) -> None:
-        got = np.asarray(Sha224().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-        self.assertEqual(got.shape, (0, 28))
-        self.assertEqual(got.dtype, np.uint8)
 
 
 class Sha256DigestRoutingTest(absltest.TestCase):
@@ -559,9 +548,10 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        got = np.asarray(sha256.Sha256().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-        self.assertEqual(got.shape, (0, 32))
-        self.assertEqual(got.dtype, np.uint8)
+        for hasher, size in ((sha256.Sha256(), 32), (Sha224(), 28)):
+            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+            self.assertEqual(got.shape, (0, size))
+            self.assertEqual(got.dtype, np.uint8)
 
 
 class MessageRankTest(absltest.TestCase):

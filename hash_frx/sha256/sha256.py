@@ -287,10 +287,6 @@ def _compress(state: Array, w16: Array, k: Array) -> Array:
 # broadcasts from.
 INITIAL_STATE = fnp.asarray(_H0)  # uint32 [8]
 
-# SHA-224's start (§5.3.2). Everything after it — padding, schedule, rounds, K —
-# is SHA-256's own, which is why the variant is a different `h0` OPERAND on the
-# shared blocks marker plus a caller-side truncation, and no new wire name
-# exists for it.
 INITIAL_STATE_224 = fnp.asarray(_H224)  # uint32 [8]
 
 
@@ -495,10 +491,14 @@ def sha224_digest(msg: ArrayLike) -> fnp.ndarray:
     serving SHA-256 serves this for free, which is what `h0`-as-operand buys.
     Traced or concrete, like `digest`.
 
-    Only the blocks form: `sha256_bytes` carries `INITIAL_STATE` as operand 0
-    of its own region, so the whole-message marker is SHA-256's by construction
-    and a variant cannot ride it. `digest`'s routing branch has no counterpart
-    here.
+    Only the blocks form, which is a limitation rather than a law.
+    `sha256_bytes` does pass `h0` as operand 0 of its region — it just reads
+    the module's `INITIAL_STATE` there rather than taking it from the caller,
+    so today the whole-message marker is SHA-256's and this rides the blocks
+    one. The cost is real: `digest` compiles once per capacity WIDTH wherever
+    the whole-message recognizer exists, and this compiles once per LENGTH.
+    Parameterizing that `h0` is what would close the gap, and whether the
+    recognizer accepts a non-standard operand 0 has not been established.
     """
     msg = device_message(msg)
     return sha256_merkle_damgard(INITIAL_STATE_224, _padded_words(msg))[:, :28]
@@ -628,10 +628,15 @@ class Sha256(DeviceRow):
 
 class Sha224(DeviceRow):
     """`ByteHash` for device SHA-224 — `sha224_digest`, i.e. the
-    `hash_frx.digest.sha256` marker from the §5.3.2 initial state with the
-    28-byte truncation outside. The fusion story is therefore `Sha256`'s, read
-    off the same module flags: this row routes wherever SHA-256 routes, for
-    free, because the marker it emits carries the same name."""
+    `hash_frx.digest.sha256` blocks marker from the §5.3.2 initial state with
+    the 28-byte truncation outside.
+
+    `fusion_path` is read off the same module flags as `Sha256`, so the two
+    rows report the same cell — but they do not emit the same marker where the
+    whole-message recognizer exists: the parent switches to `sha256_bytes` and
+    this stays on the blocks form (`sha224_digest` says why). A caller reading
+    `is_one_kernel` gets the same answer from both; a caller hashing many
+    distinct lengths does not get the same compile behaviour."""
 
     digest_size = 28
 

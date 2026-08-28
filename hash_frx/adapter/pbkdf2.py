@@ -33,7 +33,8 @@ midstates per-row, and the `*_merkle_damgard` markers take a batch-shared
 `hmac.py` keeps `block_size` off the `ByteHash` Protocol: midstate
 resumption means something only to this construction's hot loop, and a
 shape with one caller stays with the caller. The truncated variants
-(`Sha384` / `Sha512_256`) export the same machinery but carry no entry —
+(`Sha224`, `Sha384`, `Sha512_224`, `Sha512_256`) export the same machinery
+but carry no entry —
 their digest is a SLICE of the serialized state, which this profile shape
 does not model — and a hash without an entry runs the seam-generic HMAC
 body in the loop instead: identical bytes, four compressions per iteration

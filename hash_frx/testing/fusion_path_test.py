@@ -44,11 +44,12 @@ from hash_frx.poseidon2.testing.koalabear16 import koalabear16_perm
 from hash_frx.ripemd160 import ripemd160 as ripemd160_mod
 from hash_frx.ripemd160.ripemd160 import Ripemd160
 from hash_frx.sha256 import sha256 as sha256_mod
-from hash_frx.sha256.sha256 import Sha256
+from hash_frx.sha256.sha256 import Sha224, Sha256
 from hash_frx.sha512 import sha512 as sha512_mod
 from hash_frx.sha512.sha512 import (
     Sha384,
     Sha512,
+    Sha512_224,
     Sha512_256,
 )
 from hash_frx.sm3 import sm3 as sm3_mod
@@ -121,6 +122,7 @@ class DeviceCellTest(absltest.TestCase):
             (KeccakF1600(), _MATRIX[keccak_perm_mod]),
             (koalabear16_perm(), _MATRIX[poseidon2_mod]),
             (Sha256(), _MATRIX[sha256_mod]),
+            (Sha224(), _MATRIX[sha256_mod]),
             (Sha3_256(), _MATRIX[keccak_perm_mod]),
             (Blake3(), _MATRIX[blake3_rows]),
             (Grostl256(), _MATRIX[grostl_mod]),
@@ -128,9 +130,11 @@ class DeviceCellTest(absltest.TestCase):
             # an absent backend.
             (Vision(vision_mark32_params(binary_field_t5)), _MATRIX[vision_mod]),
             (Sha512(), _MATRIX[sha512_mod]),
-            # The truncated variants read the sha512 module's switch — one
-            # family row serves all three (the h0-as-operand design).
+            # The truncated variants read their own family's switch — one
+            # family row serves every variant of it (the h0-as-operand design),
+            # which is why SHA-224 sits with sha256 above rather than here.
             (Sha384(), _MATRIX[sha512_mod]),
+            (Sha512_224(), _MATRIX[sha512_mod]),
             (Sha512_256(), _MATRIX[sha512_mod]),
             (AsconHash256(), _MATRIX[ascon_mod]),
             (AsconXof128(32), _MATRIX[ascon_mod]),

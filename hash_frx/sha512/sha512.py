@@ -496,17 +496,6 @@ def sha384_digest(msg: ArrayLike) -> fnp.ndarray:
     return sha512_merkle_damgard(INITIAL_STATE_384, _padded_words(msg))[:, :48]
 
 
-def sha512_256_digest(msg: ArrayLike) -> fnp.ndarray:
-    """SHA-512/256 (FIPS 180-4 §6.7) of a batch: uint8 [B, L] -> [B, 32].
-
-    The §5.3.6 initial state on the same blocks marker, truncated to 256 bits
-    by the caller-side slice — `sha384_digest`'s arrangement at the other
-    §5.3 table. The 64-bit-word road to a length-extension-safe 256-bit
-    digest (truncation hides the final state, unlike SHA-512 itself)."""
-    msg = device_message(msg)
-    return sha512_merkle_damgard(INITIAL_STATE_512_256, _padded_words(msg))[:, :32]
-
-
 def sha512_224_digest(msg: ArrayLike) -> fnp.ndarray:
     """SHA-512/224 (FIPS 180-4 §6.7) of a batch: uint8 [B, L] -> [B, 28].
 
@@ -517,6 +506,17 @@ def sha512_224_digest(msg: ArrayLike) -> fnp.ndarray:
     message."""
     msg = device_message(msg)
     return sha512_merkle_damgard(INITIAL_STATE_512_224, _padded_words(msg))[:, :28]
+
+
+def sha512_256_digest(msg: ArrayLike) -> fnp.ndarray:
+    """SHA-512/256 (FIPS 180-4 §6.7) of a batch: uint8 [B, L] -> [B, 32].
+
+    The §5.3.6 initial state on the same blocks marker, truncated to 256 bits
+    by the caller-side slice — `sha384_digest`'s arrangement at the other
+    §5.3 table. The 64-bit-word road to a length-extension-safe 256-bit
+    digest (truncation hides the final state, unlike SHA-512 itself)."""
+    msg = device_message(msg)
+    return sha512_merkle_damgard(INITIAL_STATE_512_256, _padded_words(msg))[:, :32]
 
 
 # ---------------------------------------------------------------------------

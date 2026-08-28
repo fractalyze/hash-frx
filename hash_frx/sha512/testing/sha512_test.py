@@ -26,7 +26,6 @@ from hash_frx import markers
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
 from hash_frx.sha256 import sha256 as sha256_mod
-from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sha512 import sha512
 from hash_frx.sha512.sha512 import (
     Sha384,
@@ -296,7 +295,7 @@ class Sha512TracedTest(parameterized.TestCase):
         # tweakable-hash family keeps SHA-256 for PRF/F and moves SHA-512 into
         # H/T_l, so ONE traced region must carry both hashes side by side —
         # each against its own reference.
-        h256, h512 = Sha256(), Sha512()
+        h256, h512 = sha256_mod.Sha256(), Sha512()
         msgs = np.random.default_rng(66).integers(0, 256, (3, 100), dtype=np.uint8)
 
         @frx.jit
@@ -350,7 +349,7 @@ class Sha512ByteHashTest(parameterized.TestCase):
         # equal the SHA-256 sibling, or a family holding both would collide.
         self.assertEqual(Sha512(), Sha512())
         self.assertEqual(hash(Sha512()), hash(Sha512()))
-        self.assertNotEqual(Sha512(), Sha256())
+        self.assertNotEqual(Sha512(), sha256_mod.Sha256())
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +404,72 @@ _VARIANT_VECTORS = (
         _MSG_896,
         "3928e184fb8690f840da3988121d31be65cb9d3ef83ee6146feac861e19b563a",
     ),
+    # SHA-512/224's evidence is NIST CAVP `shabytetestvectors`
+    # (`SHA512_224ShortMsg.rsp`) rather than the example-values series, and is
+    # extracted from the .rsp rather than typed. What CAVP adds over the
+    # `hashlib` sweeps, which already cover these lengths and more, is
+    # independence from `hashlib`: the sweeps say this tree agrees with
+    # OpenSSL, and these say both agree with NIST. All 129 rows of the file
+    # were checked while extracting, so the six kept are a readable subset of a
+    # full agreement rather than the extent of what was verified. The lengths
+    # are `_LENGTHS`' padding boundaries; 112 and 128 are the ones where the
+    # 0x80 byte plus the 16-byte length field force a further block.
+    (
+        "sha512_224_cavp_0b",
+        "sha512_224",
+        bytes.fromhex(""),
+        "6ed0dd02806fa89e25de060c19d3ac86cabb87d6a0ddd05c333b84f4",
+    ),
+    (
+        "sha512_224_cavp_1b",
+        "sha512_224",
+        bytes.fromhex("cf"),
+        "4199239e87d47b6feda016802bf367fb6e8b5655eff6225cb2668f4a",
+    ),
+    (
+        "sha512_224_cavp_111b",
+        "sha512_224",
+        bytes.fromhex(
+            "15cb777ef3e451b928dbf288e46a3627044ff5de42add884a9af6b424d6e7399"
+            "381581a6a743c7a577b02bb5da149ada4e449f48d09e34df4ca8d8f259f4e14c"
+            "23471475a8f97331289f564ad6e8bd8fd4c5e51d5ecd19dd46dfcb4ea009e385"
+            "bea857725fd1fc6423f09ccf42af48"
+        ),
+        "9fa12561f1df9a2d793292e0f4df5327af529336b5b2118952f5c24e",
+    ),
+    (
+        "sha512_224_cavp_112b",
+        "sha512_224",
+        bytes.fromhex(
+            "d24df75a00cf92677bb41a620fae519723937ebfe1f7b430970056505d76db4f"
+            "f91acf16ff391a7a3d8085b655127a18acd80bfa831837f4644a6850c0273fbe"
+            "d6029449d65bb98a47b2ff1ca6997c50500d0b21a206936a5e4d8d56508ec018"
+            "32ae4fddce5ef6ff62f1917c486adea6"
+        ),
+        "5cae12ea9652269ea2aafc656cb83424746ea1d5d491f9a159594b2a",
+    ),
+    (
+        "sha512_224_cavp_127b",
+        "sha512_224",
+        bytes.fromhex(
+            "4b9895235cb4956aefffe815415252e7d6b21921bd7f675315eff071d0bbd429"
+            "b718c774aee96f6c3a330d5d40d1601e1069c7a2a19ea5ca1e87097da2608ffb"
+            "4180816e478b42c3c4e9edb748773935eb7ca0df90dec0eb6b960130c1617880"
+            "efb80b39ae03d617950ace4ce0aca4d36fd3ed0112a77f5d03021eb1b42458"
+        ),
+        "9a9176e97aec99ab07f468f6a226876710d6d877021d27061d4d0132",
+    ),
+    (
+        "sha512_224_cavp_128b",
+        "sha512_224",
+        bytes.fromhex(
+            "9e127870be2431bcb4f4eb4efd5c2a6c5870c55e7a5e3b7503994a4cb136be4e"
+            "d396887801450f600b22cb772fc00f8b8f0d2690e231a29f69b9f13f24f531e4"
+            "479e45b5e8bc2992fac782567e0d7a59f853ca3a20bf18dbdbf684ac69817e2d"
+            "e075daaed9532659692d3b73530a12df7b8cd9e49ed0463041962c1ce7a24c31"
+        ),
+        "7e2cf6226623535784c59cd6a7b27dac60ee23fdce8a804dbd6dfedd",
+    ),
 )
 
 
@@ -420,89 +485,30 @@ class _Variant(NamedTuple):
 
     digest: Callable[..., Any]  # the module-level function
     size: int
-    oracle: Callable[[bytes], Any]  # hashlib constructor over the same bytes
+    oracle: Callable[[bytes], bytes]  # the same bytes through hashlib
     row: type[ByteHash]  # the seam row over it
 
 
 # The two SHA-512/t rows reach hashlib through OpenSSL (`hashlib.new`) rather
-# than a named constructor.
+# than a named constructor. `oracle` is bytes-in/bytes-out so it drops
+# straight into `oracle_digest`, whose parameter has that exact type.
 _VARIANTS = {
-    "sha384": _Variant(sha512.sha384_digest, 48, lambda b: hashlib.sha384(b), Sha384),
+    "sha384": _Variant(
+        sha512.sha384_digest, 48, lambda b: hashlib.sha384(b).digest(), Sha384
+    ),
     "sha512_224": _Variant(
         sha512.sha512_224_digest,
         28,
-        lambda b: hashlib.new("sha512_224", b),
+        lambda b: hashlib.new("sha512_224", b).digest(),
         Sha512_224,
     ),
     "sha512_256": _Variant(
         sha512.sha512_256_digest,
         32,
-        lambda b: hashlib.new("sha512_256", b),
+        lambda b: hashlib.new("sha512_256", b).digest(),
         Sha512_256,
     ),
 }
-
-# NIST CAVP `shabytetestvectors`, `SHA512_224ShortMsg.rsp` — extracted from the
-# .rsp rather than typed. What they add over the `hashlib` sweeps, which already
-# cover these lengths and more, is independence from `hashlib`: the sweeps say
-# this tree agrees with OpenSSL's SHA-512/224, and these say both agree with
-# NIST. All 129 rows of the file were checked while extracting, so the six kept
-# are a readable subset of a full agreement rather than the extent of what was
-# verified. The lengths are the padding boundaries `_LENGTHS` names, 112 and 128
-# being the ones where the 0x80 byte plus the 16-byte length field force a
-# further block.
-_CAVP_512_224 = (
-    ("len_0", "", "6ed0dd02806fa89e25de060c19d3ac86cabb87d6a0ddd05c333b84f4"),
-    ("len_1", "cf", "4199239e87d47b6feda016802bf367fb6e8b5655eff6225cb2668f4a"),
-    (
-        "len_111",
-        "15cb777ef3e451b928dbf288e46a3627044ff5de42add884a9af6b424d6e7399"
-        "381581a6a743c7a577b02bb5da149ada4e449f48d09e34df4ca8d8f259f4e14c"
-        "23471475a8f97331289f564ad6e8bd8fd4c5e51d5ecd19dd46dfcb4ea009e385"
-        "bea857725fd1fc6423f09ccf42af48",
-        "9fa12561f1df9a2d793292e0f4df5327af529336b5b2118952f5c24e",
-    ),
-    (
-        "len_112",
-        "d24df75a00cf92677bb41a620fae519723937ebfe1f7b430970056505d76db4f"
-        "f91acf16ff391a7a3d8085b655127a18acd80bfa831837f4644a6850c0273fbe"
-        "d6029449d65bb98a47b2ff1ca6997c50500d0b21a206936a5e4d8d56508ec018"
-        "32ae4fddce5ef6ff62f1917c486adea6",
-        "5cae12ea9652269ea2aafc656cb83424746ea1d5d491f9a159594b2a",
-    ),
-    (
-        "len_127",
-        "4b9895235cb4956aefffe815415252e7d6b21921bd7f675315eff071d0bbd429"
-        "b718c774aee96f6c3a330d5d40d1601e1069c7a2a19ea5ca1e87097da2608ffb"
-        "4180816e478b42c3c4e9edb748773935eb7ca0df90dec0eb6b960130c1617880"
-        "efb80b39ae03d617950ace4ce0aca4d36fd3ed0112a77f5d03021eb1b42458",
-        "9a9176e97aec99ab07f468f6a226876710d6d877021d27061d4d0132",
-    ),
-    (
-        "len_128",
-        "9e127870be2431bcb4f4eb4efd5c2a6c5870c55e7a5e3b7503994a4cb136be4e"
-        "d396887801450f600b22cb772fc00f8b8f0d2690e231a29f69b9f13f24f531e4"
-        "479e45b5e8bc2992fac782567e0d7a59f853ca3a20bf18dbdbf684ac69817e2d"
-        "e075daaed9532659692d3b73530a12df7b8cd9e49ed0463041962c1ce7a24c31",
-        "7e2cf6226623535784c59cd6a7b27dac60ee23fdce8a804dbd6dfedd",
-    ),
-)
-
-
-def _bytes_oracle(variant: _Variant) -> Callable[[bytes], bytes]:
-    """`variant`'s hashlib oracle as bytes-in/bytes-out, bound to this variant.
-
-    A closure over the loop variable would read every row against whichever
-    variant the loop ended on, and a default-argument lambda that avoids it is
-    something mypy cannot infer a type for.
-    """
-    return lambda b: variant.oracle(b).digest()
-
-
-# variant x length, so a failure names `sha512_224_112` rather than an ordinal.
-_VARIANT_LENGTHS = tuple(
-    (f"{name}_{length}", name, length) for name in _VARIANTS for length in _LENGTHS
-)
 
 
 class Sha2VariantVectorTest(parameterized.TestCase):
@@ -516,37 +522,16 @@ class Sha2VariantVectorTest(parameterized.TestCase):
         self.assertEqual(bytes(got).hex(), digest_hex)
         # The reference the differential sweep uses is anchored to the same
         # record, so agreeing with hashlib below means agreeing with FIPS.
-        self.assertEqual(v.oracle(msg).hexdigest(), digest_hex)
-
-
-class Sha512_224CavpTest(parameterized.TestCase):
-    """SHA-512/224 against NIST's own published vectors.
-
-    `Sha2VariantVectorTest` covers the other two rows from the example-values
-    series; this row's published evidence is CAVP instead, which is also the
-    only source here that lands on a length ending exactly on a block boundary
-    with the padding taking a whole further block.
-    """
-
-    @parameterized.named_parameters(*_CAVP_512_224)
-    def test_matches_the_cavp_vector(self, msg_hex: str, digest_hex: str) -> None:
-        msg = bytes.fromhex(msg_hex)
-        rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
-        self.assertEqual(
-            bytes(np.asarray(sha512.sha512_224_digest(rows))[0]).hex(), digest_hex
-        )
-        # Anchors the differential sweep's reference to the same record, so
-        # agreeing with hashlib elsewhere means agreeing with NIST.
-        self.assertEqual(hashlib.new("sha512_224", msg).hexdigest(), digest_hex)
+        self.assertEqual(v.oracle(msg).hex(), digest_hex)
 
 
 class Sha2VariantTest(parameterized.TestCase):
-    @parameterized.named_parameters(*_VARIANT_LENGTHS)
+    @parameterized.product(variant=tuple(_VARIANTS), length=_LENGTHS)
     def test_matches_hashlib(self, variant: str, length: int) -> None:
         v = _VARIANTS[variant]
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
         got = bytes(np.asarray(v.digest(msg[None, :]))[0])
-        self.assertEqual(got, v.oracle(bytes(msg)).digest())
+        self.assertEqual(got, v.oracle(bytes(msg)))
 
     def test_variants_ride_the_sha512_marker_with_truncation_outside(self) -> None:
         # The #199 acceptance pin: ONE composite naming sha512 (by attribute,
@@ -625,9 +610,8 @@ class Sha2VariantByteHashTest(parameterized.TestCase):
             with self.subTest(variant=type(device).__name__):
                 got = np.asarray(device.digest(msgs))
                 self.assertEqual(got.shape, (4, device.digest_size))
-                one = _bytes_oracle(v)
                 np.testing.assert_array_equal(
-                    got, oracle_digest(one, device.digest_size, msgs)
+                    got, oracle_digest(v.oracle, device.digest_size, msgs)
                 )
 
     def test_value_identity_is_by_type(self) -> None:

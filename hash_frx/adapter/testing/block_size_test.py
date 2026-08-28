@@ -28,9 +28,9 @@ from hash_frx.keccak.byte_hashes import (
 )
 from hash_frx.ripemd160 import ripemd160
 from hash_frx.sha256 import sha256 as sha256_mod
-from hash_frx.sha256.sha256 import Sha256
+from hash_frx.sha256.sha256 import Sha224, Sha256
 from hash_frx.sha512 import sha512 as sha512_mod
-from hash_frx.sha512.sha512 import Sha384, Sha512, Sha512_256
+from hash_frx.sha512.sha512 import Sha384, Sha512, Sha512_224, Sha512_256
 from hash_frx.sm3 import sm3
 from hash_frx.testing.rows import BYTE_HASH_ROWS
 
@@ -46,8 +46,10 @@ class KnownWidthsTest(absltest.TestCase):
         # wrong key schedule, and nothing downstream errors.
         for row, module in (
             (Sha256(), sha256_mod),
+            (Sha224(), sha256_mod),
             (Sha512(), sha512_mod),
             (Sha384(), sha512_mod),
+            (Sha512_224(), sha512_mod),
             (Sha512_256(), sha512_mod),
             (sm3.Sm3(), sm3),
             (ripemd160.Ripemd160(), ripemd160),
