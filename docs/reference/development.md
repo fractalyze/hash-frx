@@ -76,12 +76,50 @@ rather than reported missing.
 [`requirements.in`](../../requirements.in) pins the plugin without that extra,
 so the lock carries none and the path has to be supplied per run.
 
-**A green GPU leg is evidence only against a control.** `cuda` is strict here —
-it does not fall back — so the same target under
-`--test_env=LD_LIBRARY_PATH=/nonexistent` must *fail*, and the line proving it
-is the `Backend 'cuda' is not in the list of known backends: ['cpu', 'tpu']`
-above: `cpu` was available and the run died anyway. Without that control a
-CPU-fallback run reads as a passing GPU leg.
+A `.so.12` line is necessary and not sufficient. The plugin checks the whole
+CUDA 12 set and raises on the first one missing, so a box carrying the toolkit
+but no cuDNN fails the same import, reports the same backend list, and answers
+the `libcudart` grep above in the affirmative:
+
+```text
+Jax plugin configuration error: Exception when calling frx_plugins.xla_cuda12.initialize()
+RuntimeError: cuDNN not found.
+```
+
+Read the traceback for which library it names rather than the backend list it
+ends with, and grep the rest of the set — `libcudnn`, `libcublas`, `libcufft`,
+`libcusolver`, `libcusparse`, `libnvJitLink` — before concluding anything about
+the runtime's major version.
+
+**A green GPU leg is evidence only against a control**, and the control has to
+match how the box gets its CUDA. `cuda` is strict — it does not fall back — so
+a run that dies with `Backend 'cuda' is not in the list of known backends:
+['cpu', 'tpu']` proves the point: `cpu` was available and the run died anyway.
+The question is what to take away to provoke it.
+
+Take away the **libraries** when they come from wheels named on
+`LD_LIBRARY_PATH`, as in the recipe above:
+
+```sh
+bazel test --test_env=FRX_PLATFORMS=cuda \
+           --test_env=LD_LIBRARY_PATH=/nonexistent \
+           --nocache_test_results -- <target>      # must FAIL
+```
+
+Take away the **device** when CUDA is a system install:
+
+```sh
+bazel test --test_env=FRX_PLATFORMS=cuda \
+           --test_env=CUDA_VISIBLE_DEVICES= \
+           --nocache_test_results -- <target>      # must FAIL
+```
+
+Do not reach for the first form on a system-installed box. Those libraries are
+found through `/etc/ld.so.cache`, which no environment variable can mask, so the
+run passes — and reads as a CPU-fallback run that was never caught, when it is
+in fact a correctly provisioned box. The device form discriminates in both
+setups: it fails in `cuInit(0)` with `CUDA_ERROR_NO_DEVICE`, and the backend
+never registers.
 
 ## Running against a local Fractalyze XLA build
 
