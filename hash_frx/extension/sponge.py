@@ -241,10 +241,21 @@ def scanned_absorb(
     generic region admits no control flow at all (`CLAUDE.md`), so a caller
     inside one must unroll. A name-routed region admits what its emitter's ABI
     says: `hash_frx.digest.field_sponge` carries a `while` for its runtime absorb
-    length, and `sponge.py` ships exactly that. A loop *around* a marked region
-    is always fine — the region moves into the loop body rather than being
-    destroyed, and each permutation was already its own kernel, so there is no
-    cross-iteration fusion to break.
+    length, and `sponge.py` ships exactly that.
+
+    **This trades every kernel for the compile time, which is the cost to weigh
+    before reaching for it.** A loop *around* a marked region is legal and the
+    region does move into the loop body rather than being destroyed — but the
+    recognizer declines it, so it inlines to its decomposition however good its
+    emitter is. A marker's constant operand has to be a materialized constant to
+    be validated, and inside a scan the marker's jit zone survives as a real
+    call, so that operand arrives as a parameter one frame away
+    (fractalyze/xla#633). Measured
+    at rate 168 over eight absorbed blocks, with the emitter present on the leg:
+    unrolled is 8 kCustom kernels and 16 fusions, scanned is **0 kCustom and
+    363**. So this is not "the same kernels, fewer equations" — it is the generic
+    path bought with a cheap compile, and it is the right trade only where the
+    unrolled graph does not compile at all.
 
     `reverse=True` walks the rows from the back, which is what a caller whose
     layout puts block 0 last wants — it costs two foldable scalar subtracts

@@ -203,7 +203,9 @@ Which loop form a *marked* caller may take is its **emitter's** question. A
 generically marked body admits no control flow at all. A name-routed one admits
 what its ABI says: `sponge.py` ships a `while` inside the
 `hash_frx.digest.field_sponge` region for its runtime absorb length. A loop
-around a marked region is always fine.
+around a marked region is legal, but a marker inside a `lax.scan` body is not
+routed today — it inlines instead (fractalyze/xla#633), so a caller that needs
+kernels has to unroll.
 
 ### Tree
 

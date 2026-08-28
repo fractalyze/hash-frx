@@ -149,8 +149,16 @@ pre-namespace spellings until they retire. Whether one tolerates **control
 flow** is likewise its ABI's to say rather than the contract's:
 `hash_frx.digest.field_sponge` carries a `stablehlo.while` for its runtime absorb
 length ([`sponge.py`](../hash_frx/sponge.py)), where `keccak_sponge` does not. A
-loop *around* a marked region is always fine — only a loop inside a
-*generically* marked body is the bug `CLAUDE.md` names.
+loop *around* a marked region is legal — it is a loop *inside* a generically
+marked body that is the bug `CLAUDE.md` names — but legal is not free: a marker
+inside a `lax.scan` body is currently **not routed at all**. The recognizer
+validates a marker's constant operand by requiring a materialized constant, and
+inside a scan the marker's jit zone survives as a real call — so that operand
+arrives as a *parameter* one frame from the constant, the guard declines, and
+the region inlines. Measured on `hash_frx.perm.keccak_f`, which has an
+emitter on both legs: eight applications are 8 kernels unrolled and 0 in a scan
+(361 fusions on CPU, 74 on GPU). Tracked as fractalyze/xla#633; until it lands, a
+consumer that wants kernels from a marker must unroll its loop.
 
 **Operation-named** — `hash_frx.permute`, a single segment with no kind prefix.
 It names the OPERATION and carries WHICH primitive runs as the `permutation`
