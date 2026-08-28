@@ -19,6 +19,11 @@ rules every change must respect.
   only one), the lowering gate a wire-preserving refactor needs, the CUDA-12
   requirement, running against an unreleased XLA, the compile cache:**
   [`docs/reference/development.md`](docs/reference/development.md)
+- **Releasing — the two publishing channels, what `__version__` names, the
+  `frx` toolchain floor, and the trusted-publisher registration:** the header of
+  [`.github/workflows/release.yml`](.github/workflows/release.yml). It lives
+  next to the mechanism rather than under `docs/`, so this pointer is what makes
+  it findable.
 - **Detailed design & open decisions:** tracked on GitHub — epic issue
   [fractalyze/hash-frx#1](https://github.com/fractalyze/hash-frx/issues/1).
 
