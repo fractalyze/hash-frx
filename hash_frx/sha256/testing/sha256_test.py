@@ -220,6 +220,21 @@ class Sha256ByteHashTest(parameterized.TestCase):
 # readable subset of a full agreement rather than the extent of what was
 # verified. The lengths are `_LENGTHS`' padding boundaries, 56 and 64 being the
 # ones where the 0x80 byte plus the 8-byte length field force a further block.
+# NIST's example-values series for SHA-224 ("abc" and the two-block 448-bit
+# message), the companion source to the CAVP records below: CAVP's messages are
+# random, so these are the two records an independent transcription is most
+# likely to publish and the ones a reader can check by eye against the
+# standard's worked example.
+_MSG_448 = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+_EXAMPLES_224 = (
+    ("abc", b"abc", "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"),
+    (
+        "two_block_448_bit",
+        _MSG_448,
+        "75388b16512776cc5dba5da1fd890150b0c6455cb4f58b1952522525",
+    ),
+)
+
 _CAVP_224 = (
     ("len_0", "", "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f"),
     ("len_1", "84", "3cd36921df5d6963e73739cf4d20211e2d8877c19cff087ade9d0e3a"),
@@ -258,6 +273,24 @@ class Sha224Test(parameterized.TestCase):
     differential sweep is what catches that, and the CAVP vectors are what make
     the sweep's reference NIST rather than only CPython.
     """
+
+    @parameterized.named_parameters(*_EXAMPLES_224)
+    def test_matches_the_published_example(self, msg: bytes, digest_hex: str) -> None:
+        rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        got = bytes(np.asarray(sha256.sha224_digest(rows))[0])
+        self.assertEqual(got.hex(), digest_hex)
+        self.assertEqual(hashlib.sha224(msg).hexdigest(), digest_hex)
+
+    def test_is_not_a_truncated_sha256(self) -> None:
+        # The vectors above cannot say this on their own — they would pass
+        # unchanged if the row ran the wrong §5.3 constant and the records had
+        # been generated from that same wrong constant. Comparing the two
+        # SHIPPED rows is what makes the §5.3.2 IV load-bearing.
+        msg = np.zeros((1, 64), dtype=np.uint8)
+        self.assertNotEqual(
+            bytes(np.asarray(sha256.sha224_digest(msg))[0]),
+            bytes(np.asarray(sha256.digest(msg))[0][:28]),
+        )
 
     @parameterized.named_parameters(*_CAVP_224)
     def test_matches_the_cavp_vector(self, msg_hex: str, digest_hex: str) -> None:

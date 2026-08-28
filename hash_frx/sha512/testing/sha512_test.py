@@ -404,9 +404,22 @@ _VARIANT_VECTORS = (
         _MSG_896,
         "3928e184fb8690f840da3988121d31be65cb9d3ef83ee6146feac861e19b563a",
     ),
-    # SHA-512/224's evidence is NIST CAVP `shabytetestvectors`
-    # (`SHA512_224ShortMsg.rsp`) rather than the example-values series, and is
-    # extracted from the .rsp rather than typed. What CAVP adds over the
+    (
+        "sha512_224_abc",
+        "sha512_224",
+        b"abc",
+        "4634270f707b6a54daae7530460842e20e37ed265ceee9a43e8924aa",
+    ),
+    (
+        "sha512_224_two_block_896_bit",
+        "sha512_224",
+        _MSG_896,
+        "23fec5bb94d60b23308192640b0c453335d664734fe40e7268674af9",
+    ),
+    # SHA-512/224 also gets NIST CAVP `shabytetestvectors`
+    # (`SHA512_224ShortMsg.rsp`), extracted from the .rsp rather than typed —
+    # two published sources rather than one, which is worth the lines for a row
+    # whose only distinguishing content is a constant. What CAVP adds over the
     # `hashlib` sweeps, which already cover these lengths and more, is
     # independence from `hashlib`: the sweeps say this tree agrees with
     # OpenSSL, and these say both agree with NIST. All 129 rows of the file
@@ -523,6 +536,29 @@ class Sha2VariantVectorTest(parameterized.TestCase):
         # The reference the differential sweep uses is anchored to the same
         # record, so agreeing with hashlib below means agreeing with FIPS.
         self.assertEqual(v.oracle(msg).hex(), digest_hex)
+
+
+class Sha2VariantDistinctnessTest(absltest.TestCase):
+    """Each truncated row is its own function, not its neighbour sliced.
+
+    The vector tables above cannot say this on their own: they would pass
+    unchanged if a row ran the wrong §5.3 constant and the records had been
+    generated from that same wrong constant. Comparing two SHIPPED rows at one
+    message is what makes the IV load-bearing."""
+
+    def test_sha512_224_is_not_a_truncated_sha512_256(self) -> None:
+        msg = np.zeros((1, 128), dtype=np.uint8)
+        self.assertNotEqual(
+            bytes(np.asarray(sha512.sha512_224_digest(msg))[0]),
+            bytes(np.asarray(sha512.sha512_256_digest(msg))[0][:28]),
+        )
+
+    def test_sha384_is_not_a_truncated_sha512(self) -> None:
+        msg = np.zeros((1, 128), dtype=np.uint8)
+        self.assertNotEqual(
+            bytes(np.asarray(sha512.sha384_digest(msg))[0]),
+            bytes(np.asarray(sha512.digest(msg))[0][:48]),
+        )
 
 
 class Sha2VariantTest(parameterized.TestCase):
