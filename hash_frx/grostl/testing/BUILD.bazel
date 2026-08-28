@@ -39,6 +39,7 @@ py_test(
         "//hash_frx:byte_hash",
         "//hash_frx:fusion",
         "//hash_frx/grostl",
+        "//hash_frx/testing:composite_eqn",
         "//hash_frx/testing:jit_cache",
         "//hash_frx/testing:marker_recognized",
         "//hash_frx/testing:oracle",

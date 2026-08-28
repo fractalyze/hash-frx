@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from typing import Any
 
 import frx
 import frx.numpy as fnp
@@ -37,6 +36,11 @@ from hash_frx.ripemd160 import ripemd160
 from hash_frx.ripemd160.ripemd160 import Ripemd160
 from hash_frx.ripemd160.testing.reference import VECTORS
 from hash_frx.ripemd160.testing.reference import ripemd160 as _ripemd160_oracle
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+    composite_shapes,
+)
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
@@ -107,18 +111,6 @@ class Ripemd160VectorTest(parameterized.TestCase):
             )
 
 
-def _composite(fn: Any, *args: Any) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR
-    (the `grostl_test` helper)."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 _HAS_RIPEMD160_EMITTER = ripemd160._routes_to_dedicated_emitter()
 
 
@@ -168,13 +160,13 @@ class Ripemd160MarkerTest(absltest.TestCase):
         # and r/s schedules must enter as scalar literals and trace-time
         # slices, never as lifted table arrays.
         msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
-        eqn = _composite(ripemd160.digest, msg)
+        eqn = composite_eqn(ripemd160.digest, msg)
         self.assertEqual(eqn.params["name"], markers.BYTES_DIGEST_MARKER)
         self.assertEqual(eqn.params["version"], markers.BYTES_DIGEST_MARKER_VERSION)
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        attrs = composite_attrs(eqn)
         self.assertEqual(attrs["primitive"], "ripemd160")
         self.assertLen(eqn.invars, 3)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        shapes = composite_shapes(eqn)
         # L = 100: two blocks once padded, so the tail is 28 bytes.
         self.assertEqual(shapes, [(5,), (2, 100), (28,)])
 

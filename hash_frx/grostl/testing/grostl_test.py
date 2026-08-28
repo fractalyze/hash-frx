@@ -20,7 +20,6 @@ arm is absent.
 from __future__ import annotations
 
 import functools
-from typing import Any
 
 import frx
 import frx.numpy as fnp
@@ -33,6 +32,10 @@ from hash_frx.fusion import FusionPath
 from hash_frx.grostl import grostl
 from hash_frx.grostl.grostl import Grostl256
 from hash_frx.grostl.testing.reference import AES_SBOX, KAT_VECTORS, grostl256
+from hash_frx.testing.composite_eqn import (
+    composite_eqn,
+    composite_shapes,
+)
 from hash_frx.testing.jit_cache import assert_single_trace, assert_trace_growth
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 from hash_frx.testing.oracle import oracle_digest
@@ -143,18 +146,6 @@ class SboxCircuitTest(absltest.TestCase):
         np.testing.assert_array_equal(got, np.array(AES_SBOX, dtype=np.uint8))
 
 
-def _composite(fn: Any, *args: Any) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR
-    (the `vision_test` helper)."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 class Grostl256MarkerTest(absltest.TestCase):
     def test_routing_is_the_pin_and_the_backend(self) -> None:
         # The conjunction the keccak family's gate test states. Both backends
@@ -182,11 +173,11 @@ class Grostl256MarkerTest(absltest.TestCase):
         # closed over would be lifted in AHEAD of these, one per call site
         # (the operand-ABI rule in docs/reference/conventions.md).
         msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
-        eqn = _composite(grostl.digest, msg)
+        eqn = composite_eqn(grostl.digest, msg)
         self.assertEqual(eqn.params["name"], grostl.GROSTL256_MARKER)
         self.assertEqual(eqn.params["version"], grostl.GROSTL256_MARKER_VERSION)
         self.assertLen(eqn.invars, 5)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        shapes = composite_shapes(eqn)
         # The message is already on the device, so it keeps its own extent as
         # the capacity and nothing is widened (`byte_hash.capacity`).
         self.assertEqual(shapes, [(64,), (10, 8, 8), (10, 8, 8), (2, 100), ()])

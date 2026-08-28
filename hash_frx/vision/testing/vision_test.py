@@ -18,7 +18,6 @@ from __future__ import annotations
 import contextlib
 import functools
 from collections.abc import Iterator
-from typing import Any
 from unittest import mock
 
 import frx
@@ -30,6 +29,11 @@ from zk_dtypes import binary_field_t5 as F
 
 from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+    composite_shapes,
+)
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
@@ -189,17 +193,6 @@ class VisionMark32Test(absltest.TestCase):
             p.permute(fnp.zeros(_W, dtype=fnp.uint32))
 
 
-def _composite(fn: object, *args: Array) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 @contextlib.contextmanager
 def _routing(dedicated: bool) -> Iterator[None]:
     """Pin which marker `Vision` picks. No leg has a Vision emitter, so the
@@ -262,7 +255,7 @@ class VisionMarkerTest(absltest.TestCase):
     def test_the_generic_marker_carries_no_contract(self) -> None:
         # Carrying no version and no attrs is what says the generic marker
         # claims nothing an emitter could read.
-        eqn = _composite(_perm().permute, _device_state(_STATES["zeros"]))
+        eqn = composite_eqn(_perm().permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
         self.assertEqual(eqn.params["version"], 0)
         self.assertEqual(eqn.params["attributes"], ())
@@ -275,20 +268,20 @@ class VisionMarkerTest(absltest.TestCase):
         state = _device_state(_STATES["seed0"])
         for label, dedicated in (("generic", False), ("dedicated", True)):
             with self.subTest(routing=label), _routing(dedicated):
-                eqn = _composite(Vision(vision_mark32_params(F)).permute, state)
+                eqn = composite_eqn(Vision(vision_mark32_params(F)).permute, state)
                 self.assertLen(eqn.invars, 5)
-                shapes = [tuple(v.aval.shape) for v in eqn.invars]
+                shapes = composite_shapes(eqn)
                 self.assertEqual(shapes, [(24,), (4,), (33,), (24, 24), (17, 24)])
 
     def test_the_dedicated_marker_carries_its_name_version_and_attrs(self) -> None:
         with _routing(True):
-            eqn = _composite(
+            eqn = composite_eqn(
                 Vision(vision_mark32_params(F)).permute,
                 _device_state(_STATES["zeros"]),
             )
         self.assertEqual(eqn.params["name"], VISION_MARKER)
         self.assertEqual(eqn.params["version"], VISION_MARKER_VERSION)
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        attrs = composite_attrs(eqn)
         self.assertEqual(attrs, {"permutation": "vision", "width": 24, "rounds": 8})
 
     def test_both_routings_agree_with_the_reference(self) -> None:

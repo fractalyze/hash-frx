@@ -1,28 +1,29 @@
 # Copyright 2026 The hash-frx Authors. SPDX-License-Identifier: Apache-2.0
 """composite emits one named composite marker carrying its attrs."""
 
-import frx
 import frx.numpy as fnp
 from absl.testing import absltest
 
 from hash_frx._composite import composite
-
-
-def _composite_eqns(fn: object, *args: frx.Array) -> list:
-    """The composite primitive eqns in `fn`'s jaxpr — read without MLIR lowering."""
-    jaxpr = frx.make_jaxpr(fn)(*args).jaxpr
-    return [e for e in jaxpr.eqns if e.primitive.name == "composite"]
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqns,
+)
 
 
 class CompositeTest(absltest.TestCase):
     def test_emits_one_named_composite_carrying_attrs(self) -> None:
-        eqns = _composite_eqns(
+        # The plural plus an explicit count, where every other caller takes
+        # `composite_eqn` and lets the helper assert it: "emits exactly one" is
+        # the property under test HERE, so asserting it through the helper that
+        # asserts it would test nothing.
+        eqns = composite_eqns(
             lambda x: composite(lambda a, **_: a + a, x, name="hash_frx.t", k=3),
             fnp.arange(4),
         )
         self.assertLen(eqns, 1)
         self.assertEqual(eqns[0].params["name"], "hash_frx.t")
-        attrs = {key: leaves[0] for key, leaves, _ in eqns[0].params["attributes"]}
+        attrs = composite_attrs(eqns[0])
         self.assertEqual(attrs["k"], 3)
 
 

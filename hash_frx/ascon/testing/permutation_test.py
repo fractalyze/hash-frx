@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from typing import Any
 from unittest import mock
 
 import frx
@@ -52,6 +51,10 @@ from hash_frx.ascon.testing.reference import INITIAL_STATE, SBOX
 from hash_frx.ascon.testing.reference import permutation as reference_permutation
 from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 from hash_frx.permutation import Permutation
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+)
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
@@ -116,17 +119,6 @@ def _dedicated_emitter() -> Iterator[None]:
 def _generic_emitter() -> Iterator[None]:
     with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
         yield
-
-
-def _composite(fn: Any, *args: Any) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
 
 
 class AsconPTest(absltest.TestCase):
@@ -274,7 +266,7 @@ class AsconPMarkerTest(absltest.TestCase):
             ("dedicated", _dedicated_emitter()),
         ):
             with self.subTest(routing=label), ctx:
-                eqn = _composite(AsconP().permute, state)
+                eqn = composite_eqn(AsconP().permute, state)
                 self.assertLen(eqn.invars, 1)
                 self.assertEqual(eqn.invars[0].aval.shape, (WIDTH,))
 
@@ -291,10 +283,10 @@ class AsconPMarkerTest(absltest.TestCase):
 
     def test_the_dedicated_marker_carries_its_name_version_and_attrs(self) -> None:
         with _dedicated_emitter():
-            eqn = _composite(AsconP().permute, _device_state(_STATES["zeros"]))
+            eqn = composite_eqn(AsconP().permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], ASCON_P_MARKER)
         self.assertEqual(eqn.params["version"], ASCON_P_MARKER_VERSION)
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        attrs = composite_attrs(eqn)
         self.assertEqual(
             attrs, {"permutation": "ascon_p", "width": WIDTH, "rounds": ROUNDS}
         )
@@ -303,7 +295,7 @@ class AsconPMarkerTest(absltest.TestCase):
         # What every leg gets today. A version or an attribute on the generic
         # region would claim a contract the marker does not have.
         with _generic_emitter():
-            eqn = _composite(AsconP().permute, _device_state(_STATES["zeros"]))
+            eqn = composite_eqn(AsconP().permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
         self.assertEqual(eqn.params["version"], 0)
         self.assertEmpty(eqn.params["attributes"])

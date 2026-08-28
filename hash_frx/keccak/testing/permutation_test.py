@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from typing import Any
 from unittest import mock
 
 import frx
@@ -40,6 +39,10 @@ from hash_frx.keccak.testing.reference import (
     to_state,
 )
 from hash_frx.permutation import Permutation
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+)
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
@@ -162,17 +165,6 @@ class KeccakF1600Test(absltest.TestCase):
             k.permute(fnp.zeros(50, dtype=fnp.int32))
 
 
-def _composite(fn: object, *args: frx.Array) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 @contextlib.contextmanager
 def _routing(dedicated: bool) -> Iterator[None]:
     """Pin which marker `KeccakF1600` picks, whatever this leg would pick.
@@ -221,17 +213,17 @@ class KeccakF1600MarkerTest(absltest.TestCase):
             ("dedicated", _dedicated_emitter()),
         ):
             with self.subTest(routing=label), ctx:
-                eqn = _composite(KeccakF1600().permute, state)
+                eqn = composite_eqn(KeccakF1600().permute, state)
                 self.assertLen(eqn.invars, 2)
                 self.assertEqual(eqn.invars[0].aval.shape, (50,))
                 self.assertEqual(eqn.invars[1].aval.shape, (5, 5))
 
     def test_the_dedicated_marker_carries_its_name_version_and_attrs(self) -> None:
         with _dedicated_emitter():
-            eqn = _composite(KeccakF1600().permute, _device_state(_STATES["zeros"]))
+            eqn = composite_eqn(KeccakF1600().permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], KECCAK_F_MARKER)
         self.assertEqual(eqn.params["version"], KECCAK_F_MARKER_VERSION)
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        attrs = composite_attrs(eqn)
         self.assertEqual(attrs, {"permutation": "keccak_f", "width": 50, "rounds": 24})
 
     def test_the_default_marker_is_the_best_this_leg_can_reach(self) -> None:
@@ -256,7 +248,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
             k = KeccakF1600()
             self.assertIs(k.fusion_path, FusionPath.GENERIC)
             self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
-            eqn = _composite(k.permute, _device_state(_STATES["zeros"]))
+            eqn = composite_eqn(k.permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
         self.assertEqual(eqn.params["version"], 0)
         self.assertEqual(eqn.params["attributes"], ())
