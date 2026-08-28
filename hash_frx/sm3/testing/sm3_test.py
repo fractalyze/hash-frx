@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from typing import Any
 
 import frx
 import frx.numpy as fnp
@@ -33,6 +32,11 @@ from hash_frx.fusion import FusionPath
 from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sm3 import sm3
 from hash_frx.sm3.sm3 import Sm3
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+    composite_shapes,
+)
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
@@ -110,18 +114,6 @@ class Sm3Test(parameterized.TestCase):
             self.assertEqual(bytes(got[i]), _sm3_oracle(bytes(batch[i])))
 
 
-def _composite(fn: Any, *args: Any) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR
-    (the `grostl_test` helper)."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 _HAS_SM3_EMITTER = sm3._routes_to_dedicated_emitter()
 
 
@@ -172,15 +164,15 @@ class Sm3MarkerTest(absltest.TestCase):
         # an OPERAND, unlike the sibling digests' scalar-literal constants,
         # because the fori_loop reads it at a traced round index.
         msg = fnp.asarray(np.zeros((1, 55), dtype=np.uint8))
-        eqn = _composite(sm3.digest, msg)
+        eqn = composite_eqn(sm3.digest, msg)
         # One name for every words-in family; SM3 is named by the attribute the
         # plugin resolves through, not by a suffix.
         self.assertEqual(eqn.params["name"], markers.MD_DIGEST_MARKER)
         self.assertEqual(eqn.params["version"], markers.MD_DIGEST_MARKER_VERSION)
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        attrs = composite_attrs(eqn)
         self.assertEqual(attrs["primitive"], "sm3")
         self.assertLen(eqn.invars, 3)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        shapes = composite_shapes(eqn)
         # L = 55: one block once padded (0x80 + the 8-byte length just fit).
         self.assertEqual(shapes, [(8,), (64,), (1, 1, 16)])
 
@@ -189,8 +181,8 @@ class Sm3MarkerTest(absltest.TestCase):
         # runs two blocks; only the blocks operand's shape moves with L (the
         # invar COUNT is the pinned surface).
         msg = fnp.asarray(np.zeros((1, 56), dtype=np.uint8))
-        eqn = _composite(sm3.digest, msg)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        eqn = composite_eqn(sm3.digest, msg)
+        shapes = composite_shapes(eqn)
         self.assertEqual(shapes, [(8,), (64,), (1, 2, 16)])
 
 

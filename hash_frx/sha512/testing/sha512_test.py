@@ -33,6 +33,11 @@ from hash_frx.sha512.sha512 import (
     Sha512_224,
     Sha512_256,
 )
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+    composite_shapes,
+)
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
@@ -161,18 +166,6 @@ class Sha512Test(parameterized.TestCase):
         np.testing.assert_array_equal(np.asarray(default), np.asarray(explicit))
 
 
-def _composite(fn: Any, *args: Any) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR
-    (the `grostl_test` helper)."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 _HAS_SHA512_EMITTER = sha512._routes_to_dedicated_emitter()
 
 
@@ -226,15 +219,15 @@ class Sha512MarkerTest(absltest.TestCase):
         # one per call site (the operand-ABI rule in
         # docs/reference/conventions.md).
         msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
-        eqn = _composite(sha512.digest, msg)
+        eqn = composite_eqn(sha512.digest, msg)
         # One name for every words-in family; SHA-512 is named by the attribute
         # the plugin resolves through, not by a suffix.
         self.assertEqual(eqn.params["name"], markers.MD_DIGEST_MARKER)
         self.assertEqual(eqn.params["version"], markers.MD_DIGEST_MARKER_VERSION)
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        attrs = composite_attrs(eqn)
         self.assertEqual(attrs["primitive"], "sha512")
         self.assertLen(eqn.invars, 3)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        shapes = composite_shapes(eqn)
         # L = 100: one block once padded (100 + 17 ≤ 128).
         self.assertEqual(shapes, [(16,), (160,), (2, 1, 32)])
 
@@ -578,12 +571,12 @@ class Sha2VariantTest(parameterized.TestCase):
         msg = fnp.asarray(np.zeros((1, 1), dtype=np.uint8))
         for variant, v in _VARIANTS.items():
             with self.subTest(variant=variant):
-                eqn = _composite(v.digest, msg)
+                eqn = composite_eqn(v.digest, msg)
                 self.assertEqual(eqn.params["name"], markers.MD_DIGEST_MARKER)
                 self.assertEqual(
                     eqn.params["version"], markers.MD_DIGEST_MARKER_VERSION
                 )
-                attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+                attrs = composite_attrs(eqn)
                 self.assertEqual(attrs["primitive"], "sha512")
                 self.assertEqual(tuple(eqn.outvars[0].aval.shape), (1, 64))
                 self.assertEqual(np.asarray(v.digest(msg)).shape, (1, v.size))

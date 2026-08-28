@@ -215,6 +215,7 @@ py_test(
     size = "small",
     srcs = ["_composite_test.py"],
     deps = [
+        ":composite_eqn",
         "//hash_frx:_composite",
         requirement("absl_py"),
         requirement("frx"),
@@ -226,6 +227,7 @@ py_test(
     size = "small",
     srcs = ["fusion_test.py"],
     deps = [
+        ":composite_eqn",
         ":random_field",
         "//hash_frx:fusion",
         "//hash_frx:markers",
@@ -332,6 +334,17 @@ py_library(
         "//hash_frx:permutation",
         requirement("frx"),
     ],
+)
+
+py_library(
+    name = "composite_eqn",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "composite_eqn.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("frx")],
 )
 
 py_library(

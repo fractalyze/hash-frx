@@ -33,6 +33,11 @@ from hash_frx.keccak.sponge import (
     KECCAK_SPONGE_MARKER_VERSION,
     KeccakSponge,
 )
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+    composite_eqns,
+)
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 
 # Read off the shipped condition rather than restated, so a backend gaining an
@@ -75,15 +80,6 @@ def _generic_emitter() -> contextlib.AbstractContextManager[None]:
     return _routing(False)
 
 
-def _composites(fn: Any, *args: frx.Array) -> list[Any]:
-    """The composite eqns in `fn`'s jaxpr, read without lowering to MLIR."""
-    return [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-
-
 def _message(batch: int, length: int) -> frx.Array:
     rng = np.random.default_rng(0)
     return fnp.asarray(rng.integers(0, 256, size=(batch, length), dtype=np.uint8))
@@ -106,13 +102,13 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # in the hot path of every ML-DSA sign.
         msg = _message(2, 200)
         with _generic_emitter():
-            generic = _composites(_SHAKE128_LONG.hash, msg)
+            generic = composite_eqns(_SHAKE128_LONG.hash, msg)
         self.assertLen(generic, 3)
         for eqn in generic:
             self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
 
         with _dedicated_emitter():
-            dedicated = _composites(_SHAKE128_LONG.hash, msg)
+            dedicated = composite_eqns(_SHAKE128_LONG.hash, msg)
         self.assertLen(dedicated, 1)
         self.assertEqual(dedicated[0].params["name"], KECCAK_SPONGE_MARKER)
         self.assertEqual(dedicated[0].params["version"], KECCAK_SPONGE_MARKER_VERSION)
@@ -121,8 +117,8 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # The permutation's attrs ride alongside the construction's, so the
         # marker says which primitive runs inside it as well as what wraps it.
         with _dedicated_emitter():
-            eqn = _composites(_SHA3_256.hash, _message(1, 64))[0]
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+            eqn = composite_eqn(_SHA3_256.hash, _message(1, 64))
+        attrs = composite_attrs(eqn)
         self.assertEqual(
             attrs,
             {
@@ -139,7 +135,7 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # never needs the domain suffix — and the rest is whatever the
         # permutation's own ABI names. No captured constants ahead of them.
         with _dedicated_emitter():
-            eqn = _composites(_SHA3_256.hash, _message(3, 64))[0]
+            eqn = composite_eqn(_SHA3_256.hash, _message(3, 64))
         self.assertLen(eqn.invars, 2)
         self.assertEqual(eqn.invars[0].aval.shape, (3, 136))  # one padded block
         self.assertEqual(eqn.invars[0].aval.dtype, fnp.uint8)
@@ -202,7 +198,7 @@ class VmappedMarkerTest(absltest.TestCase):
         # rather than a single permute, and vmap's axis stays outermost ahead of
         # the sponge's own batch.
         with _dedicated_emitter():
-            eqns = _composites(frx.vmap(_SHAKE128_LONG.hash), _stacked(3, 2, 200))
+            eqns = composite_eqns(frx.vmap(_SHAKE128_LONG.hash), _stacked(3, 2, 200))
         self.assertLen(eqns, 1)
         self.assertEqual(eqns[0].params["name"], KECCAK_SPONGE_MARKER)
         # 200 B at rate 168 pads to two blocks, under both batch axes.
@@ -213,7 +209,7 @@ class VmappedMarkerTest(absltest.TestCase):
         # The degenerate case a fix that squeezes rather than collapses would
         # pass, so it is pinned apart from the case above.
         with _dedicated_emitter():
-            eqns = _composites(frx.vmap(_SHA3_256.hash), _stacked(1, 3, 64))
+            eqns = composite_eqns(frx.vmap(_SHA3_256.hash), _stacked(1, 3, 64))
         self.assertLen(eqns, 1)
         self.assertEqual(eqns[0].invars[0].aval.shape, (1, 3, 136))
 
@@ -246,13 +242,13 @@ class WholeHashRoutingTest(absltest.TestCase):
     def test_a_leg_without_an_arm_does_not_build_the_whole_hash_region(self) -> None:
         msg = _message(1, 200)
         with mock.patch.object(permutation_mod, "_EMITTER_BACKENDS", ("nonesuch",)):
-            names = [e.params["name"] for e in _composites(_SHAKE128_LONG.hash, msg)]
+            names = [e.params["name"] for e in composite_eqns(_SHAKE128_LONG.hash, msg)]
         self.assertNotIn(KECCAK_SPONGE_MARKER, names)
         self.assertEqual(set(names), {FUSED_REGION_MARKER})
 
     def test_this_leg_builds_the_region_exactly_when_it_can_honour_it(self) -> None:
         msg = _message(1, 200)
-        names = [e.params["name"] for e in _composites(_SHAKE128_LONG.hash, msg)]
+        names = [e.params["name"] for e in composite_eqns(_SHAKE128_LONG.hash, msg)]
         if _HAS_KECCAK_EMITTER:
             self.assertEqual(names, [KECCAK_SPONGE_MARKER])
         else:

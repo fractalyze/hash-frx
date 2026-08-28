@@ -81,6 +81,7 @@ py_test(
         ":reference",
         "//hash_frx:fusion",
         "//hash_frx:permutation",
+        "//hash_frx/testing:composite_eqn",
         "//hash_frx/testing:fusion_ready",
         "//hash_frx/testing:jit_cache",
         "//hash_frx/testing:marker_seam",

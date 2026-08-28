@@ -21,7 +21,6 @@ emitter will read, pinned before it exists (the Vision arrangement).
 from __future__ import annotations
 
 import functools
-from typing import Any
 
 import frx
 import frx.numpy as fnp
@@ -51,6 +50,11 @@ from hash_frx.ascon.testing.reference import (
 )
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+    composite_shapes,
+)
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.oracle import oracle_digest
 from hash_frx.word import split
@@ -100,18 +104,6 @@ class InitialStateTest(absltest.TestCase):
         np.testing.assert_array_equal(ascon._INITIAL_STATE, derived)
 
 
-def _composite(fn: Any, *args: Any) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR
-    (the `vision_test` helper)."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 class AsconHash256MarkerTest(absltest.TestCase):
     def test_no_leg_routes_an_ascon_marker_yet(self) -> None:
         # The pre-emitter pin (the Vision arrangement): both module flags say
@@ -138,11 +130,11 @@ class AsconHash256MarkerTest(absltest.TestCase):
         # operand-ABI rule in docs/reference/conventions.md); the round
         # constants ride as scalar literals, which this count is the pin for.
         msg = fnp.asarray(np.zeros((2, 100), dtype=np.uint8))
-        eqn = _composite(ascon.digest, msg)
+        eqn = composite_eqn(ascon.digest, msg)
         self.assertEqual(eqn.params["name"], ascon.ASCON_HASH256_MARKER)
         self.assertEqual(eqn.params["version"], ascon.ASCON_HASH256_MARKER_VERSION)
         self.assertLen(eqn.invars, 3)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        shapes = composite_shapes(eqn)
         # L = 100: 4 bytes short of the 13-block boundary, so the tail is 4.
         self.assertEqual(shapes, [(5, 2), (2, 100), (4,)])
 
@@ -288,7 +280,7 @@ class AsconXof128KatTest(parameterized.TestCase):
 class AsconXof128MarkerTest(absltest.TestCase):
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         msg = fnp.asarray(_message(9))
-        eqn = _composite(lambda m: ascon.xof128(m, 40), msg)
+        eqn = composite_eqn(lambda m: ascon.xof128(m, 40), msg)
         self.assertEqual(eqn.params["name"], ascon.ASCON_XOF128_MARKER)
         self.assertEqual(eqn.params["version"], ascon.ASCON_XOF128_MARKER_VERSION)
         # The hash's three-operand ABI, with no captured constants: a
@@ -302,15 +294,15 @@ class AsconXof128MarkerTest(absltest.TestCase):
         # It fixes the region's SHAPE — the squeeze count and the result width —
         # which is what an attribute is for, where an operand determines a
         # value. An emitter reads it rather than inferring the squeeze count.
-        eqn = _composite(lambda m: ascon.xof128(m, 40), fnp.asarray(_message(9)))
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        eqn = composite_eqn(lambda m: ascon.xof128(m, 40), fnp.asarray(_message(9)))
+        attrs = composite_attrs(eqn)
         self.assertEqual(attrs, {"output_size": 40})
 
     def test_two_output_lengths_are_two_regions(self) -> None:
         msg = fnp.asarray(_message(9))
         self.assertNotEqual(
-            _composite(lambda m: ascon.xof128(m, 32), msg).params["attributes"],
-            _composite(lambda m: ascon.xof128(m, 64), msg).params["attributes"],
+            composite_eqn(lambda m: ascon.xof128(m, 32), msg).params["attributes"],
+            composite_eqn(lambda m: ascon.xof128(m, 64), msg).params["attributes"],
         )
 
 
@@ -444,7 +436,7 @@ class AsconCxof128KatTest(parameterized.TestCase):
 class AsconCxof128MarkerTest(absltest.TestCase):
     def test_the_marker_carries_its_name_version_and_operand_abi(self) -> None:
         msg = fnp.asarray(_message(9))
-        eqn = _composite(lambda m: ascon.cxof128(m, b"ctx", 40), msg)
+        eqn = composite_eqn(lambda m: ascon.cxof128(m, b"ctx", 40), msg)
         self.assertEqual(eqn.params["name"], ascon.ASCON_CXOF128_MARKER)
         self.assertEqual(eqn.params["version"], ascon.ASCON_CXOF128_MARKER_VERSION)
         # FOUR operands, not the other rows' three: the customization blocks
@@ -465,7 +457,7 @@ class AsconCxof128MarkerTest(absltest.TestCase):
         msg = fnp.asarray(_message(9))
 
         def prefix_shape(customization: bytes) -> tuple[int, ...]:
-            eqn = _composite(lambda m: ascon.cxof128(m, customization, 32), msg)
+            eqn = composite_eqn(lambda m: ascon.cxof128(m, customization, 32), msg)
             return tuple(eqn.invars[1].aval.shape)
 
         self.assertEqual(prefix_shape(b"a"), prefix_shape(b"ab"))

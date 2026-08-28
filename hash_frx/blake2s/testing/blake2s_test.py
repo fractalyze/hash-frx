@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from typing import Any
 
 import frx
 import frx.numpy as fnp
@@ -53,6 +52,11 @@ from hash_frx.blake2s.blake2s import (
 )
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
+from hash_frx.testing.composite_eqn import (
+    composite_attrs,
+    composite_eqn,
+    composite_shapes,
+)
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
@@ -141,18 +145,6 @@ class Blake2sVectorTest(parameterized.TestCase):
             self.assertEqual(bytes(got[i]), expected)
 
 
-def _composite(fn: Any, *args: Any) -> Any:
-    """The one composite eqn in `fn`'s jaxpr — read without lowering to MLIR
-    (the `grostl_test` helper)."""
-    eqns = [
-        e
-        for e in frx.make_jaxpr(fn)(*args).jaxpr.eqns
-        if e.primitive.name == "composite"
-    ]
-    assert len(eqns) == 1, f"expected one composite, got {len(eqns)}"
-    return eqns[0]
-
-
 _HAS_BLAKE2S_EMITTER = blake2s._routes_to_dedicated_emitter()
 
 
@@ -205,13 +197,13 @@ class Blake2sMarkerTest(absltest.TestCase):
         # schedule and the SIGMA rows must enter as scalar literals and
         # trace-time tuples, never as lifted table arrays.
         msg = fnp.asarray(np.zeros((4, 63), dtype=np.uint8))
-        eqn = _composite(blake2s.digest, msg)
+        eqn = composite_eqn(blake2s.digest, msg)
         self.assertEqual(eqn.params["name"], markers.BYTES_DIGEST_MARKER)
         self.assertEqual(eqn.params["version"], markers.BYTES_DIGEST_MARKER_VERSION)
-        attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+        attrs = composite_attrs(eqn)
         self.assertEqual(attrs["primitive"], "blake2s")
         self.assertLen(eqn.invars, 4)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        shapes = composite_shapes(eqn)
         # L = 63: one block once padded, so the zero tail is 1 byte.
         self.assertEqual(shapes, [(8,), (8,), (4, 63), (1,)])
 
@@ -220,8 +212,8 @@ class Blake2sMarkerTest(absltest.TestCase):
         # empty, and the operand still rides — zero-length, never dropped
         # (the invar COUNT is the pinned surface; only shapes move with L).
         msg = fnp.asarray(np.zeros((4, 64), dtype=np.uint8))
-        eqn = _composite(blake2s.digest, msg)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        eqn = composite_eqn(blake2s.digest, msg)
+        shapes = composite_shapes(eqn)
         self.assertEqual(shapes, [(8,), (8,), (4, 64), (0,)])
 
 
@@ -517,12 +509,12 @@ class Blake2sKeyedMarkerTest(absltest.TestCase):
         # One marker, four operands, the documented order — `msg` 64 bytes
         # longer because the key block was prepended outside the marker.
         msg = fnp.asarray(np.zeros((4, 63), dtype=np.uint8))
-        eqn = _composite(
+        eqn = composite_eqn(
             functools.partial(blake2s.digest, digest_size=32, key=_KAT_KEY), msg
         )
         self.assertEqual(eqn.params["name"], markers.BYTES_DIGEST_MARKER)
         self.assertLen(eqn.invars, 4)
-        shapes = [tuple(v.aval.shape) for v in eqn.invars]
+        shapes = composite_shapes(eqn)
         # 64 (key block) + 63 = 127, padding to two blocks with a 1-byte tail.
         self.assertEqual(shapes, [(8,), (8,), (4, 127), (1,)])
 
