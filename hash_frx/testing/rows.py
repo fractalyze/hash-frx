@@ -65,9 +65,11 @@ from hash_frx import (
     Sha3_256,
     Sha3_384,
     Sha3_512,
+    Sha224,
     Sha256,
     Sha384,
     Sha512,
+    Sha512_224,
     Sha512_256,
     Shake128,
     Shake256,
@@ -94,9 +96,11 @@ class RowCase(NamedTuple):
 # it — every row returns an `Array` — rather than over a list of rows anyone
 # labelled by hand.
 ALL_ROWS: tuple[RowCase, ...] = (
+    RowCase("Sha224", Sha224),
     RowCase("Sha256", Sha256),
     RowCase("Sha512", Sha512),
     RowCase("Sha384", Sha384),
+    RowCase("Sha512_224", Sha512_224),
     RowCase("Sha512_256", Sha512_256),
     RowCase("Sm3", Sm3),
     RowCase("Ripemd160", Ripemd160),

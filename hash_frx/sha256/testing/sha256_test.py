@@ -22,6 +22,8 @@ from frx import Array
 from hash_frx.byte_hash import ByteHash, capacity
 from hash_frx.fusion import FusionPath
 from hash_frx.sha256 import sha256
+from hash_frx.sha256.sha256 import Sha224, Sha256
+from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
     emitted_composites,
@@ -208,6 +210,163 @@ class Sha256ByteHashTest(parameterized.TestCase):
         # every words-in family; both are accepted because which one claims the
         # marker depends on the pinned plugin, not on this repo.
         assert_marker_recognized(self, "sha256", fn, blocks, envelope_key="md_digest")
+
+
+# NIST CAVP `shabytetestvectors`, `SHA224ShortMsg.rsp` — extracted from the .rsp
+# rather than typed. What they add over the `hashlib` sweeps, which already
+# cover these lengths and more, is independence from `hashlib`: the sweeps say
+# this tree agrees with CPython's SHA-224, and these say both agree with NIST.
+# All 65 rows of the file were checked while extracting, so the six kept are a
+# readable subset of a full agreement rather than the extent of what was
+# verified. The lengths are `_LENGTHS`' padding boundaries, 56 and 64 being the
+# ones where the 0x80 byte plus the 8-byte length field force a further block.
+# NIST's example-values series for SHA-224 ("abc" and the two-block 448-bit
+# message), the companion source to the CAVP records below: CAVP's messages are
+# random, so these are the two records an independent transcription is most
+# likely to publish and the ones a reader can check by eye against the
+# standard's worked example.
+_MSG_448 = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+_EXAMPLES_224 = (
+    ("abc", b"abc", "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7"),
+    (
+        "two_block_448_bit",
+        _MSG_448,
+        "75388b16512776cc5dba5da1fd890150b0c6455cb4f58b1952522525",
+    ),
+)
+
+_CAVP_224 = (
+    ("len_0", "", "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f"),
+    ("len_1", "84", "3cd36921df5d6963e73739cf4d20211e2d8877c19cff087ade9d0e3a"),
+    (
+        "len_55",
+        "445e8698eeb8accbaac4ffa7d934fffd16014a430ef70f3a9174c6cfe96d1e3f"
+        "6ab1377f4a7212dbb30146dd17d9f470c4dffc45b8e871",
+        "4c7ae028c0fe61f2a9cada61fae30685b77f04c6442576e912af9fa6",
+    ),
+    (
+        "len_56",
+        "52839f2f0853a30df14ec897a1914c685c1ac21470d00654c8c37663bfb65fa7"
+        "32dbb694d9dd09ced723b48d8f545846ba168988b61cc724",
+        "2f755a57674b49d5c25cb37348f35b6fd2de2552c749f2645ba63d20",
+    ),
+    (
+        "len_63",
+        "716944de41710c29b659be10480bb25a351a39e577ee30e8f422d57cf62ad95b"
+        "da39b6e70c61426e33fd84aca84cc7912d5eee45dc34076a5d2323a15c7964",
+        "61645ac748db567ac862796b8d06a47afebfa2e1783d5c5f3bcd81e2",
+    ),
+    (
+        "len_64",
+        "a3310ba064be2e14ad32276e18cd0310c933a6e650c3c754d0243c6c61207865"
+        "b4b65248f66a08edf6e0832689a9dc3a2e5d2095eeea50bd862bac88c8bd318d",
+        "b2a5586d9cbf0baa999157b4af06d88ae08d7c9faab4bc1a96829d65",
+    ),
+)
+
+
+class Sha224Test(parameterized.TestCase):
+    """SHA-224 — the §5.3.2 IV row over SHA-256's chain.
+
+    A wrong IV here is self-consistent: it would pass every structural
+    assertion in this file and produce a hash that is simply not SHA-224. The
+    differential sweep is what catches that, and the CAVP vectors are what make
+    the sweep's reference NIST rather than only CPython.
+    """
+
+    @parameterized.named_parameters(*_EXAMPLES_224)
+    def test_matches_the_published_example(self, msg: bytes, digest_hex: str) -> None:
+        rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        got = bytes(np.asarray(sha256.sha224_digest(rows))[0])
+        self.assertEqual(got.hex(), digest_hex)
+        self.assertEqual(hashlib.sha224(msg).hexdigest(), digest_hex)
+
+    def test_is_not_a_truncated_sha256(self) -> None:
+        # The vectors above cannot say this on their own — they would pass
+        # unchanged if the row ran the wrong §5.3 constant and the records had
+        # been generated from that same wrong constant. Comparing the two
+        # SHIPPED rows is what makes the §5.3.2 IV load-bearing.
+        msg = np.zeros((1, 64), dtype=np.uint8)
+        self.assertNotEqual(
+            bytes(np.asarray(sha256.sha224_digest(msg))[0]),
+            bytes(np.asarray(sha256.digest(msg))[0][:28]),
+        )
+
+    @parameterized.named_parameters(*_CAVP_224)
+    def test_matches_the_cavp_vector(self, msg_hex: str, digest_hex: str) -> None:
+        msg = bytes.fromhex(msg_hex)
+        rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        got = bytes(np.asarray(sha256.sha224_digest(rows))[0])
+        self.assertEqual(got.hex(), digest_hex)
+        # Anchors the sweeps' reference to the same record.
+        self.assertEqual(hashlib.sha224(msg).hexdigest(), digest_hex)
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_matches_hashlib(self, length: int) -> None:
+        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
+        got = bytes(np.asarray(sha256.sha224_digest(msg[None, :]))[0])
+        self.assertEqual(got, hashlib.sha224(bytes(msg)).digest())
+
+    def test_rides_the_sha256_marker_with_truncation_outside(self) -> None:
+        # One composite, the blocks marker, whose output is the FULL [B, 32]
+        # serialized state — the truncation is the caller's slice outside it,
+        # so the wire contract a recognizer reads is byte-for-byte SHA-256's.
+        msg = fnp.asarray(np.zeros((1, 64), dtype=np.uint8))
+        self.assertEqual(
+            emitted_composites(sha256.sha224_digest, msg), [sha256.SHA256_MARKER]
+        )
+        self.assertEqual(np.asarray(sha256.sha224_digest(msg)).shape, (1, 28))
+
+    def test_never_takes_the_whole_message_marker(self) -> None:
+        # `sha256_bytes` carries SHA-256's own IV as operand 0 of its region, so
+        # the whole-message form cannot serve a variant. `digest` switches onto
+        # it wherever the recognizer exists; this asserts the variant does not
+        # follow, which a sweep run on a backend without that recognizer would
+        # never notice.
+        msg = np.zeros((1, 64), dtype=np.uint8)
+        with mock.patch.object(sha256, "_routes_to_bytes_marker", lambda: True):
+            self.assertEqual(
+                emitted_composites(sha256.sha224_digest, msg), [sha256.SHA256_MARKER]
+            )
+
+    def test_one_chain_trace_serves_the_variant_and_the_parent(self) -> None:
+        # A variant is DATA (a different h0 value on the same [8] aval), not
+        # ABI, so SHA-256's and SHA-224's chains share one trace per shape.
+        msgs = fnp.asarray(np.zeros((1, 64), dtype=np.uint8))
+        with mock.patch.object(sha256, "_routes_to_bytes_marker", lambda: False):
+            assert_single_trace(
+                self,
+                sha256.sha256_merkle_damgard,
+                [
+                    functools.partial(sha256.digest, msgs),
+                    functools.partial(sha256.sha224_digest, msgs),
+                ],
+            )
+
+
+class Sha224ByteHashTest(parameterized.TestCase):
+    """The `Sha224` row against the seam, `hashlib`, and its parent."""
+
+    def test_digest_size_is_the_standards(self) -> None:
+        # The row sweep in `testing/row_conformance_test.py` holds every
+        # registered row to the protocol and to digest_size-matches-output;
+        # what it cannot know is that FIPS 180-4 fixes this one at 28.
+        self.assertEqual(Sha224().digest_size, 28)
+
+    def test_fusion_path_is_inherited_from_the_parent(self) -> None:
+        # An IV row over the same marker, so it routes wherever SHA-256 routes
+        # rather than having a path of its own.
+        self.assertIs(Sha224().fusion_path, Sha256().fusion_path)
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_device_matches_hashlib(self, length: int) -> None:
+        rng = np.random.default_rng(length + 3)
+        msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
+        got = np.asarray(Sha224().digest(msgs))
+        self.assertEqual(got.shape, (4, 28))
+        np.testing.assert_array_equal(
+            got, oracle_digest(lambda b: hashlib.sha224(b).digest(), 28, msgs)
+        )
 
 
 class Sha256DigestRoutingTest(absltest.TestCase):
@@ -422,9 +581,10 @@ class EmptyBatchTest(absltest.TestCase):
     uint8 [0, digest_size] instead of failing in a block-count reshape."""
 
     def test_zero_rows_digest_to_zero_rows(self) -> None:
-        got = np.asarray(sha256.Sha256().digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
-        self.assertEqual(got.shape, (0, 32))
-        self.assertEqual(got.dtype, np.uint8)
+        for hasher, size in ((sha256.Sha256(), 32), (Sha224(), 28)):
+            got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))
+            self.assertEqual(got.shape, (0, size))
+            self.assertEqual(got.dtype, np.uint8)
 
 
 class MessageRankTest(absltest.TestCase):

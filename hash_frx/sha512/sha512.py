@@ -229,8 +229,11 @@ INITIAL_STATE = fnp.asarray(_H0)  # uint32 [16]
 
 # The truncated variants' initial hash values, transcribed from the same §5.3
 # family: SHA-384 (§5.3.4 — sqrt of the 9th..16th primes, the way _H64 is the
-# first eight) and SHA-512/256 (§5.3.6 — the SHA-512/t generation function:
-# SHA-512 with the ⊕a5…a5 initial state over the ASCII string "SHA-512/256").
+# first eight) and SHA-512/224 (§5.3.6.1) / SHA-512/256 (§5.3.6.2), both from
+# the SHA-512/t generation function: SHA-512 with the ⊕a5…a5 initial state over
+# the ASCII string "SHA-512/t". The standard prints all three, so all three are
+# transcribed — running the generation function here would add a code path that
+# executes once, whose bug is indistinguishable from a bug in the hash.
 # Everything else — padding, schedule, rounds, K — is SHA-512's own (§6.5/§6.7),
 # which is why a variant is a different `h0` OPERAND on the same blocks marker
 # plus a caller-side output truncation, and no new wire name exists for either.
@@ -244,6 +247,16 @@ _H384_64 = (
     0xDB0C2E0D64F98FA7,
     0x47B5481DBEFA4FA4,
 )
+_H512_224_64 = (
+    0x8C3D37C819544DA2,
+    0x73E1996689DCD4D6,
+    0x1DFAB7AE32FF9C82,
+    0x679DD514582F9FCF,
+    0x0F6D2B697BD44DA8,
+    0x77E36F7304C48942,
+    0x3F9D85A86A1D36C8,
+    0x1112E6AD91D692A1,
+)
 _H512_256_64 = (
     0x22312194FC2BF72C,
     0x9F555FA3C84C64C2,
@@ -256,6 +269,7 @@ _H512_256_64 = (
 )
 
 INITIAL_STATE_384 = fnp.asarray(_pairs(_H384_64))  # uint32 [16]
+INITIAL_STATE_512_224 = fnp.asarray(_pairs(_H512_224_64))  # uint32 [16]
 INITIAL_STATE_512_256 = fnp.asarray(_pairs(_H512_256_64))  # uint32 [16]
 
 
@@ -482,6 +496,18 @@ def sha384_digest(msg: ArrayLike) -> fnp.ndarray:
     return sha512_merkle_damgard(INITIAL_STATE_384, _padded_words(msg))[:, :48]
 
 
+def sha512_224_digest(msg: ArrayLike) -> fnp.ndarray:
+    """SHA-512/224 (FIPS 180-4 §6.7) of a batch: uint8 [B, L] -> [B, 28].
+
+    The §5.3.6.1 initial state on the same blocks marker, truncated to 224 bits
+    by the caller-side slice — `sha512_256_digest`'s arrangement at the other
+    SHA-512/t table. Distinct from SHA-224 in everything but output width: this
+    is the 64-bit-word chain over 128-byte blocks, so the two agree on no
+    message."""
+    msg = device_message(msg)
+    return sha512_merkle_damgard(INITIAL_STATE_512_224, _padded_words(msg))[:, :28]
+
+
 def sha512_256_digest(msg: ArrayLike) -> fnp.ndarray:
     """SHA-512/256 (FIPS 180-4 §6.7) of a batch: uint8 [B, L] -> [B, 32].
 
@@ -634,6 +660,21 @@ class Sha384(DeviceRow):
         return sha384_digest(msg)
 
 
+class Sha512_224(DeviceRow):
+    """`ByteHash` for device SHA-512/224 — `sha512_224_digest` on the shared
+    marker, the §5.3.6.1 initial state, the 28-byte truncation outside. The
+    64-bit-word sibling of `Sha224`, which reaches the same digest width
+    through SHA-256's 32-bit chain."""
+
+    digest_size = 28
+
+    def __init__(self) -> None:
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
+
+    def digest(self, msg: ArrayLike) -> Array:
+        return sha512_224_digest(msg)
+
+
 class Sha512_256(DeviceRow):
     """`ByteHash` for device SHA-512/256 — `sha512_256_digest` on the shared
     marker, the §5.3.6 initial state, the 32-byte truncation outside. The
@@ -652,4 +693,5 @@ if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_marker: type[ByteHash] = Sha512
     _bh_384: type[ByteHash] = Sha384
+    _bh_512_224: type[ByteHash] = Sha512_224
     _bh_512_256: type[ByteHash] = Sha512_256
