@@ -72,6 +72,15 @@ Python reviewer would prefer for a lowering that stays one kernel.
   internal `jit` — `lax.select`, not `fnp.where`. The wrapper lowers to a call
   inside the body, which the single-kernel rewriter rejects. A nested `@jit` is
   the same failure, so a marked body sits under exactly one `@jit` boundary.
+- **Unrolled means unrolled over rounds, not over lanes.** State stays in its
+  natural shape and each step is element-wise over the whole of it; a step written
+  as one operation per lane emits one HLO instruction per lane per round. Keccak-f
+  cost ~9,800 HLO lines for a *single* round that way and never finished compiling
+  24, against 0.9 s once the state was a `(5, 5)` grid. The rewrites are all
+  shape, not fewer ops: a parity is a fold over rows rather than a reduce over the
+  axis, a neighbour is a static `roll`, per-lane rotation amounts are constant
+  arrays, and a fixed permutation is slices and a concatenate. Note the trap —
+  one round compiles fine, so a small repro hides the cliff.
 - **A constant a name-routed emitter reads is an explicit operand.** The
   emitter's operand ABI is positional and fixed: it reads the round-constant
   table at the index its recognizer declares, so a constant left inside the
