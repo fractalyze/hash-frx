@@ -107,6 +107,33 @@ A stale plugin against newer Python surfaces as
 marker seam every primitive here lowers through is exactly what a mismatched
 plugin fails to recognize.
 
+## A plugin that predates a marker fails silently, and `fusion_path` will not say so
+
+The failure above is the loud one. The quiet one is a plugin new enough to
+compile but old enough not to know a marker's *name*: it declines the name and
+the marker inlines to its decomposition, so the digest is right and every kernel
+is gone. Nothing raises.
+
+**`fusion_path` is not evidence here.** It reads `routing(<module constant>,
+<backend tuple>)` — it answers *"does the pin this module was written against
+ship that emitter"*, not *"does the plugin now loaded recognize this marker"*.
+It reports `DEDICATED` against a venv that has never heard of the marker.
+
+So before trusting any measurement that turns on an emitter, check the venv
+against the pin and then ask the wheel directly — its string table is the
+authority:
+
+```sh
+pip show frx frxlib | grep -E '^(Name|Version)'
+grep -E '^(frx|frxlib)==' requirements.in
+strings -a "$(python -c 'import frxlib,os;print(os.path.dirname(frxlib.__file__))')/libjax_common.so" \
+    | grep 'hash_frx.digest.'
+```
+
+Skipping this is how a routed-versus-un-routed comparison ends up measuring two
+inlined decompositions against each other, and reaches a doc as a claim about
+emitters.
+
 ## `bazel test` is one leg, not both
 
 `.bazelrc` pins `test --test_env=FRX_PLATFORMS=cpu`, so a plain `bazel test
