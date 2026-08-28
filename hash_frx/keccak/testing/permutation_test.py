@@ -14,8 +14,6 @@ is how a body with 288 call boundaries once passed a compiled-module check.
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Iterator
 from unittest import mock
 
 import frx
@@ -47,6 +45,10 @@ from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
+from hash_frx.testing.routing_mock import (
+    dedicated_emitter,
+    generic_emitter,
+)
 
 # Whether this leg can actually reach the Keccak emitters. Read off the shipped
 # condition rather than restated, so a backend gaining an arm lifts the cases
@@ -165,38 +167,6 @@ class KeccakF1600Test(absltest.TestCase):
             k.permute(fnp.zeros(50, dtype=fnp.int32))
 
 
-@contextlib.contextmanager
-def _routing(dedicated: bool) -> Iterator[None]:
-    """Pin which marker `KeccakF1600` picks, whatever this leg would pick.
-
-    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`,
-    because the pin is only half of it: on a leg absent from
-    `_EMITTER_BACKENDS`, patching the pin alone leaves both arms on the generic
-    marker and the dedicated assertions below become vacuous. Both legs carry the
-    Keccak arms today, so that is currently unreachable here — but the patch
-    holds whatever the tuple says, which is the point of patching the decision
-    rather than one of its inputs. These cases are all read off the jaxpr or the
-    lowered module, so neither arm needs the emitter to exist.
-
-    The decision is read in `__init__`, so this has to wrap construction rather
-    than just the call.
-    """
-    with mock.patch.object(
-        permutation_mod, "_routes_to_dedicated_emitter", lambda: dedicated
-    ):
-        yield
-
-
-def _dedicated_emitter() -> contextlib.AbstractContextManager[None]:
-    """Route as if the emitters were reachable — this leg's default on GPU."""
-    return _routing(True)
-
-
-def _generic_emitter() -> contextlib.AbstractContextManager[None]:
-    """Route as if they were not — this leg's default on CPU."""
-    return _routing(False)
-
-
 class KeccakF1600MarkerTest(absltest.TestCase):
     """The operand ABI a KeccakFusion emitter reads (#21)."""
 
@@ -209,8 +179,8 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # the generic rewriter reads the same list.
         state = _device_state(_STATES["counter"])
         for label, ctx in (
-            ("generic", _generic_emitter()),
-            ("dedicated", _dedicated_emitter()),
+            ("generic", generic_emitter(permutation_mod)),
+            ("dedicated", dedicated_emitter(permutation_mod)),
         ):
             with self.subTest(routing=label), ctx:
                 eqn = composite_eqn(KeccakF1600().permute, state)
@@ -219,7 +189,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
                 self.assertEqual(eqn.invars[1].aval.shape, (5, 5))
 
     def test_the_dedicated_marker_carries_its_name_version_and_attrs(self) -> None:
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             eqn = composite_eqn(KeccakF1600().permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], KECCAK_F_MARKER)
         self.assertEqual(eqn.params["version"], KECCAK_F_MARKER_VERSION)
@@ -244,7 +214,7 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # kernel but no kernel: the rewriter declines a bare fused_region with no
         # live-width operand, so it inlines. Carrying no version and no attrs is
         # what says the marker claims nothing an emitter could read.
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             k = KeccakF1600()
             self.assertIs(k.fusion_path, FusionPath.GENERIC)
             self.assertEqual(k.fused_region_marker, (FUSED_REGION_MARKER, 0))
@@ -259,8 +229,8 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # mistake in the decomposition cannot pass.
         for name, lanes_in in _STATES.items():
             for label, ctx in (
-                ("generic", _generic_emitter()),
-                ("dedicated", _dedicated_emitter()),
+                ("generic", generic_emitter(permutation_mod)),
+                ("dedicated", dedicated_emitter(permutation_mod)),
             ):
                 with self.subTest(state=name, routing=label), ctx:
                     out = frx.jit(KeccakF1600().permute)(_device_state(lanes_in))
@@ -274,12 +244,12 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # stub is what keeps a non-dedicated permutation from being wrapped in
         # one: it names no layout, so there is nothing for an emitter to read.
         state = _device_state(_STATES["zeros"])
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             operands, _permute, attrs = KeccakF1600().fused_region_spec(state)
         self.assertLen(operands, 1)
         self.assertEqual(attrs, {})
 
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             operands, permute, attrs = KeccakF1600().fused_region_spec(state)
         self.assertLen(operands, 2)
         self.assertEqual(attrs["permutation"], "keccak_f")
@@ -294,9 +264,9 @@ class KeccakF1600MarkerTest(absltest.TestCase):
         # The parameter surface is empty, so without the marker in `__eq__` the
         # two routings collide in `_permute_body`'s static-arg cache and the
         # second silently reuses the first's marker.
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             generic = KeccakF1600()
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             dedicated = KeccakF1600()
         self.assertNotEqual(generic, dedicated)
         self.assertNotEqual(hash(generic), hash(dedicated))

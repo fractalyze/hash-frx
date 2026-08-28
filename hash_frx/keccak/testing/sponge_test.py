@@ -13,9 +13,7 @@ rather than against each other, so a shared mistake cannot pass.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
-from collections.abc import Iterator
 from typing import Any
 from unittest import mock
 
@@ -39,6 +37,10 @@ from hash_frx.testing.composite_eqn import (
     composite_eqns,
 )
 from hash_frx.testing.marker_recognized import assert_marker_recognized
+from hash_frx.testing.routing_mock import (
+    dedicated_emitter,
+    generic_emitter,
+)
 
 # Read off the shipped condition rather than restated, so a backend gaining an
 # arm lifts the cases below with it and the two cannot drift.
@@ -51,33 +53,6 @@ _SHA3_256 = KeccakSponge(rate=136, suffix=0x06, output_size=32)
 _SHAKE128_LONG = KeccakSponge(
     rate=SHAKE128_RATE, suffix=SHAKE_SUFFIX, output_size=2 * SHAKE128_RATE
 )
-
-
-@contextlib.contextmanager
-def _routing(dedicated: bool) -> Iterator[None]:
-    """Pin which marker the permutation picks, whatever this leg would pick.
-
-    Patches the combined decision rather than `_DEDICATED_EMITTER_AVAILABLE`: on
-    a leg absent from `_EMITTER_BACKENDS`, patching the pin alone leaves both
-    arms generic and the whole-hash assertions below stop testing anything. That
-    holds whatever the tuple says, which is why the decision is patched rather
-    than one of its inputs. Every case here reads the jaxpr, so neither arm needs
-    the emitter to exist.
-    """
-    with mock.patch.object(
-        permutation_mod, "_routes_to_dedicated_emitter", lambda: dedicated
-    ):
-        yield
-
-
-def _dedicated_emitter() -> contextlib.AbstractContextManager[None]:
-    """Route as if the emitters were reachable, so the whole hash is one region."""
-    return _routing(True)
-
-
-def _generic_emitter() -> contextlib.AbstractContextManager[None]:
-    """Route as if they were not, so each permute is its own generic region."""
-    return _routing(False)
 
 
 def _message(batch: int, length: int) -> frx.Array:
@@ -101,13 +76,13 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # That is a launch per block, and the reason an unrecognized Keccak sits
         # in the hot path of every ML-DSA sign.
         msg = _message(2, 200)
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             generic = composite_eqns(_SHAKE128_LONG.hash, msg)
         self.assertLen(generic, 3)
         for eqn in generic:
             self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
 
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             dedicated = composite_eqns(_SHAKE128_LONG.hash, msg)
         self.assertLen(dedicated, 1)
         self.assertEqual(dedicated[0].params["name"], KECCAK_SPONGE_MARKER)
@@ -116,7 +91,7 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
     def test_the_region_carries_the_permutation_and_the_sponge_shape(self) -> None:
         # The permutation's attrs ride alongside the construction's, so the
         # marker says which primitive runs inside it as well as what wraps it.
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             eqn = composite_eqn(_SHA3_256.hash, _message(1, 64))
         attrs = composite_attrs(eqn)
         self.assertEqual(
@@ -134,7 +109,7 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # Operand 0 is the padded byte matrix — rate-aligned, so the emitter
         # never needs the domain suffix — and the rest is whatever the
         # permutation's own ABI names. No captured constants ahead of them.
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             eqn = composite_eqn(_SHA3_256.hash, _message(3, 64))
         self.assertLen(eqn.invars, 2)
         self.assertEqual(eqn.invars[0].aval.shape, (3, 136))  # one padded block
@@ -157,8 +132,8 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
             msg = _message(2, length)
             rows = [bytes(np.asarray(row)) for row in np.asarray(msg)]
             for label, ctx in (
-                ("generic", _generic_emitter()),
-                ("dedicated", _dedicated_emitter()),
+                ("generic", generic_emitter(permutation_mod)),
+                ("dedicated", dedicated_emitter(permutation_mod)),
             ):
                 with self.subTest(case=name, routing=label), ctx:
                     got = np.asarray(frx.jit(sponge.hash)(msg))
@@ -170,9 +145,9 @@ class KeccakSpongeMarkerTest(absltest.TestCase):
         # hash. Compared against the generic path's lowering, which is the same
         # computation with the region boundary in a different place.
         msg = _message(1, 64)
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             plain = np.asarray(frx.jit(_SHA3_256.hash)(msg))
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             marked = np.asarray(frx.jit(_SHA3_256.hash)(msg))
         np.testing.assert_array_equal(plain, marked)
 
@@ -197,7 +172,7 @@ class VmappedMarkerTest(absltest.TestCase):
         # Two absorb blocks and two squeezes, so the region is the whole chain
         # rather than a single permute, and vmap's axis stays outermost ahead of
         # the sponge's own batch.
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             eqns = composite_eqns(frx.vmap(_SHAKE128_LONG.hash), _stacked(3, 2, 200))
         self.assertLen(eqns, 1)
         self.assertEqual(eqns[0].params["name"], KECCAK_SPONGE_MARKER)
@@ -208,7 +183,7 @@ class VmappedMarkerTest(absltest.TestCase):
     def test_a_leading_axis_of_one_is_still_a_rank_it_has_to_admit(self) -> None:
         # The degenerate case a fix that squeezes rather than collapses would
         # pass, so it is pinned apart from the case above.
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             eqns = composite_eqns(frx.vmap(_SHA3_256.hash), _stacked(1, 3, 64))
         self.assertLen(eqns, 1)
         self.assertEqual(eqns[0].invars[0].aval.shape, (1, 3, 136))
@@ -220,8 +195,8 @@ class VmappedMarkerTest(absltest.TestCase):
         stacked = _stacked(3, 2, 200)
         flat = fnp.reshape(stacked, (3 * 2, 200))
         for label, ctx in (
-            ("generic", _generic_emitter()),
-            ("dedicated", _dedicated_emitter()),
+            ("generic", generic_emitter(permutation_mod)),
+            ("dedicated", dedicated_emitter(permutation_mod)),
         ):
             with self.subTest(routing=label), ctx:
                 got = np.asarray(frx.jit(frx.vmap(_SHAKE128_LONG.hash))(stacked))
@@ -283,7 +258,7 @@ class DedicatedRegionTraceCountTest(absltest.TestCase):
         # test's own.
         sponge_mod._fused_hash.clear_cache()
         with (
-            _dedicated_emitter(),
+            dedicated_emitter(permutation_mod),
             mock.patch.object(sponge_mod, "fused_region_over", counting),
         ):
             for _ in range(calls):
@@ -306,7 +281,7 @@ class DedicatedRegionTraceCountTest(absltest.TestCase):
 
         sponge_mod._fused_hash.clear_cache()
         with (
-            _dedicated_emitter(),
+            dedicated_emitter(permutation_mod),
             mock.patch.object(sponge_mod, "fused_region_over", counting),
         ):
             _SHA3_256.hash(_message(1, 64))

@@ -78,6 +78,7 @@ py_test(
         "//hash_frx/testing:fusion_ready",
         "//hash_frx/testing:jit_cache",
         "//hash_frx/testing:marker_seam",
+        "//hash_frx/testing:routing_mock",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

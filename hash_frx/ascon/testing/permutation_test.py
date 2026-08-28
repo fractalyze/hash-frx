@@ -21,8 +21,6 @@ the seam and one reached through the digest from being two different functions.
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Iterator
 from unittest import mock
 
 import frx
@@ -58,6 +56,10 @@ from hash_frx.testing.composite_eqn import (
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
+from hash_frx.testing.routing_mock import (
+    dedicated_emitter,
+    generic_emitter,
+)
 from hash_frx.word import split
 
 _STATES: dict[str, tuple[int, ...]] = {
@@ -99,26 +101,6 @@ def _from_state(state: np.ndarray) -> tuple[int, ...]:
 
 def _device_state(words: tuple[int, ...]) -> Array:
     return fnp.asarray(_to_state(words))
-
-
-@contextlib.contextmanager
-def _dedicated_emitter() -> Iterator[None]:
-    """A leg where the pin and the backend both carry the emitter — the routing
-    no plugin ships yet, constructed so the dedicated arm is testable before it
-    exists (the Vision arrangement)."""
-    with (
-        mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True),
-        mock.patch.object(
-            permutation_mod, "_EMITTER_BACKENDS", (frx.default_backend(),)
-        ),
-    ):
-        yield
-
-
-@contextlib.contextmanager
-def _generic_emitter() -> Iterator[None]:
-    with mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
-        yield
 
 
 class AsconPTest(absltest.TestCase):
@@ -262,8 +244,8 @@ class AsconPMarkerTest(absltest.TestCase):
         # the same list.
         state = _device_state(_STATES["counter"])
         for label, ctx in (
-            ("generic", _generic_emitter()),
-            ("dedicated", _dedicated_emitter()),
+            ("generic", generic_emitter(permutation_mod)),
+            ("dedicated", dedicated_emitter(permutation_mod)),
         ):
             with self.subTest(routing=label), ctx:
                 eqn = composite_eqn(AsconP().permute, state)
@@ -282,7 +264,7 @@ class AsconPMarkerTest(absltest.TestCase):
         assert_fusion_ready(_rounds, *_abi_operands(_device_state(_STATES["zeros"])))
 
     def test_the_dedicated_marker_carries_its_name_version_and_attrs(self) -> None:
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             eqn = composite_eqn(AsconP().permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], ASCON_P_MARKER)
         self.assertEqual(eqn.params["version"], ASCON_P_MARKER_VERSION)
@@ -294,7 +276,7 @@ class AsconPMarkerTest(absltest.TestCase):
     def test_the_generic_marker_carries_no_contract(self) -> None:
         # What every leg gets today. A version or an attribute on the generic
         # region would claim a contract the marker does not have.
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             eqn = composite_eqn(AsconP().permute, _device_state(_STATES["zeros"]))
         self.assertEqual(eqn.params["name"], FUSED_REGION_MARKER)
         self.assertEqual(eqn.params["version"], 0)
@@ -308,8 +290,8 @@ class AsconPMarkerTest(absltest.TestCase):
         words = _STATES["counter"]
         want = tuple(reference_permutation(list(words)))
         for label, ctx in (
-            ("generic", _generic_emitter()),
-            ("dedicated", _dedicated_emitter()),
+            ("generic", generic_emitter(permutation_mod)),
+            ("dedicated", dedicated_emitter(permutation_mod)),
         ):
             with self.subTest(routing=label), ctx:
                 got = np.asarray(AsconP().permute(_device_state(words)))
@@ -320,12 +302,12 @@ class AsconPMarkerTest(absltest.TestCase):
         # stub names no layout, which is what keeps a non-dedicated permutation
         # from being wrapped in one.
         state = _device_state(_STATES["zeros"])
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             operands, _permute, attrs = AsconP().fused_region_spec(state)
         self.assertLen(operands, 1)
         self.assertEqual(attrs, {})
 
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             operands, permute, attrs = AsconP().fused_region_spec(state)
         self.assertLen(operands, 1)
         self.assertEqual(attrs["permutation"], "ascon_p")
@@ -351,9 +333,9 @@ class AsconPMarkerTest(absltest.TestCase):
         # The parameter surface is empty, so without the marker in `__eq__` the
         # two routings collide in `_permute_body`'s static-arg cache and the
         # second would be served the first's marker.
-        with _generic_emitter():
+        with generic_emitter(permutation_mod):
             generic = AsconP()
-        with _dedicated_emitter():
+        with dedicated_emitter(permutation_mod):
             dedicated = AsconP()
         self.assertNotEqual(generic, dedicated)
         self.assertNotEqual(hash(generic), hash(dedicated))
@@ -395,7 +377,17 @@ class EmitterGateTest(absltest.TestCase):
         self.assertIs(perm.fusion_path, FusionPath.GENERIC)
 
     def test_both_halves_true_is_what_routes_dedicated(self) -> None:
-        with _dedicated_emitter():
+        # The positive case of the conjunction, so it sets the two inputs rather
+        # than taking `routing_mock.dedicated_emitter`: pinning the combined
+        # decision would assert that a `True` decision routes DEDICATED, which
+        # is not what this class is for. The three cases above are the negative
+        # halves; this is the one that shows they are satisfiable.
+        with (
+            mock.patch.object(permutation_mod, "_DEDICATED_EMITTER_AVAILABLE", True),
+            mock.patch.object(
+                permutation_mod, "_EMITTER_BACKENDS", (frx.default_backend(),)
+            ),
+        ):
             perm = AsconP()
         self.assertIs(perm.fusion_path, FusionPath.DEDICATED)
         self.assertEqual(

@@ -37,6 +37,10 @@ from hash_frx.poseidon.sparse import (
 )
 from hash_frx.testing.marker_recognized import assert_marker_recognized
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
+from hash_frx.testing.routing_mock import (
+    dedicated_emitter,
+    generic_emitter,
+)
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -298,18 +302,18 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
 
 def _dedicated_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
     """Routed to the dedicated emitter whatever the backend, so these cases still
-    assert on a CPU runner. Patched around construction: the name is chosen in
+    assert on a CPU runner. Built inside the patch: the name is chosen in
     `__init__`, and every case here reads the lowering, not a compile."""
-    with mock.patch.object(sparse_mod, "_routes_to_dedicated_emitter", lambda: True):
+    with dedicated_emitter(sparse_mod):
         return SparsePoseidon(params if params is not None else _params())
 
 
 def _generic_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
-    """A SparsePoseidon built with the dedicated emitter forced unavailable, so its
-    permute falls back to the generic `zorch.fused_region` marker. `_DEDICATED_-
-    EMITTER_AVAILABLE` is read in `__init__`, so the patch must wrap construction;
-    the instance then carries the generic name/attrs and lowers the same afterwards."""
-    with mock.patch.object(sparse_mod, "_routes_to_dedicated_emitter", lambda: False):
+    """A SparsePoseidon built with the dedicated emitter forced out of reach, so
+    its permute falls back to the generic `zorch.fused_region` marker. The routing
+    is read in `__init__`, so the patch has to wrap construction; the instance then
+    carries the generic name/attrs and lowers the same afterwards."""
+    with generic_emitter(sparse_mod):
         return SparsePoseidon(params if params is not None else _params())
 
 
