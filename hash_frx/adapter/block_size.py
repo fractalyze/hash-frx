@@ -47,9 +47,11 @@ if TYPE_CHECKING:
 # HMAC over SHA-3 is defined but rarely the right tool (KMAC exists, FIPS 202
 # §5.3.1), which is worth knowing before reaching for one of these.
 _BLOCK_SIZES: dict[str, int] = {
+    "Sha224": 64,
     "Sha256": 64,
     "Sha512": 128,
     "Sha384": 128,
+    "Sha512_224": 128,
     "Sha512_256": 128,
     "Sm3": 64,
     "Ripemd160": 64,

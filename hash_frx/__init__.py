@@ -135,6 +135,7 @@ _EXPORTS: dict[str, str] = {
     "TupleHashXof128": "hash_frx.keccak.tuple_hash",
     "TupleHashXof256": "hash_frx.keccak.tuple_hash",
     "Ripemd160": "hash_frx.ripemd160.ripemd160",
+    "Sha224": "hash_frx.sha256.sha256",
     "Sha256": "hash_frx.sha256.sha256",
     "Sha384": "hash_frx.sha512.sha512",
     "Sha3_224": "hash_frx.keccak.byte_hashes",
@@ -142,6 +143,7 @@ _EXPORTS: dict[str, str] = {
     "Sha3_384": "hash_frx.keccak.byte_hashes",
     "Sha3_512": "hash_frx.keccak.byte_hashes",
     "Sha512": "hash_frx.sha512.sha512",
+    "Sha512_224": "hash_frx.sha512.sha512",
     "Sha512_256": "hash_frx.sha512.sha512",
     "Shake128": "hash_frx.keccak.byte_hashes",
     "Shake256": "hash_frx.keccak.byte_hashes",
@@ -304,6 +306,7 @@ if TYPE_CHECKING:
     from hash_frx.poseidon2.standard import BabyBear16 as BabyBear16
     from hash_frx.poseidon2.standard import KoalaBear16 as KoalaBear16
     from hash_frx.ripemd160.ripemd160 import Ripemd160 as Ripemd160
+    from hash_frx.sha256.sha256 import Sha224 as Sha224
     from hash_frx.sha256.sha256 import Sha256 as Sha256
     from hash_frx.sha256.sha256 import Sha256State as Sha256State
     from hash_frx.sha256.sha256 import sha256_stream_absorb as sha256_stream_absorb
@@ -311,6 +314,7 @@ if TYPE_CHECKING:
     from hash_frx.sha256.sha256 import sha256_stream_init as sha256_stream_init
     from hash_frx.sha512.sha512 import Sha384 as Sha384
     from hash_frx.sha512.sha512 import Sha512 as Sha512
+    from hash_frx.sha512.sha512 import Sha512_224 as Sha512_224
     from hash_frx.sha512.sha512 import Sha512_256 as Sha512_256
     from hash_frx.sha512.sha512 import Sha512State as Sha512State
     from hash_frx.sha512.sha512 import sha512_stream_absorb as sha512_stream_absorb

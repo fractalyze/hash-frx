@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from typing import Any
+from typing import Any, Callable, NamedTuple
 
 import frx
 import frx.numpy as fnp
@@ -25,11 +25,13 @@ from absl.testing import absltest, parameterized
 from hash_frx import markers
 from hash_frx.byte_hash import ByteHash
 from hash_frx.fusion import FusionPath
+from hash_frx.sha256 import sha256 as sha256_mod
 from hash_frx.sha256.sha256 import Sha256
 from hash_frx.sha512 import sha512
 from hash_frx.sha512.sha512 import (
     Sha384,
     Sha512,
+    Sha512_224,
     Sha512_256,
 )
 from hash_frx.testing.jit_cache import assert_single_trace
@@ -405,17 +407,102 @@ _VARIANT_VECTORS = (
     ),
 )
 
-# name -> (module digest fn, digest size, hashlib oracle). `sha512_256`
-# reaches hashlib through OpenSSL (`hashlib.new`); the host row's docstring
-# carries the availability story.
+
+class _Variant(NamedTuple):
+    """One truncated SHA-512 row, carrying everything a sweep needs of it.
+
+    The table is the single source: every variant sweep below derives its rows
+    from it rather than listing them, so a row added here arrives with the
+    vector, differential, seam, routing and identity assertions the others
+    already have. Listing them is what let `SeamConformanceTest` fall a family
+    behind in the keccak file.
+    """
+
+    digest: Callable[..., Any]  # the module-level function
+    size: int
+    oracle: Callable[[bytes], Any]  # hashlib constructor over the same bytes
+    row: type[ByteHash]  # the seam row over it
+
+
+# The two SHA-512/t rows reach hashlib through OpenSSL (`hashlib.new`) rather
+# than a named constructor.
 _VARIANTS = {
-    "sha384": (sha512.sha384_digest, 48, lambda b: hashlib.sha384(b)),
-    "sha512_256": (
+    "sha384": _Variant(sha512.sha384_digest, 48, lambda b: hashlib.sha384(b), Sha384),
+    "sha512_224": _Variant(
+        sha512.sha512_224_digest,
+        28,
+        lambda b: hashlib.new("sha512_224", b),
+        Sha512_224,
+    ),
+    "sha512_256": _Variant(
         sha512.sha512_256_digest,
         32,
         lambda b: hashlib.new("sha512_256", b),
+        Sha512_256,
     ),
 }
+
+# NIST CAVP `shabytetestvectors`, `SHA512_224ShortMsg.rsp` — extracted from the
+# .rsp rather than typed. What they add over the `hashlib` sweeps, which already
+# cover these lengths and more, is independence from `hashlib`: the sweeps say
+# this tree agrees with OpenSSL's SHA-512/224, and these say both agree with
+# NIST. All 129 rows of the file were checked while extracting, so the six kept
+# are a readable subset of a full agreement rather than the extent of what was
+# verified. The lengths are the padding boundaries `_LENGTHS` names, 112 and 128
+# being the ones where the 0x80 byte plus the 16-byte length field force a
+# further block.
+_CAVP_512_224 = (
+    ("len_0", "", "6ed0dd02806fa89e25de060c19d3ac86cabb87d6a0ddd05c333b84f4"),
+    ("len_1", "cf", "4199239e87d47b6feda016802bf367fb6e8b5655eff6225cb2668f4a"),
+    (
+        "len_111",
+        "15cb777ef3e451b928dbf288e46a3627044ff5de42add884a9af6b424d6e7399"
+        "381581a6a743c7a577b02bb5da149ada4e449f48d09e34df4ca8d8f259f4e14c"
+        "23471475a8f97331289f564ad6e8bd8fd4c5e51d5ecd19dd46dfcb4ea009e385"
+        "bea857725fd1fc6423f09ccf42af48",
+        "9fa12561f1df9a2d793292e0f4df5327af529336b5b2118952f5c24e",
+    ),
+    (
+        "len_112",
+        "d24df75a00cf92677bb41a620fae519723937ebfe1f7b430970056505d76db4f"
+        "f91acf16ff391a7a3d8085b655127a18acd80bfa831837f4644a6850c0273fbe"
+        "d6029449d65bb98a47b2ff1ca6997c50500d0b21a206936a5e4d8d56508ec018"
+        "32ae4fddce5ef6ff62f1917c486adea6",
+        "5cae12ea9652269ea2aafc656cb83424746ea1d5d491f9a159594b2a",
+    ),
+    (
+        "len_127",
+        "4b9895235cb4956aefffe815415252e7d6b21921bd7f675315eff071d0bbd429"
+        "b718c774aee96f6c3a330d5d40d1601e1069c7a2a19ea5ca1e87097da2608ffb"
+        "4180816e478b42c3c4e9edb748773935eb7ca0df90dec0eb6b960130c1617880"
+        "efb80b39ae03d617950ace4ce0aca4d36fd3ed0112a77f5d03021eb1b42458",
+        "9a9176e97aec99ab07f468f6a226876710d6d877021d27061d4d0132",
+    ),
+    (
+        "len_128",
+        "9e127870be2431bcb4f4eb4efd5c2a6c5870c55e7a5e3b7503994a4cb136be4e"
+        "d396887801450f600b22cb772fc00f8b8f0d2690e231a29f69b9f13f24f531e4"
+        "479e45b5e8bc2992fac782567e0d7a59f853ca3a20bf18dbdbf684ac69817e2d"
+        "e075daaed9532659692d3b73530a12df7b8cd9e49ed0463041962c1ce7a24c31",
+        "7e2cf6226623535784c59cd6a7b27dac60ee23fdce8a804dbd6dfedd",
+    ),
+)
+
+
+def _bytes_oracle(variant: _Variant) -> Callable[[bytes], bytes]:
+    """`variant`'s hashlib oracle as bytes-in/bytes-out, bound to this variant.
+
+    A closure over the loop variable would read every row against whichever
+    variant the loop ended on, and a default-argument lambda that avoids it is
+    something mypy cannot infer a type for.
+    """
+    return lambda b: variant.oracle(b).digest()
+
+
+# variant x length, so a failure names `sha512_224_112` rather than an ordinal.
+_VARIANT_LENGTHS = tuple(
+    (f"{name}_{length}", name, length) for name in _VARIANTS for length in _LENGTHS
+)
 
 
 class Sha2VariantVectorTest(parameterized.TestCase):
@@ -423,27 +510,43 @@ class Sha2VariantVectorTest(parameterized.TestCase):
     def test_matches_the_published_vector(
         self, variant: str, msg: bytes, digest_hex: str
     ) -> None:
-        fn, _, oracle = _VARIANTS[variant]
+        v = _VARIANTS[variant]
         rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
-        got = np.asarray(fn(rows))[0]
+        got = np.asarray(v.digest(rows))[0]
         self.assertEqual(bytes(got).hex(), digest_hex)
         # The reference the differential sweep uses is anchored to the same
         # record, so agreeing with hashlib below means agreeing with FIPS.
-        self.assertEqual(oracle(msg).hexdigest(), digest_hex)
+        self.assertEqual(v.oracle(msg).hexdigest(), digest_hex)
+
+
+class Sha512_224CavpTest(parameterized.TestCase):
+    """SHA-512/224 against NIST's own published vectors.
+
+    `Sha2VariantVectorTest` covers the other two rows from the example-values
+    series; this row's published evidence is CAVP instead, which is also the
+    only source here that lands on a length ending exactly on a block boundary
+    with the padding taking a whole further block.
+    """
+
+    @parameterized.named_parameters(*_CAVP_512_224)
+    def test_matches_the_cavp_vector(self, msg_hex: str, digest_hex: str) -> None:
+        msg = bytes.fromhex(msg_hex)
+        rows = np.frombuffer(msg, dtype=np.uint8).reshape(1, len(msg))
+        self.assertEqual(
+            bytes(np.asarray(sha512.sha512_224_digest(rows))[0]).hex(), digest_hex
+        )
+        # Anchors the differential sweep's reference to the same record, so
+        # agreeing with hashlib elsewhere means agreeing with NIST.
+        self.assertEqual(hashlib.new("sha512_224", msg).hexdigest(), digest_hex)
 
 
 class Sha2VariantTest(parameterized.TestCase):
-    @parameterized.parameters(*_LENGTHS)
-    def test_sha384_matches_hashlib(self, length: int) -> None:
+    @parameterized.named_parameters(*_VARIANT_LENGTHS)
+    def test_matches_hashlib(self, variant: str, length: int) -> None:
+        v = _VARIANTS[variant]
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
-        got = bytes(np.asarray(sha512.sha384_digest(msg[None, :]))[0])
-        self.assertEqual(got, hashlib.sha384(bytes(msg)).digest())
-
-    @parameterized.parameters(*_LENGTHS)
-    def test_sha512_256_matches_hashlib(self, length: int) -> None:
-        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
-        got = bytes(np.asarray(sha512.sha512_256_digest(msg[None, :]))[0])
-        self.assertEqual(got, hashlib.new("sha512_256", bytes(msg)).digest())
+        got = bytes(np.asarray(v.digest(msg[None, :]))[0])
+        self.assertEqual(got, v.oracle(bytes(msg)).digest())
 
     def test_variants_ride_the_sha512_marker_with_truncation_outside(self) -> None:
         # The #199 acceptance pin: ONE composite naming sha512 (by attribute,
@@ -452,9 +555,9 @@ class Sha2VariantTest(parameterized.TestCase):
         # truncation is the caller's slice, outside the marker, so the wire
         # contract a recognizer reads is byte-for-byte SHA-512's.
         msg = fnp.asarray(np.zeros((1, 1), dtype=np.uint8))
-        for variant, (fn, size, _) in _VARIANTS.items():
+        for variant, v in _VARIANTS.items():
             with self.subTest(variant=variant):
-                eqn = _composite(fn, msg)
+                eqn = _composite(v.digest, msg)
                 self.assertEqual(eqn.params["name"], markers.MD_DIGEST_MARKER)
                 self.assertEqual(
                     eqn.params["version"], markers.MD_DIGEST_MARKER_VERSION
@@ -462,7 +565,18 @@ class Sha2VariantTest(parameterized.TestCase):
                 attrs = {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
                 self.assertEqual(attrs["primitive"], "sha512")
                 self.assertEqual(tuple(eqn.outvars[0].aval.shape), (1, 64))
-                self.assertEqual(np.asarray(fn(msg)).shape, (1, size))
+                self.assertEqual(np.asarray(v.digest(msg)).shape, (1, v.size))
+
+    def test_sha224s_iv_is_sha384s_low_halves(self) -> None:
+        # Both tables are the fractional parts of the square roots of the 9th
+        # to 16th primes: SHA-384 takes the leading 64 bits of each and SHA-224
+        # the second 32. Asserted here because this file already reaches both
+        # families. Independent of `hashlib`, so a transcription slip in either
+        # table fails even if both files were edited to agree with each other.
+        self.assertEqual(
+            tuple(int(w) for w in sha256_mod._H224),
+            tuple(v & 0xFFFFFFFF for v in sha512._H384_64),
+        )
 
     def test_one_chain_trace_serves_every_variant(self) -> None:
         # The issue-#199 design pin: a variant is DATA (a different h0 value
@@ -472,7 +586,7 @@ class Sha2VariantTest(parameterized.TestCase):
         msgs = fnp.asarray(np.zeros((1, 1), dtype=np.uint8))
         calls = [
             functools.partial(fn, msgs)
-            for fn in (sha512.digest, sha512.sha384_digest, sha512.sha512_256_digest)
+            for fn in (sha512.digest, *(v.digest for v in _VARIANTS.values()))
         ]
         assert_single_trace(self, sha512.sha512_merkle_damgard, calls)
 
@@ -483,20 +597,19 @@ class Sha2VariantByteHashTest(parameterized.TestCase):
     agreement plus the module-function sweeps above close the triangle."""
 
     def test_impls_satisfy_the_seam(self) -> None:
-        for h, size in (
-            (Sha384(), 48),
-            (Sha512_256(), 32),
-        ):
+        for v in _VARIANTS.values():
+            h = v.row()
             with self.subTest(impl=type(h).__name__):
                 self.assertIsInstance(h, ByteHash)
-                self.assertEqual(h.digest_size, size)
+                self.assertEqual(h.digest_size, v.size)
                 self.assertIsInstance(h.fusion_path, FusionPath)
 
     def test_fusion_paths_pin_the_substrate(self) -> None:
         # The variants are IV rows over the same marker, so they inherit the
         # family's routing rather than having one of their own.
         msg = np.zeros((1, 1), dtype=np.uint8)
-        for device in (Sha384(), Sha512_256()):
+        for v in _VARIANTS.values():
+            device = v.row()
             with self.subTest(variant=type(device).__name__):
                 self.assertIs(
                     device.fusion_path, FusionPath.from_routing(_HAS_SHA512_EMITTER)
@@ -507,29 +620,26 @@ class Sha2VariantByteHashTest(parameterized.TestCase):
     def test_device_matches_hashlib(self, length: int) -> None:
         rng = np.random.default_rng(length + 2)
         msgs = rng.integers(0, 256, size=(4, length), dtype=np.uint8)
-        for device, one in (
-            (Sha384(), lambda b: hashlib.sha384(b).digest()),
-            (Sha512_256(), lambda b: hashlib.new("sha512_256", b).digest()),
-        ):
+        for v in _VARIANTS.values():
+            device = v.row()
             with self.subTest(variant=type(device).__name__):
                 got = np.asarray(device.digest(msgs))
                 self.assertEqual(got.shape, (4, device.digest_size))
+                one = _bytes_oracle(v)
                 np.testing.assert_array_equal(
                     got, oracle_digest(one, device.digest_size, msgs)
                 )
 
     def test_value_identity_is_by_type(self) -> None:
-        for cls in (Sha384, Sha512_256):
-            with self.subTest(impl=cls.__name__):
-                self.assertEqual(cls(), cls())
-                self.assertEqual(hash(cls()), hash(cls()))
+        for v in _VARIANTS.values():
+            with self.subTest(impl=v.row.__name__):
+                self.assertEqual(v.row(), v.row())
+                self.assertEqual(hash(v.row()), hash(v.row()))
         # No two rows of the family are ever equal — across variants and the
-        # parent — or a consumer holding several would collide.
-        distinct = [
-            Sha512(),
-            Sha384(),
-            Sha512_256(),
-        ]
+        # parent — or a consumer holding several would collide. Sha512_224 and
+        # Sha512_256 make that non-trivial: same type shape, same marker, and
+        # 224 shares its digest width with SHA-224 in the other family.
+        distinct = [Sha512(), *(v.row() for v in _VARIANTS.values())]
         for i, a in enumerate(distinct):
             for b in distinct[i + 1 :]:
                 self.assertNotEqual(a, b)
@@ -542,8 +652,7 @@ class EmptyBatchTest(absltest.TestCase):
     def test_zero_rows_digest_to_zero_rows(self) -> None:
         rows: list[tuple[ByteHash, int]] = [
             (sha512.Sha512(), 64),
-            (sha512.Sha384(), 48),
-            (sha512.Sha512_256(), 32),
+            *((v.row(), v.size) for v in _VARIANTS.values()),
         ]
         for hasher, size in rows:
             got = np.asarray(hasher.digest(fnp.zeros((0, 64), dtype=fnp.uint8)))

@@ -182,7 +182,7 @@ if TYPE_CHECKING:
 
 A module shipping more than one row of one seam names each pin, since mypy
 rejects re-annotating `_` — [`sha512/sha512.py`](../../hash_frx/sha512/sha512.py) pins
-`Sha512`, `Sha384` and `Sha512_256` separately.
+`Sha512`, `Sha384`, `Sha512_224` and `Sha512_256` separately.
 
 **On the `ByteHash` side the rule is checked.** `row_conformance_test`'s
 `PinTest` holds the pins and the byte-hash registry to each other in both

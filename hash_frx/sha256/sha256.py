@@ -9,6 +9,10 @@ workloads — Merkle leaf/internal levels, batched proof-of-work grinding — on
 GPU's width. A byte hash, unlike the algebraic `Permutation`s in this package
 (Poseidon2/Poseidon), so it is a standalone primitive rather than a `Permutation`.
 
+SHA-224 rides here too, as `sha224_digest` / `Sha224`: the same chain from the
+§5.3.2 initial state with the output truncated outside the marker, which is what
+`sha512.py` does for SHA-384 and the two SHA-512/t rows.
+
 Contract: `digest(msg)` takes uint8 `[B, L]` (a batch of `B` messages, each `L`
 bytes) and returns uint8 `[B, 32]` digests, big-endian (standard SHA-256 output
 order). Length `L` is static, so the padding is data-independent: it is a host
@@ -213,6 +217,26 @@ _H0 = np.array(
     dtype=np.uint32,
 )
 
+# SHA-224's initial hash value (FIPS 180-4 §5.3.2). Not a truncation of
+# SHA-256's: both tables are fractional parts of prime square roots, but
+# SHA-256 takes the first eight primes and this takes the ninth to sixteenth —
+# the same eight SHA-384 does, at the other 32 bits. `sha512._H384_64` is
+# therefore this table in its high halves, which is a relationship a test can
+# assert and a mistyped word cannot survive.
+_H224 = np.array(
+    [
+        0xC1059ED8,
+        0x367CD507,
+        0x3070DD17,
+        0xF70E5939,
+        0xFFC00B31,
+        0x68581511,
+        0x64F98FA7,
+        0xBEFA4FA4,
+    ],
+    dtype=np.uint32,
+)
+
 
 _Kd = fnp.asarray(_K)
 
@@ -262,6 +286,12 @@ def _compress(state: Array, w16: Array, k: Array) -> Array:
 # the standard start for a full digest, and the resume point a streaming hash
 # broadcasts from.
 INITIAL_STATE = fnp.asarray(_H0)  # uint32 [8]
+
+# SHA-224's start (§5.3.2). Everything after it — padding, schedule, rounds, K —
+# is SHA-256's own, which is why the variant is a different `h0` OPERAND on the
+# shared blocks marker plus a caller-side truncation, and no new wire name
+# exists for it.
+INITIAL_STATE_224 = fnp.asarray(_H224)  # uint32 [8]
 
 
 def block_to_words(blocks: Array) -> Array:
@@ -455,6 +485,25 @@ def digest(msg: ArrayLike) -> fnp.ndarray:
     return sha256_merkle_damgard(INITIAL_STATE, _padded_words(device_message(msg)))
 
 
+def sha224_digest(msg: ArrayLike) -> fnp.ndarray:
+    """SHA-224 (FIPS 180-4 §6.3) of a batch: uint8 [B, L] -> [B, 28].
+
+    SHA-256's compression chain from the §5.3.2 initial state, keeping the
+    leftmost 224 bits — the variant differs in nothing else, so it rides the
+    same `hash_frx.digest.sha256` blocks marker with its IV as the `h0` operand
+    and the truncation is a caller-side slice OUTSIDE the marker. A recognizer
+    serving SHA-256 serves this for free, which is what `h0`-as-operand buys.
+    Traced or concrete, like `digest`.
+
+    Only the blocks form: `sha256_bytes` carries `INITIAL_STATE` as operand 0
+    of its own region, so the whole-message marker is SHA-256's by construction
+    and a variant cannot ride it. `digest`'s routing branch has no counterpart
+    here.
+    """
+    msg = device_message(msg)
+    return sha256_merkle_damgard(INITIAL_STATE_224, _padded_words(msg))[:, :28]
+
+
 # ---------------------------------------------------------------------------
 # Streaming Merkle–Damgård midstate (the fixed-shape, scan-threadable core).
 #
@@ -577,6 +626,23 @@ class Sha256(DeviceRow):
         return digest(msg)  # the module-level marker digest above
 
 
+class Sha224(DeviceRow):
+    """`ByteHash` for device SHA-224 — `sha224_digest`, i.e. the
+    `hash_frx.digest.sha256` marker from the §5.3.2 initial state with the
+    28-byte truncation outside. The fusion story is therefore `Sha256`'s, read
+    off the same module flags: this row routes wherever SHA-256 routes, for
+    free, because the marker it emits carries the same name."""
+
+    digest_size = 28
+
+    def __init__(self) -> None:
+        super().__init__(FusionPath.from_routing(_routes_to_dedicated_emitter()))
+
+    def digest(self, msg: ArrayLike) -> Array:
+        return sha224_digest(msg)
+
+
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bh_marker: type[ByteHash] = Sha256
+    _bh_224: type[ByteHash] = Sha224
