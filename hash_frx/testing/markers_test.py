@@ -30,6 +30,7 @@ from hash_frx.markers import (
     DIGEST_NAMESPACE,
     MARKERS,
     PERM_NAMESPACE,
+    STREAM_NAMESPACE,
     MarkerKind,
     MarkerNaming,
 )
@@ -83,6 +84,8 @@ _MODULE_CONSTANTS = {
     # `extension/md.py` for every MD family, so the constant lives here for the
     # same reason -- no single family owns an operation name.
     markers.STREAM_FINALIZE_MARKER: markers.STREAM_FINALIZE_MARKER_VERSION,
+    # And its absorb sibling, emitted by the same module for the same families.
+    markers.STREAM_ABSORB_MARKER: markers.STREAM_ABSORB_MARKER_VERSION,
     # And the raw-bytes one beside it, for the same reason: three families emit
     # it, so its constant lives with the choice rather than with any of them.
     markers.BYTES_DIGEST_MARKER: markers.BYTES_DIGEST_MARKER_VERSION,
@@ -121,6 +124,7 @@ class MarkerRegistryTest(absltest.TestCase):
             MarkerKind.PERM: PERM_NAMESPACE,
             MarkerKind.COMPRESS: COMPRESS_NAMESPACE,
             MarkerKind.DIGEST: DIGEST_NAMESPACE,
+            MarkerKind.STREAM: STREAM_NAMESPACE,
         }
         for marker in MARKERS:
             with self.subTest(marker=marker.name):

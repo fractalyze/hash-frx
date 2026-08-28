@@ -8,7 +8,7 @@ into a ``DIGEST`` name (`hash_frx.digest.sha256` IS Merkle–Damgård, the spong
 markers ARE Sponge) and/or as a composite attribute (the field sponge's
 chaining rule rides as ``construction=<value>``, whose spellings are frozen
 wire ABI rather than `SpongeChaining`'s member names); Duplex is stateful, so
-it has no whole-hash marker at all — each step is a ``PERM``. Three kinds
+it has no whole-hash marker at all — each step is a ``PERM``. Four kinds
 cover every kernel:
 
 - ``PERM`` — a permutation (n→n): one `permute` call is the marked region.
@@ -17,7 +17,14 @@ cover every kernel:
   — has no marker of its own: its unit IS the permute, so it rides ``PERM``.
 - ``DIGEST`` — a whole hash: arbitrary input to a digest, construction baked
   in. `hash_frx.digest.field_sponge` (the field sponge) sits here too — field-level
-  rather than byte-level, but a whole hash all the same.
+  rather than byte-level, but a whole hash all the same. A hash finished from a
+  MIDSTATE is one of these as well (`hash_frx.stream_finalize`): where it starts
+  does not change that a digest comes out.
+- ``STREAM`` — a midstate transition, `(state, message) → state`: no digest
+  comes out, so it is not a ``DIGEST``, and the arity is not a permutation's.
+  `hash_frx.stream_absorb` is the first. Merkle-Damgard's resume property is
+  what makes such a unit fusible at all, and the state it returns is what the
+  next hop -- an absorb or a finalize -- picks up.
 
 **Naming rule.** A marker name is a wire ABI (`hash_frx.fusion`), and two
 naming disciplines are in use:
@@ -65,6 +72,12 @@ from typing import NamedTuple
 PERM_NAMESPACE = "hash_frx.perm."
 COMPRESS_NAMESPACE = "hash_frx.compress."
 DIGEST_NAMESPACE = "hash_frx.digest."
+# `STREAM` names no primitive-named rows and is not meant to: its markers are
+# operations, so this exists to be EXCLUDED rather than populated. Keeping it in
+# the list is what makes `markers_test` reject `hash_frx.stream.absorb` — the
+# dotted spelling this schema is repeatedly proposed under — as a live name
+# inside a namespace, the same guard `DIGEST_NAMESPACE` gives `hash_frx.digest`.
+STREAM_NAMESPACE = "hash_frx.stream."
 
 # The operation-named permute marker: one name for every permutation, with the
 # primitive carried in the `permutation` composite attribute the dedicated
@@ -156,6 +169,33 @@ STREAM_FINALIZE_MARKER = "hash_frx.stream_finalize"
 # One name, one wire ABI, so one version — it tracks the RESUME schema above,
 # not any family's parameters.
 STREAM_FINALIZE_MARKER_VERSION = 1
+
+
+# The operation-named Merkle-Damgard STREAM ABSORB marker: fold every
+# newly-complete block of a message into a live midstate and keep the remainder
+# pending, with the compression carried in the `primitive` composite attribute.
+#
+#   [h, consts..., pending u8[block], counts s32[2], data u8[L]]
+#     -> (h, pending u8[block], counts s32[2])
+#
+# The fourth MD schema and so the fourth operation name, and the first that
+# returns the STATE rather than a digest -- three leaves, which is why it is a
+# schema of its own rather than a `stream_finalize` that stops early.
+#
+# `counts` is `[pending_len, total_len]` and rides as a runtime OPERAND for the
+# same reason it does on the finalize: the live block count is `(pending_len +
+# L) // block`, which a producer tracing this cannot know, so the decomposition
+# emits BOTH candidates and selects. That makes the emitted kernel count depend
+# on `L % block` -- 6 kernels when `L // block == (block - 1 + L) // block` and
+# 9 when it does not -- where a kernel handed the position runs the one count
+# the position implies.
+#
+# Sibling of `STREAM_FINALIZE_MARKER`, flat for the reason stated there.
+STREAM_ABSORB_MARKER = "hash_frx.stream_absorb"
+
+# One name, one wire ABI, so one version — it tracks the ABSORB schema above,
+# not any family's parameters.
+STREAM_ABSORB_MARKER_VERSION = 1
 
 # The operation-named RAW-BYTES Merkle-Damgard digest marker: one name for every
 # family whose message arrives UNPADDED, with the primitive carried in the
@@ -254,6 +294,7 @@ class MarkerKind(enum.Enum):
     PERM = "perm"  # permutation (n→n)
     COMPRESS = "compress"  # compression function (n→m)
     DIGEST = "digest"  # whole hash, construction baked in
+    STREAM = "stream"  # midstate transition (state, message) → state
 
 
 class MarkerNaming(enum.Enum):
@@ -306,6 +347,15 @@ MARKERS: tuple[Marker, ...] = (
         STREAM_FINALIZE_MARKER,
         STREAM_FINALIZE_MARKER_VERSION,
         MarkerKind.DIGEST,
+        MarkerNaming.OPERATION,
+    ),
+    # The stream ABSORB: not a whole hash at all -- it returns the midstate the
+    # next hop resumes from, which is what makes it a STREAM kind rather than a
+    # DIGEST one. Born operation-named, same as its finalize sibling.
+    Marker(
+        STREAM_ABSORB_MARKER,
+        STREAM_ABSORB_MARKER_VERSION,
+        MarkerKind.STREAM,
         MarkerNaming.OPERATION,
     ),
     # The operation-named RAW-BYTES Merkle-Damgard digest. Its own row rather

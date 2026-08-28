@@ -308,12 +308,13 @@ marker owned by the consumer that knows what a transcript is.
 The cost of an unfused streaming call is real and worth stating so nobody
 re-derives it. Because the padding choice is data-dependent, both
 `sha256_stream_absorb` and `sha256_stream_finalize` emit every candidate block
-count and select between them, so an absorb followed by a finalize emits **4**
+count and select between them, so an absorb followed by a finalize emits **5**
 composites and roughly 818 StableHLO ops of glue at a message inside one block —
-a longer absorb adds a candidate and its composite (a 70-byte one is 5). One of
-those four is the `hash_frx.stream_finalize` region wrapping the finalize's two
-candidates; where the pinned plugin routes it, that region is what replaces the
-select and the glue with a single kernel.
+a longer absorb adds a candidate and its composite (a 70-byte one is 6). Two of
+those five are the `hash_frx.stream_absorb` and `hash_frx.stream_finalize`
+regions, one wrapping each half's candidates; where the pinned plugin routes
+them, those regions are what replace the select and the glue with a single
+kernel apiece.
 
 The op figure predates the prefix-chaining absorb and is an upper bound now.
 *Emitting* both candidates is not the same as *compressing* both: the absorb's
