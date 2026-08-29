@@ -15,10 +15,7 @@ will read is held true before one exists.
 
 from __future__ import annotations
 
-import contextlib
 import functools
-from collections.abc import Iterator
-from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -37,6 +34,11 @@ from hash_frx.testing.composite_eqn import (
 from hash_frx.testing.fusion_ready import assert_fusion_ready
 from hash_frx.testing.jit_cache import assert_single_trace
 from hash_frx.testing.marker_seam import assert_marker_matches_emission
+from hash_frx.testing.routing_mock import (
+    dedicated_emitter,
+    generic_emitter,
+    pinned_routing,
+)
 from hash_frx.vision import vision as vision_mod
 from hash_frx.vision.params import VisionParams, vision_mark32_params
 from hash_frx.vision.testing.decode import int_rows, ints
@@ -193,21 +195,13 @@ class VisionMark32Test(absltest.TestCase):
             p.permute(fnp.zeros(_W, dtype=fnp.uint32))
 
 
-@contextlib.contextmanager
-def _routing(dedicated: bool) -> Iterator[None]:
-    """Pin which marker `Vision` picks. No leg has a Vision emitter, so the
-    dedicated arm exists only under this patch — which is the point: the ABI
-    an emitter will read is pinned before the emitter exists, off the jaxpr,
-    which needs no recognizer. The decision is read in `__init__`, so this
-    wraps construction rather than just the call."""
-    with mock.patch.object(
-        vision_mod, "_routes_to_dedicated_emitter", lambda: dedicated
-    ):
-        yield
-
-
 class VisionMarkerTest(absltest.TestCase):
-    """The marker contract, generic today and dedicated under mock routing."""
+    """The marker contract, generic today and dedicated under mock routing.
+
+    No leg has a Vision emitter, so the dedicated arm exists only under that
+    patch — which is the point: the ABI an emitter will read is pinned before
+    the emitter exists, off the jaxpr, which needs no recognizer.
+    """
 
     def test_no_leg_routes_a_vision_marker_yet(self) -> None:
         # The pre-emitter pin: both module flags say "no emitter", so every
@@ -267,14 +261,14 @@ class VisionMarkerTest(absltest.TestCase):
         # routings, because the generic rewriter reads the same list.
         state = _device_state(_STATES["seed0"])
         for label, dedicated in (("generic", False), ("dedicated", True)):
-            with self.subTest(routing=label), _routing(dedicated):
+            with self.subTest(routing=label), pinned_routing(vision_mod, dedicated):
                 eqn = composite_eqn(Vision(vision_mark32_params(F)).permute, state)
                 self.assertLen(eqn.invars, 5)
                 shapes = composite_shapes(eqn)
                 self.assertEqual(shapes, [(24,), (4,), (33,), (24, 24), (17, 24)])
 
     def test_the_dedicated_marker_carries_its_name_version_and_attrs(self) -> None:
-        with _routing(True):
+        with dedicated_emitter(vision_mod):
             eqn = composite_eqn(
                 Vision(vision_mark32_params(F)).permute,
                 _device_state(_STATES["zeros"]),
@@ -295,7 +289,7 @@ class VisionMarkerTest(absltest.TestCase):
         lanes = [5, 6, 7]
         want = _oracle_for(p, lanes)
         for label, dedicated in (("generic", False), ("dedicated", True)):
-            with self.subTest(routing=label), _routing(dedicated):
+            with self.subTest(routing=label), pinned_routing(vision_mod, dedicated):
                 out = frx.jit(Vision(p).permute)(_device_state(lanes))
                 self.assertEqual(ints(out), want)
 
@@ -307,12 +301,12 @@ class VisionMarkerTest(absltest.TestCase):
         # on the GPU leg (it exists on-device only inside a marker).
         p = _small_params()
         state = _device_state([1, 2, 3])
-        with _routing(False):
+        with generic_emitter(vision_mod):
             operands, _permute, attrs = Vision(p).fused_region_spec(state)
         self.assertLen(operands, 1)
         self.assertEqual(attrs, {})
 
-        with _routing(True):
+        with dedicated_emitter(vision_mod):
             operands, permute, attrs = Vision(p).fused_region_spec(state)
         self.assertLen(operands, 5)
         self.assertEqual(attrs["permutation"], "vision")
@@ -327,9 +321,9 @@ class VisionMarkerTest(absltest.TestCase):
         # Without the marker in `__eq__` the two routings collide in
         # `_permute_body`'s static-arg cache and the second silently reuses
         # the first's marker.
-        with _routing(False):
+        with generic_emitter(vision_mod):
             generic = Vision(vision_mark32_params(F))
-        with _routing(True):
+        with dedicated_emitter(vision_mod):
             dedicated = Vision(vision_mark32_params(F))
         self.assertNotEqual(generic, dedicated)
         self.assertNotEqual(hash(generic), hash(dedicated))

@@ -30,6 +30,7 @@ py_test(
         "//hash_frx/poseidon",
         "//hash_frx/testing:marker_recognized",
         "//hash_frx/testing:marker_seam",
+        "//hash_frx/testing:routing_mock",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),
