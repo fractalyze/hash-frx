@@ -40,20 +40,31 @@ classifiers = [
 # platform choice, offered through frx's own `cuda12` extra.
 dependencies = [
     "numpy",
-    # Floor = one wheel, required by two independent things that landed within
-    # hours of each other.
+    # Floor = one wheel, required by three independent things.
     #
-    # First, BOTH halves of the Merkle-Damgard stream-finalize routing: the
+    # First, the Merkle-Damgard stream-ABSORB emitter (fractalyze/xla#648),
+    # which needed fractalyze/xla#645 under it: absorb returns the state as a
+    # THREE-LEAF tuple, and until #645 the fused-region rewriter could only
+    # replace a single-output marked region, so no absorb emitter could be
+    # routed at all whatever the emitter itself did. `AbsorbRoutedTest` reads
+    # the COMPILED module and fails below this floor, at both call depths --
+    # and its `L % block` case is the one the marker exists for: the kernel
+    # count stops tracking the block alignment only where the emitter is
+    # present.
+    #
+    # Second, BOTH halves of the Merkle-Damgard stream-finalize routing: the
     # emitter (fractalyze/xla#641), and fractalyze/xla#634, which resolves a
     # marker's operand through the call frame a `lax.scan` leaves behind. The
     # emitter alone routes the hop at top level and declines it inside a scan.
+    # #634 serves the absorb as much: its whole point is a runtime `counts`
+    # operand, and its natural caller is a scan carry.
     #
     # Un-fused rather than wrong or slower, unlike the two Grostl floors below:
     # that marker is ungated, so beneath this floor it inlines to the
     # decomposition it replaced. `sha256_stream_test.FinalizeRoutedTest` reads
     # the COMPILED module and fails below it, at both call depths.
     #
-    # Second, the raw-bytes Merkle-Damgard operation name
+    # Third, the raw-bytes Merkle-Damgard operation name
     # (`hash_frx.digest_bytes`, fractalyze/xla#635) and the three registry
     # entries it resolves through -- RIPEMD-160 (xla#636), BLAKE2s (xla#639)
     # and BLAKE2b (xla#642). Below this floor those three advertise
@@ -61,10 +72,13 @@ dependencies = [
     # `test_the_digest_compiles_to_a_custom_fusion` reads the COMPILED module
     # and fails there.
     #
-    # Check this wheel by COMMIT, never by version suffix: the wheel one below
-    # it carries an XLA three hours OLDER than #635 despite a later timestamp.
-    # This one is `jax@7c87d0ed79f1`, whose `third_party/xla/revision.bzl` pins
-    # `ebf98af1a2f9...` (#642), with `98b21c88...` (#635) an ancestor.
+    # Check this wheel by COMMIT, never by version suffix: a wheel's timestamp
+    # does not order the XLA inside it -- an earlier floor was set against one
+    # carrying an XLA three hours OLDER than the change it was named for.
+    # This one is `jax@96a306049`, whose `third_party/xla/revision.bzl` pins
+    # `64ebf90f17f4` (#648), with `c3981ac5f0d0` (#645) an ancestor. The
+    # previous floor's `ebf98af1a2f9` (#642) and `98b21c88` (#635) are
+    # ancestors of it too, which is what lets one wheel carry all three.
     #
     # It subsumes the first wheel whose Grostl-256 emitter accepts the
     # RUNTIME-LENGTH operand form (fractalyze/xla#599, merged as PR #600), which
@@ -138,7 +152,7 @@ dependencies = [
     # before any of this — sorts above the dev build named as the floor and
     # would otherwise satisfy it. Naming a later stable instead fails the other
     # way, since the nightly line resumes below it (`0.10.3.dev...` < `0.10.3`).
-    "frx>=0.10.2.dev20260827110818,!=0.10.2",
+    "frx>=0.10.2.dev20260828160853,!=0.10.2",
 ]
 
 [project.urls]
