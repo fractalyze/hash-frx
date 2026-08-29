@@ -46,11 +46,11 @@ dependencies = [
     # which needed fractalyze/xla#645 under it: absorb returns the state as a
     # THREE-LEAF tuple, and until #645 the fused-region rewriter could only
     # replace a single-output marked region, so no absorb emitter could be
-    # routed at all whatever the emitter itself did. `AbsorbRoutedTest` reads
-    # the COMPILED module and fails below this floor, at both call depths --
-    # and its `L % block` case is the one the marker exists for: the kernel
-    # count stops tracking the block alignment only where the emitter is
-    # present.
+    # routed at all whatever the emitter itself did. Its second call depth
+    # needs fractalyze/xla#634 as well, which the next requirement carries.
+    # `AbsorbRoutedTest`'s `L % block` case is the one this marker exists for:
+    # the kernel count stops tracking the block alignment only where the
+    # emitter is present.
     #
     # Second, BOTH halves of the Merkle-Damgard stream-finalize routing: the
     # emitter (fractalyze/xla#641), and fractalyze/xla#634, which resolves a
@@ -60,9 +60,10 @@ dependencies = [
     # operand, and its natural caller is a scan carry.
     #
     # Un-fused rather than wrong or slower, unlike the two Grostl floors below:
-    # that marker is ungated, so beneath this floor it inlines to the
-    # decomposition it replaced. `sha256_stream_test.FinalizeRoutedTest` reads
-    # the COMPILED module and fails below it, at both call depths.
+    # both stream markers are ungated, so beneath this floor they inline to the
+    # decomposition they replaced. `sha256_stream_test`'s `AbsorbRoutedTest` and
+    # `FinalizeRoutedTest` are what catch that -- they read the COMPILED module
+    # at both call depths, where every value-level test passes either way.
     #
     # Third, the raw-bytes Merkle-Damgard operation name
     # (`hash_frx.digest_bytes`, fractalyze/xla#635) and the three registry
@@ -73,8 +74,9 @@ dependencies = [
     # and fails there.
     #
     # Check this wheel by COMMIT, never by version suffix: a wheel's timestamp
-    # does not order the XLA inside it -- an earlier floor was set against one
-    # carrying an XLA three hours OLDER than the change it was named for.
+    # does not order the XLA inside it -- checking is what caught the wheel one
+    # below an earlier floor carrying an XLA three hours OLDER than that
+    # floor's change, despite the later timestamp.
     # This one is `jax@96a306049`, whose `third_party/xla/revision.bzl` pins
     # `64ebf90f17f4` (#648), with `c3981ac5f0d0` (#645) an ancestor. The
     # previous floor's `ebf98af1a2f9` (#642) and `98b21c88` (#635) are

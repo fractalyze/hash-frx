@@ -125,6 +125,8 @@ without naming one.
 | Proving a body still lowers to one kernel                                                   | [`testing/fusion_ready.py`](../hash_frx/testing/fusion_ready.py) |
 | Proving a module-level jit zone is not re-traced per instance                                | [`testing/jit_cache.py`](../hash_frx/testing/jit_cache.py)   |
 | Drawing field elements in a test, in the production Montgomery encoding                     | [`testing/random_field.py`](../hash_frx/testing/random_field.py) |
+| Proving a marker is RECOGNIZED by the pinned plugin, not merely emitted — and counting the kernels it became | [`testing/marker_recognized.py`](../hash_frx/testing/marker_recognized.py) |
+| Reading the one `stablehlo.composite` eqn a marked region lowered to, and its attrs and operand shapes | [`testing/composite_eqn.py`](../hash_frx/testing/composite_eqn.py) |
 
 ## The fusion contract
 

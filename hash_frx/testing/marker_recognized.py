@@ -50,10 +50,42 @@ def emitted_composites(fn: Callable[..., Any], *args: Any) -> list[str]:
     return _COMPOSITE_NAME.findall(frx.jit(fn).lower(*args).as_text())
 
 
+def custom_fusion_lines(compiled: str) -> list[str]:
+    """The custom-fusion instructions in an already-compiled module."""
+    return [ln for ln in compiled.splitlines() if "kind=kCustom" in ln]
+
+
 def _custom_fusion_lines(fn: Callable[..., Any], *args: Any) -> list[str]:
     """The compiled module's custom-fusion instructions."""
-    compiled = frx.jit(fn).lower(*args).compile().as_text()
-    return [ln for ln in compiled.splitlines() if "kind=kCustom" in ln]
+    return custom_fusion_lines(frx.jit(fn).lower(*args).compile().as_text())
+
+
+def routed_fusions(compiled: str, routing_key: str) -> list[str]:
+    """The custom fusions in `compiled` that `routing_key` DEFINES.
+
+    For the assertion `assert_marker_recognized` cannot make — that a marker
+    became exactly N kernels — and it takes compiled TEXT rather than a
+    callable because the callers that need it already hold one: a region
+    inside a `lax.scan` is visible only module-wide, its body living in a
+    called computation, so those tests lower once and count.
+
+    Matched on the DEFINITION, `%<key>[.N] =`, which is narrower than a
+    substring and wider than `assert_marker_recognized`'s `%<key> =` — both of
+    the other spellings are wrong here, in opposite directions:
+
+    - a bare substring also matches the line of a fusion that CONSUMES this
+      one (`fusion(%md_stream_absorb.1, …)`), turning "produced exactly once"
+      into "mentioned anywhere";
+    - `%<key> =` alone misses the scan case this helper exists for. XLA
+      suffixes a name it has cloned, and a marker inside a `while` body comes
+      out as `%md_stream_absorb.1 =` — so the strict form silently counts 0
+      and reads as "not routed" on the one call depth that matters.
+
+    The `.N` is bounded to digits so a longer sibling (`%<key>_bytes =`) still
+    does not match, which is the nesting hazard `emitted_composites` records.
+    """
+    defines = re.compile(rf"%{re.escape(routing_key)}(\.\d+)? =")
+    return [ln for ln in custom_fusion_lines(compiled) if defines.search(ln)]
 
 
 def assert_marker_recognized(

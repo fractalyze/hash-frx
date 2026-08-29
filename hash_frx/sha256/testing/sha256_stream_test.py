@@ -27,11 +27,25 @@ from hash_frx.sha512 import sha512
 from hash_frx.testing.marker_recognized import (
     assert_marker_recognized,
     emitted_composites,
+    routed_fusions,
 )
 
 
 def _u8(data: bytes) -> fnp.ndarray:
     return fnp.asarray(np.frombuffer(data, dtype=np.uint8))
+
+
+def _mid_stream_state() -> Sha256State:
+    """A state part-way through a block, for the routed tests.
+
+    Mid-stream so `counts` is a live position rather than zeros: taking the
+    stream position as a runtime operand is the whole point of both stream
+    ABIs, and a fresh state would exercise the one offset that happens to be
+    the identity.
+    """
+    return frx.jit(sha256_stream_absorb)(
+        sha256_stream_init(), fnp.zeros(100, dtype=fnp.uint8)
+    )
 
 
 def _stream_absorb_all(chunks: list[bytes]) -> Sha256State:
@@ -215,11 +229,6 @@ class FinalizeRoutedTest(absltest.TestCase):
     here on the day it gains one.
     """
 
-    def _state(self) -> Sha256State:
-        return frx.jit(sha256_stream_absorb)(
-            sha256_stream_init(), fnp.zeros(100, dtype=fnp.uint8)
-        )
-
     def test_the_hop_is_one_recognized_kernel(self) -> None:
         # `md_stream_finalize` is a SHARED envelope -- one routing key for every
         # MD family, with the family in the fusion's config -- so the
@@ -228,7 +237,7 @@ class FinalizeRoutedTest(absltest.TestCase):
             self,
             "sha256",
             sha256_stream_finalize,
-            self._state(),
+            _mid_stream_state(),
             fnp.zeros((4, 8), dtype=fnp.uint8),
             envelope_key="md_stream_finalize",
         )
@@ -258,13 +267,10 @@ class FinalizeRoutedTest(absltest.TestCase):
         # decomposition's OWN `md_digest` fusions behind -- two of them, one per
         # padding candidate -- so "some kCustom exists" is satisfied by an
         # inlined marker and would assert nothing.
-        routed = [
-            line
-            for line in compiled.splitlines()
-            if "kind=kCustom" in line and "%md_stream_finalize" in line
-        ]
         self.assertLen(
-            routed, 1, f"stream_finalize was not routed in a scan:\n{compiled[:2000]}"
+            routed_fusions(compiled, "md_stream_finalize"),
+            1,
+            f"stream_finalize was not routed in a scan:\n{compiled[:2000]}",
         )
 
 
@@ -340,27 +346,18 @@ class AbsorbMarkerTest(parameterized.TestCase):
 class AbsorbRoutedTest(absltest.TestCase):
     """The absorb is RECOGNIZED, and stays so one call frame down.
 
-    `AbsorbMarkerTest` above asserts what this repo puts on the wire; this
-    asserts what the PINNED plugin does with it, which is a different question
-    and the one the marker exists for. An unrecognized name is not an error —
-    it inlines to the decomposition and computes identical bytes — so every
-    value-level test in this file passes either way, and only the COMPILED
-    module separates them.
+    `FinalizeRoutedTest`'s sibling on the other half of the hop, with its
+    division of labour and its two call depths: `AbsorbMarkerTest` above
+    asserts what this repo puts on the wire, and only the COMPILED module
+    shows what the pinned plugin did with it.
 
-    `FinalizeRoutedTest`'s sibling, and the same two call depths for the same
-    reason (fractalyze/xla#633). SHA-256 only, also for its reason: SHA-512
-    emits the same marker and the plugin resolves the compression through the
-    primitive registry, so whether it routes is a property of the pinned wheel
-    rather than of this repo.
+    SHA-256 only, and for the finalize's reason literally: SHA-512 emits the
+    same marker and the plugin declines it for want of a registered padding
+    rule. Absorb needs that rule for the BLOCK SIZE alone -- it pads nothing,
+    folding only complete blocks -- but a missing entry declines either way,
+    so both stream markers route for SHA-512 with no change here on the day it
+    gains one.
     """
-
-    def _state(self) -> Sha256State:
-        # Mid-stream, so `counts` is a live position rather than zeros: the
-        # runtime-operand path is the whole point of the ABI, and a fresh state
-        # would exercise the one offset that happens to be the identity.
-        return frx.jit(sha256_stream_absorb)(
-            sha256_stream_init(), fnp.zeros(100, dtype=fnp.uint8)
-        )
 
     def test_the_absorb_is_one_recognized_kernel(self) -> None:
         # `md_stream_absorb` is a SHARED envelope -- one routing key for every
@@ -370,7 +367,7 @@ class AbsorbRoutedTest(absltest.TestCase):
             self,
             "sha256",
             sha256_stream_absorb,
-            self._state(),
+            _mid_stream_state(),
             fnp.zeros(100, dtype=fnp.uint8),
             envelope_key="md_stream_absorb",
         )
@@ -385,32 +382,21 @@ class AbsorbRoutedTest(absltest.TestCase):
         aligned `L` and at a non-aligned one alike, so the kernel count stops
         tracking `L % block`.
         """
+        state = _mid_stream_state()
         for length in (64, 100, 512, 1000):  # aligned, split, aligned, split
             with self.subTest(length=length):
                 compiled = (
                     frx.jit(sha256_stream_absorb)
-                    .lower(self._state(), fnp.zeros(length, dtype=fnp.uint8))
+                    .lower(state, fnp.zeros(length, dtype=fnp.uint8))
                     .compile()
                     .as_text()
                 )
-                routed = [
-                    line
-                    for line in compiled.splitlines()
-                    if "kind=kCustom" in line and "%md_stream_absorb" in line
-                ]
-                self.assertLen(routed, 1)
+                self.assertLen(routed_fusions(compiled, "md_stream_absorb"), 1)
 
     def test_the_absorb_stays_routed_inside_a_scan(self) -> None:
-        # Inside a `lax.scan` the marked region survives as a real call rather
-        # than being spliced into the enclosing trace, so an operand the
-        # recognizer validates arrives a frame from what produced it. A
-        # recognizer that asked for an opcode would decline here and the region
-        # would inline -- silently, with identical bytes, on both backends.
-        # That is fractalyze/xla#633.
-        #
-        # It is the sharper case for the absorb than for the finalize: this is
-        # the shape `Sha256State`'s fixed shapes exist for, and the scan carry
-        # is what makes `counts` arrive as a parameter rather than a constant.
+        # `FinalizeRoutedTest`'s reason, and sharper here: this is the shape
+        # `Sha256State`'s fixed shapes exist for, and the scan carry is what
+        # makes `counts` arrive as a parameter rather than a constant.
 
         @frx.jit
         def run(xs: fnp.ndarray) -> Sha256State:
@@ -423,16 +409,10 @@ class AbsorbRoutedTest(absltest.TestCase):
             return state
 
         compiled = run.lower(fnp.zeros((6, 16), dtype=fnp.uint8)).compile().as_text()
-        # Named, not merely counted -- `FinalizeRoutedTest`'s reason: the
-        # declined path leaves the decomposition's OWN `md_digest` fusions
-        # behind, so "some kCustom exists" is satisfied by an inlined marker.
-        routed = [
-            line
-            for line in compiled.splitlines()
-            if "kind=kCustom" in line and "%md_stream_absorb" in line
-        ]
         self.assertLen(
-            routed, 1, f"stream_absorb was not routed in a scan:\n{compiled[:2000]}"
+            routed_fusions(compiled, "md_stream_absorb"),
+            1,
+            f"stream_absorb was not routed in a scan:\n{compiled[:2000]}",
         )
 
 
