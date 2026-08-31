@@ -24,20 +24,31 @@ and build on `unrolled_sum` from here.
 
 from __future__ import annotations
 
-import functools
-import operator
-
 from frx import Array
 
 
 def unrolled_sum(terms: list[Array]) -> Array:
-    """Sum `terms` as a left-fold of binary field adds: `((t0 + t1) + t2) + ...`.
+    """Sum `terms` as a balanced tree of binary field adds: `(t0 + t1) + (t2 + t3)`.
 
     Deliberately not `fnp.sum`/`sum()`: those lower to a reduction op — the
-    `kInput` fusion boundary that would split the round body's kernel. The fold
+    `kInput` fusion boundary that would split the round body's kernel. The tree
     stays a chain of straight-line element-wise adds, so the whole layer fuses.
+
+    Paired rather than folded left. Both spell the same number of adds, but a
+    left fold makes each one wait for the last, so the layer's critical path is
+    one add per term where pairing makes it one per doubling — and a wide state
+    is summed once per round. It costs nothing to prefer: modular addition is
+    associative, so the two spellings agree bit for bit.
     """
-    return functools.reduce(operator.add, terms)
+    if not terms:
+        raise ValueError("unrolled_sum needs at least one term")
+    level = list(terms)
+    while len(level) > 1:
+        paired = [level[i] + level[i + 1] for i in range(0, len(level) - 1, 2)]
+        if len(level) % 2:
+            paired.append(level[-1])
+        level = paired
+    return level[0]
 
 
 def apply_matrix(matrix: Array, state: Array) -> Array:
