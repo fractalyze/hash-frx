@@ -23,6 +23,13 @@ def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
     """External layer `(I + J_blocks) ⊗ M4`: per-4-block M4, plus M4-image column
     sums across blocks — `M[i][j] = M4[i%4][j%4] * (2 if same 4-block)`.
 
+    That structure is what makes the layer cost O(w) rather than O(w²). Writing
+    it as a dense column sum spends `w` multiplies per output — 256 at w=16 —
+    but every output reads the same `w/4` M4 images: with `B_b` the M4 image of
+    block `b` and `S` their sum, the doubled diagonal block is one more copy of
+    the block's own image, so `out_block_b = B_b + S`. That is 4 multiplies per
+    lane, 64 at w=16, for byte-identical output.
+
     `m4` is the 4×4 base matrix as canonical Python ints — the same form the
     marker's `external_m4` attribute carries, and small structural values, so
     lanes scale by integer literals. The base M4 is not fixed: Plonky3's
@@ -36,20 +43,20 @@ def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
             f"external layer needs a 1-D state with width a positive multiple of "
             f"4, got {state.shape}"
         )
-    # Hoist the lanes once: indexing `state` inside both loops reads the chained
-    # input w**2 times, against the chained-input rule in `hash_frx.linear`.
+    # Hoist the lanes once: indexing `state` inside the block loop reads the
+    # chained input w**2 times, against the chained-input rule in
+    # `hash_frx.linear`.
     lanes = [state[j] for j in range(w)]
-    return fnp.stack(
+    blocks = range(w // 4)
+    images = [
         [
-            unrolled_sum(
-                [
-                    m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) * lanes[j]
-                    for j in range(w)
-                ]
-            )
-            for i in range(w)
+            unrolled_sum([m4[r][c] * lanes[4 * b + c] for c in range(4)])
+            for r in range(4)
         ]
-    )
+        for b in blocks
+    ]
+    totals = [unrolled_sum([images[b][r] for b in blocks]) for r in range(4)]
+    return fnp.stack([images[b][r] + totals[r] for b in blocks for r in range(4)])
 
 
 def apply_internal(

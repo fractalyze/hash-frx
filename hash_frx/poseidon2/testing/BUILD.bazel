@@ -70,6 +70,7 @@ py_test(
     srcs = ["permute_shape_test.py"],
     deps = [
         "//hash_frx/poseidon2",
+        "//hash_frx/testing:fusion_ready",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),

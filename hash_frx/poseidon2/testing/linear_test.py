@@ -10,7 +10,11 @@ from hash_frx.poseidon2.linear import (
     apply_matrix,
 )
 from hash_frx.poseidon2.params import default_external_matrix
-from hash_frx.testing.fusion_ready import assert_fusion_ready, assert_input_uses
+from hash_frx.testing.fusion_ready import (
+    assert_fusion_ready,
+    assert_input_uses,
+    primitive_count,
+)
 from hash_frx.testing.random_field import rand_field
 
 # Plonky3's M4 = circ(2,3,1,1) — the base M4 `default_external_matrix` builds from.
@@ -43,6 +47,29 @@ class LinearLayerTest(absltest.TestCase):
                 ),
                 f"width {w}",
             )
+
+    def test_external_multiplies_scale_with_width_not_its_square(self) -> None:
+        # The block structure is the whole reason the layer is affordable: the
+        # dense column sum spends a multiply per (output, lane) pair, so w=16
+        # costs 256 against the 4-per-lane the M4 images cost. Read as a ratio,
+        # because literal 1 coefficients fold and the absolute count is the
+        # base M4's to decide.
+        counts = {
+            w: primitive_count(
+                lambda v: apply_external_m4(v, _STD_M4),
+                rand_field(9, (w,), F),
+                name="mul",
+            )
+            for w in (8, 16)
+        }
+        self.assertLessEqual(
+            counts[16],
+            2 * counts[8] + 1,
+            msg=(
+                f"external multiplies must grow with width, not its square, got "
+                f"{counts}. A dense column sum gives w**2; see apply_external_m4."
+            ),
+        )
 
     def test_apply_external_m4_rejects_bad_width(self) -> None:
         with self.assertRaises(ValueError):
