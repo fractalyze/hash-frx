@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 from typing import Any
+from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -27,6 +28,8 @@ from absl.testing import absltest, parameterized
 from zk_dtypes import babybear_mont as BB
 from zk_dtypes import koalabear_mont as F
 
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
+from hash_frx.poseidon2 import poseidon2 as poseidon2_mod
 from hash_frx.poseidon2.poseidon2 import (
     POSEIDON2_MARKER,
     POSEIDON2_MARKER_VERSION,
@@ -57,6 +60,19 @@ _SETS = (
 )
 
 
+def _permute_routed(build: Any) -> Any:
+    """Build a permutation whose `permute` takes the dedicated marker, whatever
+    the backend routes.
+
+    Only the CPU routes the standalone permute marker; the cases below assert
+    the marker TEXT rather than compile it, so forcing the route is what lets
+    them state that contract from either runner. The route is decided in
+    `__init__`, so the patch has to wrap construction.
+    """
+    with mock.patch.object(poseidon2_mod, "_routes_to_dedicated_emitter", lambda: True):
+        return build()
+
+
 class ShippedSetTest(parameterized.TestCase):
     """What every shipped set owes, at every set."""
 
@@ -80,9 +96,25 @@ class ShippedSetTest(parameterized.TestCase):
         # (alpha 7, 13 internal rounds) presents a tuple koalabear-16
         # (alpha 3, 20) never did. A recognizer that declines it is invisible
         # to every value test — the marker inlines and the bytes stay right.
-        assert_marker_recognized(
-            self, "poseidon2", factory().permute, fnp.arange(16, dtype=dtype)
-        )
+        #
+        # Which marker is on the wire is the leg's business; "one dedicated
+        # kernel" is owed on both. A leg that routes no permute marker earns its
+        # kernel by having the round loops converted to a single kCustom
+        # `static_while` fusion instead, and a converter that starts declining
+        # them is the same silent loss — right bytes, kernel gone — this case
+        # exists to catch.
+        permute = factory().permute
+        x = fnp.arange(16, dtype=dtype)
+        if poseidon2_mod._routes_to_dedicated_emitter():
+            assert_marker_recognized(self, "poseidon2", permute, x)
+            return
+        lines = [
+            ln
+            for ln in frx.jit(permute).lower(x).compile().as_text().splitlines()
+            if "kind=kCustom" in ln
+        ]
+        self.assertLen(lines, 1, lines)
+        self.assertIn("%static_while_fusion", lines[0])
 
 
 class Poseidon2Koalabear16Test(absltest.TestCase):
@@ -116,7 +148,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # routes it to the dedicated Poseidon2Fusion emitter; the permutation
         # shape rides as composite.attributes — all four ints are required by
         # the XLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
-        p = koalabear16_perm()
+        p = _permute_routed(koalabear16_perm)
         txt = frx.jit(p.permute).lower(fnp.arange(16, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
@@ -131,8 +163,15 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         self.assertEqual(operands.count("%"), 5, composite_line)
 
     def test_seam_marker_matches_the_emission(self) -> None:
+        # `fusion_path` is named rather than derived: it reports whether the
+        # primitive can be DRIVEN here, which every backend does for an
+        # M4-structured set, while the marker follows the narrower question of
+        # whether this backend routes a standalone permute kernel.
         assert_marker_matches_emission(
-            self, koalabear16_perm(), fnp.arange(16, dtype=F)
+            self,
+            koalabear16_perm(),
+            fnp.arange(16, dtype=F),
+            expected_path=FusionPath.DEDICATED,
         )
 
     def test_non_identity_j_scale_stays_five_operands_canonical(self) -> None:
@@ -140,7 +179,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # koalabear16_scaled_perm's scale is R⁻¹: canonical
         # 1057030144, Montgomery STORAGE 1 — so the attribute must read 1057030144,
         # not the storage 1 a raw-bits/canonical mixup would emit.
-        p = koalabear16_scaled_perm()
+        p = _permute_routed(koalabear16_scaled_perm)
         txt = frx.jit(p.permute).lower(fnp.arange(16, dtype=F)).as_text()
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
@@ -152,7 +191,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
     def test_vmap_permute_keeps_dedicated_marker(self) -> None:
         # If frx's composite batching rule regresses, vmap silently falls back to
         # generic loop fusion — the dedicated kernel lost with no error.
-        p = koalabear16_perm()
+        p = _permute_routed(koalabear16_perm)
         states = fnp.arange(5 * 16, dtype=F).reshape(5, 16)
         txt = frx.jit(lambda x: frx.vmap(p.permute)(x)).lower(states).as_text()
         comp = [ln for ln in txt.splitlines() if "stablehlo.composite" in ln]
@@ -187,7 +226,11 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
             ],
             dtype=F,
         )
-        p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
+        p = _permute_routed(
+            lambda: Poseidon2(
+                dataclasses.replace(koalabear16_params(), external_matrix=mds)
+            )
+        )
         txt = frx.jit(p.permute).lower(fnp.arange(w, dtype=F)).as_text()
         self.assertIn(POSEIDON2_MARKER, txt)
         self.assertIn(
@@ -195,6 +238,60 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
             " tensor<16xi64>",
             txt,
         )
+
+
+class Poseidon2RoutingTest(absltest.TestCase):
+    """Two routing questions, answered separately.
+
+    Driving the primitive (running its round schedule from the params a marker
+    carries) is what a whole-hash envelope over the permutation needs; routing
+    the standalone permute marker to a kernel of its own is narrower. Reading
+    the second where the first is meant is what silently costs an enclosing
+    sponge its kernel, so these hold them apart.
+    """
+
+    def test_the_production_tuples_are_the_documented_matrix(self) -> None:
+        self.assertTrue(poseidon2_mod._DEDICATED_EMITTER_AVAILABLE)
+        self.assertEqual(poseidon2_mod._EMITTER_BACKENDS, ("cpu", "gpu"))
+        self.assertEqual(poseidon2_mod._PERMUTE_EMITTER_BACKENDS, ("cpu",))
+
+    def test_each_question_reads_its_own_tuple(self) -> None:
+        with mock.patch.object(poseidon2_mod, "_EMITTER_BACKENDS", ("nonesuch",)):
+            self.assertFalse(poseidon2_mod._drives_the_primitive())
+            self.assertEqual(
+                poseidon2_mod._routes_to_dedicated_emitter(),
+                frx.default_backend() in poseidon2_mod._PERMUTE_EMITTER_BACKENDS,
+            )
+        with mock.patch.object(
+            poseidon2_mod, "_PERMUTE_EMITTER_BACKENDS", ("nonesuch",)
+        ):
+            self.assertFalse(poseidon2_mod._routes_to_dedicated_emitter())
+            self.assertEqual(
+                poseidon2_mod._drives_the_primitive(),
+                frx.default_backend() in poseidon2_mod._EMITTER_BACKENDS,
+            )
+
+    def test_an_unrouted_permute_marker_keeps_the_envelope_expandable(self) -> None:
+        # The regression this split exists to prevent: a backend that drives the
+        # primitive but routes no permute marker must still report DEDICATED, or
+        # every envelope over it (sponge, Merkle compress) falls back to the
+        # generic absorb and loses its kernel.
+        with mock.patch.object(poseidon2_mod, "_PERMUTE_EMITTER_BACKENDS", ()):
+            perm = koalabear16_perm()
+        self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
+        self.assertIs(perm.fusion_path, FusionPath.DEDICATED)
+        self.assertTrue(perm.fusion_path.is_one_kernel)
+        # The envelope ABI stays populated: an inert spec names no layout for an
+        # emitter to read, which is how the loss used to show up.
+        operands, _, attrs = perm.fused_region_spec(fnp.arange(16, dtype=F))
+        self.assertTrue(operands)
+        self.assertEqual(attrs["permutation"], "poseidon2")
+
+    def test_a_backend_that_cannot_drive_it_reports_generic(self) -> None:
+        with mock.patch.object(poseidon2_mod, "_EMITTER_BACKENDS", ()):
+            perm = koalabear16_perm()
+        self.assertIs(perm.fusion_path, FusionPath.GENERIC)
+        self.assertFalse(perm.fusion_path.is_one_kernel)
 
 
 if __name__ == "__main__":
