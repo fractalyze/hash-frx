@@ -88,7 +88,14 @@ class FusionPath(enum.Enum):
         """The device path a marker choice implies: a hash-named marker is one
         kernel, the generic region marker is not. Deriving the path
         from the marker actually chosen is what keeps the two from drifting
-        when a routing gate grows another case."""
+        when a routing gate grows another case.
+
+        For a family whose permute marker and whose primitive-driving capability
+        are the same question, which is most of them. Where a backend drives the
+        primitive but routes no standalone permute kernel, the marker is the
+        generic one while the path is still `DEDICATED`; such a family builds the
+        path with `from_routing` off its own capability instead
+        (`poseidon2._drives_the_primitive` is the case)."""
         return cls.from_routing(name != FUSED_REGION_MARKER)
 
     @classmethod

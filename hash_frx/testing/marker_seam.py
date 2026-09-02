@@ -43,14 +43,32 @@ def _composite_lines(perm: Permutation, state: Array) -> list[str]:
     return [ln for ln in txt.splitlines() if "stablehlo.composite" in ln]
 
 
-def assert_marker_matches_emission(test: Any, perm: Permutation, state: Array) -> None:
+def assert_marker_matches_emission(
+    test: Any,
+    perm: Permutation,
+    state: Array,
+    *,
+    expected_path: FusionPath | None = None,
+) -> None:
     """Assert `perm.fused_region_marker` names the composite `permute` emits, and
-    that `fusion_path` agrees with it."""
+    that `fusion_path` reads as expected.
+
+    `fusion_path` defaults to following the marker, which holds for a family
+    whose permute marker and whose primitive-driving capability are the same
+    question. Where they are not — a backend that can run the permutation from
+    its params but routes no standalone permute marker — the caller names the
+    path, because deriving it here would assert the coupling rather than test
+    it.
+    """
     name, version = perm.fused_region_marker
+    if expected_path is None:
+        expected_path = (
+            FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC
+        )
     test.assertEqual(
         perm.fusion_path,
-        FusionPath.DEDICATED if name != FUSED_REGION_MARKER else FusionPath.GENERIC,
-        f"fusion_path disagrees with fused_region_marker {name!r}",
+        expected_path,
+        f"fusion_path disagrees with the expected path for marker {name!r}",
     )
 
     lines = _composite_lines(perm, state)

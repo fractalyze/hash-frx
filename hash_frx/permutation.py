@@ -44,15 +44,22 @@ class Permutation(Protocol):
     # narrow enough for mypy to reject a non-dtype at the pin every
     # implementation carries.
     dtype: DTypeLike
-    # How `permute` lowers on the backend this instance was built for.
-    # `DEDICATED` — a hash-dedicated marker the pinned plugin routes to one
-    # kernel; a vendor can then expand a whole-region composite (e.g. a Merkle
-    # commit) by reading this hash's marker, and consumers gate that wrapping on
+    # Whether a whole-region composite over this permutation is expandable here.
+    # `DEDICATED` — the pinned plugin can DRIVE this primitive on this backend,
+    # so a vendor can expand an enclosing region (e.g. a Merkle commit, a sponge)
+    # from the params the marker carries; consumers gate that wrapping on
     # `fusion_path.is_one_kernel` without naming a concrete hash. `GENERIC` —
-    # the generic region marker, or a dedicated name this backend does not
-    # recognize; same bytes, no expandable marker. Derived per (hash, backend) at
+    # same bytes, no expandable marker. Derived per (hash, backend) at
     # construction, because the emitter switch is a property of the pin and the
     # backend rather than of the hash.
+    #
+    # Usually this is the same question as which marker `permute` emits, and
+    # most families read it off that (`FusionPath.from_marker`). The two come
+    # apart on a backend that can drive the primitive while routing no
+    # STANDALONE permute kernel — `poseidon2` on the GPU, where the permute's own
+    # loops already lower to one kernel without a dedicated arm. Reading the
+    # marker there would report `GENERIC` and cost every envelope its kernel, so
+    # such a family answers this one directly.
     fusion_path: FusionPath
     # The composite name + version `permute`'s marker carries — what a consumer
     # needs to RE-MARK a permute inside its own composite decomposition (a duplex

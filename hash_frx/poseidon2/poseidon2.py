@@ -58,19 +58,34 @@ POSEIDON2_MARKER_VERSION = 2
 # computes the right bytes with none of the kernels).
 _DEDICATED_EMITTER_AVAILABLE = True
 
-# Which backends have those emitters — a different question from the pin, asked
-# alongside it. The `ZorchFusedRegionRewriter` runs in both the CPU and the GPU
-# compiler and both route the poseidon2 arm (`allow_extension_field_poseidon2`
-# covers the extension-field states on both), so this one carries both legs,
-# unlike `poseidon.sparse`'s GPU-only tuple. A backend absent here — Metal
-# today — is on the generic path until an emitter is written for it, and then it
-# joins this tuple and nothing else here moves.
+# Which backends can DRIVE this primitive — run its round schedule from the
+# params a marker carries. Both legs do, and a whole-hash envelope over the
+# permutation (a sponge, a Merkle compress) needs only this: those emitters
+# build the permutation from the plugin's primitive registry, naming no
+# permutation of their own. A backend absent here — Metal today — is on the
+# generic path until an emitter is written for it.
 _EMITTER_BACKENDS = ("cpu", "gpu")
+
+# Which backends route the STANDALONE permute marker to a kernel of its own — a
+# narrower question than driving the primitive, and a separate tuple for the
+# same reason `sha256`'s raw-byte form carries one. The GPU is absent by
+# measurement rather than omission: there the marker's own decomposition becomes
+# a single kFor fusion, byte-identical to the dedicated kernel and within 1.02x
+# of it from 2^14 rows up, so a dedicated arm would buy nothing. The CPU has no
+# such conversion — the same body lowers to 64 kernels and 13-32x the runtime —
+# and keeps its emitter.
+_PERMUTE_EMITTER_BACKENDS = ("cpu",)
 
 
 def _routes_to_dedicated_emitter() -> bool:
-    """Whether the pin *and* the backend both carry this emitter
+    """Whether the pin *and* the backend route the standalone permute marker
     (`fusion.routing`, which carries the rationale)."""
+    return routing(_DEDICATED_EMITTER_AVAILABLE, _PERMUTE_EMITTER_BACKENDS)
+
+
+def _drives_the_primitive() -> bool:
+    """Whether the pin *and* the backend can run this permutation from its
+    params — what an envelope over it needs, and what `fusion_path` reports."""
     return routing(_DEDICATED_EMITTER_AVAILABLE, _EMITTER_BACKENDS)
 
 
@@ -92,10 +107,15 @@ class Poseidon2:
         self._external_m4 = params.external_m4 if self._is_m4_structured else None
         name = self._select_fused_region_name()
         self.fused_region_marker = permute_marker(name, POSEIDON2_MARKER_VERSION)
-        # Dedicated == permute lowers to a hash-named marker, not the generic
-        # region one (which a vendor can't route, so a whole-region composite
-        # around it is unexpandable).
-        self.fusion_path = FusionPath.from_marker(name)
+        # Read off the primitive rather than off the marker (`from_marker`, which
+        # the families whose two answers coincide still use): `fusion_path` gates
+        # whether a whole-region composite over this permutation is expandable,
+        # and that holds on a backend which drives the primitive but routes no
+        # standalone permute marker. Deriving it from the marker would report
+        # GENERIC there and cost the enclosing sponge its kernel.
+        self.fusion_path = FusionPath.from_routing(
+            self._is_m4_structured and _drives_the_primitive()
+        )
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
