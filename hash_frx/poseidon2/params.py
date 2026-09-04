@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 import frx.numpy as fnp
@@ -10,12 +11,19 @@ import numpy as np
 from frx import Array
 
 
+@lru_cache(maxsize=None)
 def default_external_matrix(width: int, dtype: Any) -> Array:
     """Standard Poseidon2 external matrix for width >= 8 (M4-circulant + 2x block).
 
     M[i][j] = M4[i%4][j%4] * (2 if same 4-block). Built list -> fnp.array so
     HLO sees a kConstant. Determined wholly by (width, dtype); carries no
     field/scheme identity. `width` must be a multiple of 4 and at least 8.
+
+    Being determined by `(width, dtype)` is also why the result is shared
+    rather than rebuilt: every `Poseidon2Params` that does not carry its own
+    `external_matrix` builds this same width x width constant, and the
+    transfer is a measurable part of constructing a parameterization. The
+    array is immutable, so one instance serves every caller.
 
     Width 4 is refused rather than served: the formula degenerates to `2 * M4`
     there, where the canonical Poseidon2 external matrix is plain `M4`, so a
