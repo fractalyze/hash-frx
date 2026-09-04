@@ -42,7 +42,7 @@ repos:
         # ship types, so they are installed here and checked for real; frx /
         # zk_dtypes / absl are ignored in pyproject (no usable stubs).
         pass_filenames: false
-        additional_dependencies: [numpy, blake3]
+        additional_dependencies: ["numpy<2.3", blake3]
 -   repo: https://github.com/keith/pre-commit-buildifier
     rev: 8.0.1
     hooks:
