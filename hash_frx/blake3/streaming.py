@@ -50,23 +50,21 @@ this module runs rides it: the absorb path's block, the subtree merge,
 finalize's stack fold, and the root read. The two traced counts above stay
 outside it.
 
-**The root read reaches it by injection, not by a second spelling.**
+**The root read carries the marker because a transcript repeats it most.**
+Hashing a message it is one compression against sixteen per chunk and one per
+merge — the smallest share of what a hash runs. A Fiat-Shamir transcript
+inverts that ratio: it absorbs one short block and finalizes on every squeeze,
+so nearly every compression it runs is a root read. Left inline each one is the
+whole seven-round decomposition, whose message schedule and diagonalisation
+rolls are a `concatenate` apiece that no fusion recovers.
+
+**It reaches the marker by injection, not by a second spelling.**
 `modes.root_bytes` repeats one node's compression at an output-block counter
 running 0, 1, 2 …, which is a batch of rows rather than a node — the one place
-BLAKE3's own `[B, ...]` primitive is already the right shape, so the schedule
-around it stays with the tree and only the compression it calls is this
-module's (`modes.Compression`). Re-spelling the extendable-output logic here to
-get the marker on it is the fork that trade was avoiding; passing the
-compression in costs one parameter and no duplication.
-
-Marking it matters because a *transcript* inverts the ratio the unrouted
-spelling was chosen against. Hashing a message, the root read is one
-compression among a chunk's sixteen per block and one per merge. A Fiat-Shamir
-transcript absorbs one short block and then finalizes on every squeeze, so the
-root read is most of what it runs — and unrouted it is not one instruction but
-the whole seven-round decomposition, whose message schedule and diagonalisation
-rolls are a concatenate apiece that no fusion recovers
-(fractalyze/flock-zorch#363).
+BLAKE3's own `[B, ...]` primitive is already the right shape. So the
+extendable-output schedule stays with the tree and only the compression it
+calls comes from here, as a `modes.Compression` argument: one parameter rather
+than a copy of that schedule with the marker written into it.
 """
 
 from __future__ import annotations
