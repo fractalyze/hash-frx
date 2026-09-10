@@ -174,23 +174,49 @@ class PytreeThreadingTest(absltest.TestCase):
             bytes(np.asarray(state.finalize(DIGEST_LEN))).hex(), _oracle(msg).hex()
         )
 
-    def test_the_node_finishing_hops_are_marked(self) -> None:
+    def test_every_compression_is_marked(self) -> None:
         # Counted, not found: a resumable state cannot reach `hash_frx.digest.blake3`,
-        # so every node it finishes has to carry its own region, and an
+        # so every compression it runs has to carry its own region, and an
         # `assertIn` passes with one of them marked and the rest inline — which
-        # is exactly the state this replaced. Three hops finish a node (the
-        # absorb path's block, the subtree merge, finalize's stack fold); the
-        # root read is a batch of output blocks and stays with `modes.py`.
+        # is exactly the state this replaced. Four here: the three hops that
+        # finish a node (the absorb path's block, the subtree merge, finalize's
+        # stack fold) and the root read `finalize` ends on.
         block = frx.device_put(_u8(b"x" * BLOCK_LEN))
 
         def absorb_then_finalize(part: frx.Array) -> frx.Array:
             return blake3_stream_init().absorb(part).finalize(DIGEST_LEN)
 
         text = frx.jit(absorb_then_finalize).lower(block).as_text()
-        self.assertEqual(text.count(f'"{BLAKE3_COMPRESS_MARKER}"'), 3)
+        self.assertEqual(text.count(f'"{BLAKE3_COMPRESS_MARKER}"'), 4)
         # A whole-hash marker here would mean the resumable path fell back to
         # the one region that cannot express it.
         self.assertNotIn(f'"{BLAKE3_MARKER}"', text)
+
+    def test_the_root_read_is_one_region_at_every_width(self) -> None:
+        """`finalize` carries two regions — its stack fold and its root read —
+        however many output blocks the width spans.
+
+        Read on `finalize` alone, off a state that arrives already absorbed, so
+        the absorb path's compressions are not in the count. Two, not one: the
+        stack fold's region is emitted in the `while` body whether or not the
+        loop runs, and the root read is the second.
+
+        The widths straddle a block deliberately. `modes.root_bytes` batches its
+        output blocks into ONE call, so a two-block read is one region with two
+        rows rather than two regions — a count that grew with `out_len` would
+        mean the batching had been lost. Unrouted, this read was the seven-round
+        decomposition at every one of these widths
+        (fractalyze/flock-zorch#363).
+        """
+        state = blake3_stream_init().absorb(frx.device_put(_u8(b"x" * BLOCK_LEN)))
+        for out_len in (DIGEST_LEN, BLOCK_LEN, BLOCK_LEN + 1, 2 * BLOCK_LEN):
+            with self.subTest(out_len=out_len):
+                text = (
+                    frx.jit(Blake3Stream.finalize, static_argnums=(1,))
+                    .lower(state, out_len)
+                    .as_text()
+                )
+                self.assertEqual(text.count(f'"{BLAKE3_COMPRESS_MARKER}"'), 2)
 
 
 class AbsorbValidationTest(absltest.TestCase):
