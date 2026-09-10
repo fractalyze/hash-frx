@@ -64,6 +64,10 @@ Python reviewer would prefer for a lowering that stays one kernel.
   [`extension/sponge.py`](../../hash_frx/extension/sponge.py) offer a `while` and
   a `scan` form beside the unrolled one. Which a caller may take is its
   emitter's question, not this bullet's — see the fusion contract.
+  The bullet binds a *generically* marked body. A name-routed marker's
+  decomposition is the body the static_while path inherits when that marker
+  retires, and is written as loops —
+  [the next section](#a-decomposition-is-written-as-loops-for-the-static_while-path).
 - **A linear layer is an unrolled sum of column-scaled lanes**
   ([`linear.py`](../../hash_frx/linear.py)), never `fnp.dot` or `fnp.sum` (a
   reduction, which is the `kInput` fusion boundary) and never a dynamic index (a
@@ -94,6 +98,40 @@ Python reviewer would prefer for a lowering that stays one kernel.
 
 None of this is enforced by the type system, and none of it changes an output
 byte. [Testing](#testing) is where the enforcement is.
+
+## A decomposition is written as loops, for the static_while path
+
+Fractalyze XLA's generic path — `WhileToForConverter` and the static_while
+emitter, on CPU and GPU — compiles a bounded loop over a batched state to ONE
+kernel. It is where each family goes when its dedicated emitter retires, so a
+name-routed marker's decomposition is written for it now. The converter reads
+the loop's shape rather than the hash, and a body outside that shape still
+computes the right bytes, as a kernel per round.
+
+- **Rounds are a `lax.fori_loop`, one loop per round kind.** Not an unrolled
+  `for`: the loop is the unit the converter lowers, and consecutive loops fold
+  into the one fusion.
+- **The carry is one array, `[instances, elements]`** (or
+  `[instances, lanes, elements]`), never a tuple. Working variables and a
+  message schedule share its columns — a SHA-2 compression carries its eight
+  working words and its 16-word window as `[B, 24]` — so every round runs the
+  same body. A tuple element read after the loop declines it.
+- **Element-selective work is a static slice and a concatenate**, never a mask
+  or a select over the whole row, which pays for every element on every round.
+- **A round-constant table is a rank-2 constant, `[rounds, columns]`, read one
+  row at the counter** (`lax.dynamic_slice(table, (t, 0), (1, columns))`). A
+  rank-1 table declines, and so does one that reaches the loop as a `jit`
+  argument rather than as a constant.
+- **A message is carried unchanged, laid flat as `[instances, blocks * width]`,
+  and read one block per trip at `(0, i * width)`**, with
+  `allow_negative_indices=False`: the default wraps the start in a select the
+  converter cannot read as affine in the counter.
+
+A declined loop logs its reason under `TF_CPP_MIN_LOG_LEVEL=0
+TF_CPP_VMODULE=while_to_for_converter=2`. `assert_one_static_while`
+([`testing/static_while.py`](../../hash_frx/testing/static_while.py)) is how a
+family is held to the form: it lowers the call with every marker inlined and
+asserts one static_while fusion with no loop left beside it.
 
 ## A type per named member, a parameter per choice within one
 

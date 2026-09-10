@@ -127,6 +127,7 @@ without naming one.
 | Drawing field elements in a test, in the production Montgomery encoding                     | [`testing/random_field.py`](../hash_frx/testing/random_field.py) |
 | Proving a marker is RECOGNIZED by the pinned plugin, not merely emitted — and counting the kernels it became | [`testing/marker_recognized.py`](../hash_frx/testing/marker_recognized.py) |
 | Reading the one `stablehlo.composite` eqn a marked region lowered to, and its attrs and operand shapes | [`testing/composite_eqn.py`](../hash_frx/testing/composite_eqn.py) |
+| Proving a call lowers to one kernel on the generic static_while path, with every marker inlined | [`testing/static_while.py`](../hash_frx/testing/static_while.py) |
 
 ## The fusion contract
 

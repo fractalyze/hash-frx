@@ -336,6 +336,34 @@ py_library(
     ],
 )
 
+# Lowers a call with every marker inlined and counts the static_while fusions in
+# the compiled module: the generic path a family moves to once its dedicated
+# emitter retires.
+py_library(
+    name = "static_while",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "static_while.py",
+    ],
+    visibility = ["//hash_frx:__subpackages__"],
+    deps = [requirement("frx")],
+)
+
+py_test(
+    name = "static_while_test",
+    size = "small",
+    srcs = ["static_while_test.py"],
+    deps = [
+        ":marker_recognized",
+        ":static_while",
+        "//hash_frx:fusion",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 py_library(
     name = "composite_eqn",
     testonly = True,
