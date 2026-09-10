@@ -35,6 +35,7 @@ from hash_frx.blake3.streaming import (
     Blake3Stream,
     blake3_stream_init,
 )
+from hash_frx.testing.marker_recognized import routed_fusions
 
 
 def _u8(data: bytes) -> np.ndarray:
@@ -175,12 +176,12 @@ class PytreeThreadingTest(absltest.TestCase):
         )
 
     def test_every_compression_is_marked(self) -> None:
-        # Counted, not found: a resumable state cannot reach `hash_frx.digest.blake3`,
-        # so every compression it runs has to carry its own region, and an
-        # `assertIn` passes with one of them marked and the rest inline — which
-        # is exactly the state this replaced. Four here: the three hops that
-        # finish a node (the absorb path's block, the subtree merge, finalize's
-        # stack fold) and the root read `finalize` ends on.
+        # Counted, not found: a resumable state cannot reach
+        # `hash_frx.digest.blake3`, so every compression it runs has to carry
+        # its own region, and an `assertIn` holds when one of them is marked and
+        # the rest inline. Four here: the three hops that finish a node (the
+        # absorb path's block, the subtree merge, finalize's stack fold) and the
+        # root read `finalize` ends on.
         block = frx.device_put(_u8(b"x" * BLOCK_LEN))
 
         def absorb_then_finalize(part: frx.Array) -> frx.Array:
@@ -192,9 +193,9 @@ class PytreeThreadingTest(absltest.TestCase):
         # the one region that cannot express it.
         self.assertNotIn(f'"{BLAKE3_MARKER}"', text)
 
-    def test_the_root_read_is_one_region_at_every_width(self) -> None:
+    def test_the_root_read_is_one_recognized_region_at_every_width(self) -> None:
         """`finalize` carries two regions — its stack fold and its root read —
-        however many output blocks the width spans.
+        however many output blocks the width spans, and the plugin takes both.
 
         Read on `finalize` alone, off a state that arrives already absorbed, so
         the absorb path's compressions are not in the count. Two, not one: the
@@ -204,19 +205,34 @@ class PytreeThreadingTest(absltest.TestCase):
         The widths straddle a block deliberately. `modes.root_bytes` batches its
         output blocks into ONE call, so a two-block read is one region with two
         rows rather than two regions — a count that grew with `out_len` would
-        mean the batching had been lost. Unrouted, this read was the seven-round
-        decomposition at every one of these widths
-        (fractalyze/flock-zorch#363).
+        mean the batching had been lost.
+
+        Counted twice, on the lowered module and on the compiled one, because
+        they are different properties: the first says which marker this repo
+        puts on the wire, the second whether the pinned plugin turned it into a
+        kernel. A name the plugin declines inlines back to the decomposition
+        and computes identical bytes, so the lowered count alone reads the same
+        whether or not the root read is a kernel — which is the property this
+        marker exists for.
         """
         state = blake3_stream_init().absorb(frx.device_put(_u8(b"x" * BLOCK_LEN)))
         for out_len in (DIGEST_LEN, BLOCK_LEN, BLOCK_LEN + 1, 2 * BLOCK_LEN):
             with self.subTest(out_len=out_len):
-                text = (
-                    frx.jit(Blake3Stream.finalize, static_argnums=(1,))
-                    .lower(state, out_len)
-                    .as_text()
+                lowered = Blake3Stream.finalize.lower(state, out_len)
+                self.assertEqual(
+                    lowered.as_text().count(f'"{BLAKE3_COMPRESS_MARKER}"'), 2
                 )
-                self.assertEqual(text.count(f'"{BLAKE3_COMPRESS_MARKER}"'), 2)
+                # The compression's kernel is named `blake3`, the name the
+                # whole-tree digest's kernel carries too. Not ambiguous here:
+                # the sibling test pins that no whole-hash marker reaches this
+                # path, so both matches are compressions.
+                compiled = lowered.compile().as_text()
+                self.assertLen(
+                    routed_fusions(compiled, "blake3"),
+                    2,
+                    f"the root read was not routed at out_len={out_len}:\n"
+                    f"{compiled[:2000]}",
+                )
 
 
 class AbsorbValidationTest(absltest.TestCase):
