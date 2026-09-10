@@ -52,6 +52,7 @@ holds for the same reason.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 import frx.numpy as fnp
@@ -76,6 +77,18 @@ from hash_frx.extension import tree
 from hash_frx.word import pack_le, unpack_le
 
 U32 = fnp.uint32
+
+# How a root read runs its compression. `compress` is the decomposition and the
+# default, which is what every caller already inside a marked region wants — a
+# composite nested in `hash_frx.digest.blake3` is what its emitter must not be
+# handed. A caller that is NOT inside one passes a routed spelling instead, so
+# the one compression it finishes on reaches the BLAKE3 emitter rather than
+# inlining; `streaming.finalize` is that caller, and the parameter exists
+# because a resumable state has no whole-hash region to sit inside.
+#
+# Same shape as `compress` itself — the six operands in the region's order, so a
+# marked spelling and the bare one are substitutable.
+Compression = Callable[[Array, Array, Array, Array, Array, Array], Array]
 
 BLOCK_LEN = 64
 CHUNK_LEN = 1024
@@ -393,14 +406,14 @@ def parent_output(left: Array, right: Array, mode: Mode) -> Output:
     )
 
 
-def root_words(output: Output) -> Array:
+def root_words(output: Output, compression: Compression = compress) -> Array:
     """Finish a root node's compression: uint32 `[B, 16]`.
 
     `ROOT` rides on this one call and no other (spec section 2.4). The full
     sixteen words are the node's extendable output; the first eight are the
     256-bit chaining value that the 32-byte digest encodes.
     """
-    return compress(
+    return compression(
         output.input_chaining_value,
         output.block,
         output.counter,
@@ -410,7 +423,9 @@ def root_words(output: Output) -> Array:
     )
 
 
-def root_bytes(output: Output, out_len: int) -> Array:
+def root_bytes(
+    output: Output, out_len: int, compression: Compression = compress
+) -> Array:
     """A root node's extendable output: uint8 `[B, out_len]`.
 
     Spec section 2.6. The root's compression is repeated with an output-block
@@ -431,7 +446,7 @@ def root_bytes(output: Output, out_len: int) -> Array:
         raise ValueError(f"out_len must be at least 1, got {out_len}")
     batch = output.block.shape[0]
     blocks = tree.units(out_len, BLOCK_LEN)
-    stream = root_words(_output_blocks(output, blocks))
+    stream = root_words(_output_blocks(output, blocks), compression)
     return unpack_le(stream).reshape(batch, blocks * BLOCK_LEN)[:, :out_len]
 
 

@@ -45,16 +45,28 @@ needs.
 which is exactly what a resumable state does not hold, so it cannot serve this
 path. What a resumable state does repeat is the compression, the way a sponge
 repeats its permutation and a streaming SHAKE rides that marker on every block.
-So `_compress1` carries `hash_frx.compress.blake3`, and the three hops that
-finish one node ride it: the absorb path's block, the subtree merge, and
-finalize's stack fold. The two traced counts above stay outside it.
+So `_compress_rows` carries `hash_frx.compress.blake3`, and every compression
+this module runs rides it: the absorb path's block, the subtree merge,
+finalize's stack fold, and the root read. The two traced counts above stay
+outside it.
 
-The root read does not. `modes.root_bytes` repeats one node's compression at an
-output-block counter running 0, 1, 2 …, which is a batch of rows rather than a
-node — the one place BLAKE3's own `[B, ...]` primitive is already the right
-shape, and re-spelling it here would fork the extendable-output logic that lives
-with the tree. One unmarked compression per finalize, against one per absorbed
-block and one per merge.
+**The root read reaches it by injection, not by a second spelling.**
+`modes.root_bytes` repeats one node's compression at an output-block counter
+running 0, 1, 2 …, which is a batch of rows rather than a node — the one place
+BLAKE3's own `[B, ...]` primitive is already the right shape, so the schedule
+around it stays with the tree and only the compression it calls is this
+module's (`modes.Compression`). Re-spelling the extendable-output logic here to
+get the marker on it is the fork that trade was avoiding; passing the
+compression in costs one parameter and no duplication.
+
+Marking it matters because a *transcript* inverts the ratio the unrouted
+spelling was chosen against. Hashing a message, the root read is one
+compression among a chunk's sixteen per block and one per merge. A Fiat-Shamir
+transcript absorbs one short block and then finalizes on every squeeze, so the
+root read is most of what it runs — and unrouted it is not one instruction but
+the whole seven-round decomposition, whose message schedule and diagonalisation
+rolls are a concatenate apiece that no fusion recovers
+(fractalyze/flock-zorch#363).
 """
 
 from __future__ import annotations
@@ -106,16 +118,20 @@ _KEY_WORDS = _MODE.key_words
 _MODE_FLAGS = U32(_MODE.flags)
 
 
-def _compress1(
-    cv: Array, block_words: Array, counter: Array, block_len: Array, flags: Array
+def _compress_rows(
+    cv: Array,
+    block_words: Array,
+    counter: Array,
+    block_len: Array,
+    flags: Array,
+    iv: Array,
 ) -> Array:
-    """`compress` on a single row, unbatched in and out, as one generic marked
-    region.
+    """`compress` over `[B, ...]` rows as one marked region: uint32 `[B, 16]`.
 
-    The batch axis is where BLAKE3's parallelism lives, and a resumable state has
-    none of it — one chunk, one block, one stack entry at a time — so every call
-    here is the `[1, ...]` spelling of the batched primitive rather than a second
-    compression function.
+    The marker IS the batched compression, so this is the shape it is spelled in
+    and the shape its emitter reads. Every compression this module runs comes
+    through here: the three node-finishing hops via `_compress1`, one row each,
+    and `finalize`'s root read directly, one row per output block.
 
     Marked here rather than in `compress`: a stream repeats this compression the
     way a sponge repeats its permutation, so this is the region a streaming
@@ -131,27 +147,46 @@ def _compress1(
     unrecognized *name* inlines too, which is why this is safe to emit before
     the plugin ships its arm: bytes stay right and only the fusion waits.
 
-    `iv` is passed rather than defaulted: `compress`'s ABI note says a caller
-    under a marked region hands in the region's operand, since a captured
-    constant would be lifted ahead of the explicit ones. `compress` is the
-    decomposition directly — it already takes the region's operands in the
-    region's order, and a wrapper closure would be re-traced per call site.
+    `iv` is a parameter rather than `_MODE.iv` closed over, and `compress` is
+    passed as the decomposition directly. Both follow `compress`'s ABI note: a
+    caller under a marked region hands in the region's operand, since a captured
+    constant would be lifted ahead of the explicit ones, and a wrapper closure
+    would be re-traced per call site. Holding `iv` open is also what makes this
+    signature `modes.Compression`, which is how `modes.root_bytes` reaches it.
     """
-    # The region's ABI is the batched one — `[1, ...]` here — not this call
-    # site's unbatched row. An emitter for it is a row kernel like every other
-    # BLAKE3 arm, so a degenerate leading axis costs nothing and keeps one
-    # kernel able to serve a batched caller; the alternative would be a
-    # rank-1-and-scalar special case that only a stream can use.
     return fused_region(
         compress,
+        cv,
+        block_words,
+        counter,
+        block_len,
+        flags,
+        iv,
+        name=BLAKE3_COMPRESS_MARKER,
+        version=BLAKE3_COMPRESS_MARKER_VERSION,
+    )
+
+
+def _compress1(
+    cv: Array, block_words: Array, counter: Array, block_len: Array, flags: Array
+) -> Array:
+    """`_compress_rows` on a single row, unbatched in and out.
+
+    The batch axis is where BLAKE3's parallelism lives, and the three hops that
+    finish a node have none of it — one chunk, one block, one stack entry at a
+    time — so each is the `[1, ...]` spelling of the batched region rather than
+    a second compression function. An emitter for it is a row kernel like every
+    other BLAKE3 arm, so a degenerate leading axis costs nothing and keeps one
+    kernel able to serve a batched caller; the alternative would be a
+    rank-1-and-scalar special case that only a stream can use.
+    """
+    return _compress_rows(
         cv[None, :],
         block_words[None, :],
         counter[None, :],
         block_len[None],
         flags[None],
         _MODE.iv,
-        name=BLAKE3_COMPRESS_MARKER,
-        version=BLAKE3_COMPRESS_MARKER_VERSION,
     )[0]
 
 
@@ -412,7 +447,9 @@ class Blake3Stream:
             )
 
         icv, blk, ctr, blen, flags, _ = lax.while_loop(cond, body, carry)
-        return modes.root_bytes(_output(icv, blk, ctr, blen, flags), out_len)[0]
+        return modes.root_bytes(
+            _output(icv, blk, ctr, blen, flags), out_len, _compress_rows
+        )[0]
 
 
 def blake3_stream_init() -> Blake3Stream:
