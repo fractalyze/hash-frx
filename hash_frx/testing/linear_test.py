@@ -10,6 +10,7 @@ lowering is asserted, not just the arithmetic.
 
 from __future__ import annotations
 
+import frx
 import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
@@ -30,6 +31,26 @@ class UnrolledSumTest(absltest.TestCase):
     def test_single_term_is_the_term(self) -> None:
         x = rand_field(1, (4,), F)
         self.assertTrue(bool(fnp.array_equal(unrolled_sum([x]), x)))
+
+    def test_pairs_the_terms_rather_than_folding_them_left(self) -> None:
+        # Both spellings cost the same adds; what pairing buys is the critical
+        # path — one add per doubling where a left fold makes each add wait for
+        # the last. A round sums the whole state once, so that depth is what it
+        # waits on, and the win shows up wherever too few warps are resident to
+        # hide the latency.
+        n = 16
+        terms = [rand_field(i, (4,), F) for i in range(n)]
+        jaxpr = frx.make_jaxpr(lambda *t: unrolled_sum(list(t)))(*terms).jaxpr
+        depth = {v: 0 for v in jaxpr.invars}
+        longest = 0
+        for eqn in jaxpr.eqns:
+            d = 1 + max((depth.get(v, 0) for v in eqn.invars), default=0)
+            for out in eqn.outvars:
+                depth[out] = d
+            longest = max(longest, d)
+        self.assertEqual(longest, 4, "16 terms pair down in 4 rounds, not 15")
+        adds = sum(1 for e in jaxpr.eqns if e.primitive.name == "add")
+        self.assertEqual(adds, n - 1, "pairing must not cost an extra add")
 
     def test_lowers_without_a_boundary_op(self) -> None:
         terms = [rand_field(i, (4,), F) for i in range(4)]
