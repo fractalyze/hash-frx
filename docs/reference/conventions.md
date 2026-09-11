@@ -252,7 +252,10 @@ it bites is a test:
 Tests draw field elements as the Montgomery-form `zk_dtypes`
 ([`testing/random_field.py`](../../hash_frx/testing/random_field.py)): Montgomery
 is the production encoding the GPU kernels compute in, so a test in the canonical
-dtypes exercises an arithmetic path nothing ships. The `mont-test-dtypes`
-pre-commit hook rejects a bare canonical dtype in a `*_test.py`; a test genuinely
+dtypes exercises an arithmetic path nothing ships. Goldilocks is the exception:
+it reduces by Solinas, so the canonical `goldilocks` is its production encoding
+and zk_dtypes deprecates the `_mont` sibling, which the `no-goldilocks-mont`
+pre-commit hook rejects anywhere under `hash_frx/`. The `mont-test-dtypes` hook
+rejects any other bare canonical dtype in a `*_test.py`; a test genuinely
 *about* the canonical encoding opts out by marking that line
 `# canonical-encoding test`.
