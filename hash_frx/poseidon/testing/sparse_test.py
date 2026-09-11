@@ -21,7 +21,7 @@ import numpy as np
 from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
 from zk_dtypes import (
-    goldilocks_mont,  # wider than an int64, for the wide-attr tests
+    goldilocks,  # wider than an int64, for the wide-attr tests
     pfinfo,
 )
 from zk_dtypes import koalabear_mont as G  # a distinct field, for dtype-guard tests
@@ -92,7 +92,7 @@ def _params() -> SparsePoseidonParams:
     return SparsePoseidonParams(**_param_kwargs())
 
 
-_GOLDILOCKS_P = pfinfo(goldilocks_mont).modulus
+_GOLDILOCKS_P = pfinfo(goldilocks).modulus
 # The width-4 MDS with one entry above 2^63 - 1, so the instance exercises the
 # wide (bit-cast) attribute range. Only the matrices matter to the marker gate —
 # the round constants ride as operands whatever their magnitude.
@@ -101,7 +101,7 @@ _WIDE_MDS = ((_GOLDILOCKS_P - 1, 3, 1, 4), (1, 2, 3, 1), (4, 1, 2, 3), (3, 4, 1,
 
 def _wide_fld(rows: object) -> fnp.ndarray:
     # uint64, not int64: Goldilocks canonical values reach 2^64 - 2^32.
-    return fnp.asarray(np.array(rows, dtype=np.uint64).astype(goldilocks_mont))
+    return fnp.asarray(np.array(rows, dtype=np.uint64).astype(goldilocks))
 
 
 def _wide_field_params() -> SparsePoseidonParams:
@@ -110,7 +110,7 @@ def _wide_field_params() -> SparsePoseidonParams:
     still permutes."""
     return SparsePoseidonParams(
         width=_WIDTH,
-        dtype=goldilocks_mont,
+        dtype=goldilocks,
         alpha=_ALPHA,
         half_full_rounds=_HALF,
         n_partial_rounds=_NPART,
@@ -477,17 +477,6 @@ class SparsePoseidonWideFieldTest(absltest.TestCase):
             )
         )
 
-    @absltest.skipIf(
-        frx.default_backend() == "gpu",
-        "quarantined: frx.jit miscompiles the goldilocks square-of-add"
-        " (u+v)*(u+v) on cuda — every full round's power(s + rc, alpha)"
-        " contains it, so the generic (unrouted) permutation is wrong on the"
-        " gpu backend; the cpu run keeps validating this byte-match, and the"
-        " dedicated path is unaffected (the routed emitter computes it)."
-        " Tracked on the fractalyze xla work board: 'fix(gpu/codegen): jitted"
-        " goldilocks mul(add,add) miscompiles on cuda'. Remove this skip with"
-        " that fix's frx pin bump.",
-    )
     def test_wide_generic_body_byte_matches(self) -> None:
         self._assert_byte_matches(_generic_perm(_wide_field_params()).permute)
 
