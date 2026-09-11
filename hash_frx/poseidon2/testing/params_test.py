@@ -106,5 +106,25 @@ class DefaultExternalMatrixWidthTest(absltest.TestCase):
         self.assertEqual(default_external_matrix(8, F).shape, (8, 8))
 
 
+class DefaultExternalMatrixSharingTest(absltest.TestCase):
+    """The default matrix is shared across callers of one `(width, dtype)`."""
+
+    def test_one_instance_per_width_and_dtype(self) -> None:
+        self.assertIs(default_external_matrix(16, F), default_external_matrix(16, F))
+        self.assertIsNot(default_external_matrix(16, F), default_external_matrix(8, F))
+
+    def test_shared_matrix_matches_a_fresh_build(self) -> None:
+        # `__wrapped__` is the uncached builder, so this compares what callers
+        # get against what they would have built themselves.
+        fresh = default_external_matrix.__wrapped__(16, F)
+        self.assertTrue(bool(fnp.all(fresh == default_external_matrix(16, F))))
+
+    def test_a_refused_width_stays_refused(self) -> None:
+        # Sharing must not turn a raising call into a cached one.
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError, "width >= 8"):
+                default_external_matrix(4, F)
+
+
 if __name__ == "__main__":
     absltest.main()
