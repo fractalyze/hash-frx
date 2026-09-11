@@ -15,7 +15,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 from zk_dtypes import babybear_mont as F
-from zk_dtypes import goldilocks_mont, pfinfo
+from zk_dtypes import goldilocks, pfinfo
 
 from hash_frx.fusion import FusionPath
 from hash_frx.permutation import Permutation
@@ -139,13 +139,13 @@ class PoseidonReferenceByteMatchTest(absltest.TestCase):
 _WIDE_MDS = ((2, 3, 1), (1, 64, 3), (3, 1, _P - 1))
 # A matrix the emitter also rejects for a second reason: an MDS has no zero row.
 _ZERO_ROW_MDS = ((2, 3, 1), (0, 0, 0), (3, 1, 2))
-_GOLDILOCKS_P = pfinfo(goldilocks_mont).modulus
+_GOLDILOCKS_P = pfinfo(goldilocks).modulus
 
 
 def _to_goldilocks_field(rows: tuple[tuple[int, ...], ...]) -> fnp.ndarray:
     """Canonical ints -> Goldilocks. Unsigned, because an entry near `p` does not
     fit the int64 `_to_field` above casts through — which is the point."""
-    return fnp.asarray(np.array(rows, dtype=np.uint64).astype(goldilocks_mont))
+    return fnp.asarray(np.array(rows, dtype=np.uint64).astype(goldilocks))
 
 
 def _goldilocks_params() -> PoseidonParams:
@@ -164,7 +164,7 @@ def _goldilocks_params() -> PoseidonParams:
     """
     return PoseidonParams(
         width=_WIDTH,
-        dtype=goldilocks_mont,
+        dtype=goldilocks,
         alpha=7,
         full_rounds=_FULL,
         partial_rounds=_PARTIAL,
@@ -209,9 +209,7 @@ class PoseidonUnroutableMdsTest(parameterized.TestCase):
         p = Poseidon(_goldilocks_params())
 
         self.assertIs(p.fusion_path, FusionPath.GENERIC)
-        assert_marker_matches_emission(
-            self, p, fnp.arange(_WIDTH, dtype=goldilocks_mont)
-        )
+        assert_marker_matches_emission(self, p, fnp.arange(_WIDTH, dtype=goldilocks))
 
     def test_the_generic_path_still_byte_matches_the_reference(self) -> None:
         p = Poseidon(_poseidon_params_with(_WIDE_MDS))
