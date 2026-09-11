@@ -172,7 +172,7 @@ def _permutation_body(
     ext_term_rc: Array,
     diag: Array,
 ) -> Array:
-    """The straight-line permute on a single `(width,)` state, taking the
+    """The round-loop permute on a single `(width,)` state, taking the
     Poseidon2Fusion ABI operands explicitly: round constants flattened row-major,
     int_rc one constant per partial round. The internal J scale rides as the
     `internal_j_scale` marker attribute (a scalar constant survives `lax.scan`,
@@ -200,9 +200,11 @@ def _permutation_body(
         def apply_external(state: Array) -> Array:
             return apply_matrix(mds, state)
 
-    # +rc -> sbox(all lanes) -> MDS
-    def external_round(state: Array, rc: Array) -> Array:
-        return apply_external(fnp.power(state + rc, alpha))
+    # +rc -> sbox(all lanes) -> MDS. Shaped as a `lax.scan` step — carry in,
+    # carry and an empty per-step output out — so the round sequence below is
+    # one loop rather than a copy of the body per round.
+    def external_round(state: Array, rc: Array) -> tuple[Array, None]:
+        return apply_external(fnp.power(state + rc, alpha)), None
 
     # The J scale rebuilds from its canonical (attribute) value so the identity
     # default skips the multiply at trace time.
@@ -213,22 +215,29 @@ def _permutation_body(
         else fnp.asarray(j_scale_canonical, dtype=p.dtype)
     )
 
-    def internal_round(state: Array, rc0: Array) -> Array:
+    def internal_round(state: Array, rc0: Array) -> tuple[Array, None]:
         s0 = fnp.power(state[0] + rc0, alpha)
         # concatenate, not state.at[0].set: a static-index set lowers to scatter,
         # which would split the fused kernel.
         state = fnp.concatenate([s0[None], state[1:]])
-        return apply_internal(diag, state, off_diag)
+        return apply_internal(diag, state, off_diag), None
 
+    # Each round sequence is one `lax.scan` over its round constants, not a
+    # Python loop that copies the body per round. The constants are the scanned
+    # operand, so a round reads its own row at the loop's index rather than a
+    # literal spliced into a unique copy of the body.
+    #
+    # What that buys is downstream: the marker body holds one round, so it
+    # inlines to a `while` XLA's generic static_while path lowers in a single
+    # kernel — the same one kernel a per-backend emitter is written to produce.
+    # Unrolled, the body is `2*external_rounds + internal_rounds` copies, which
+    # is what made the emitter worth writing in the first place.
     ext_init = ext_init_rc.reshape(e_rounds, w)
     ext_term = ext_term_rc.reshape(e_rounds, w)
     s = apply_external(s)  # initial pre-MDS
-    for i in range(e_rounds):
-        s = external_round(s, ext_init[i])
-    for i in range(i_rounds):
-        s = internal_round(s, int_rc[i])
-    for i in range(e_rounds):
-        s = external_round(s, ext_term[i])
+    s, _ = frx.lax.scan(external_round, s, ext_init)
+    s, _ = frx.lax.scan(internal_round, s, int_rc)
+    s, _ = frx.lax.scan(external_round, s, ext_term)
     return s
 
 

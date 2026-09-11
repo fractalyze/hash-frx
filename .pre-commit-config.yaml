@@ -41,8 +41,13 @@ repos:
         # files, so cross-module inference stays consistent. numpy and blake3 both
         # ship types, so they are installed here and checked for real; frx /
         # zk_dtypes / absl are ignored in pyproject (no usable stubs).
+        #
+        # numpy is pinned to the version in requirements_lock_3_11.txt: its stubs
+        # track the Python it was released for, and a floating one eventually
+        # parses only under a newer Python than the `python_version` mypy is
+        # configured for, which fails before any of our own code is read.
         pass_filenames: false
-        additional_dependencies: [numpy, blake3]
+        additional_dependencies: [numpy==2.4.6, blake3]
 -   repo: https://github.com/keith/pre-commit-buildifier
     rev: 8.0.1
     hooks:
