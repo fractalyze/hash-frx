@@ -40,7 +40,11 @@ repos:
         # pyproject). Checks the whole hash_frx/ tree rather than just changed
         # files, so cross-module inference stays consistent. numpy and blake3 both
         # ship types, so they are installed here and checked for real; frx /
-        # zk_dtypes / absl are ignored in pyproject (no usable stubs).
+        # zk_dtypes / absl are ignored in pyproject (no usable stubs). Built on
+        # Python 3.11, the interpreter .python-version and pyproject's
+        # python_version name: on a newer one pip resolves a numpy that has
+        # dropped 3.11, and mypy cannot parse its stubs at python_version 3.11.
+        language_version: python3.11
         pass_filenames: false
         additional_dependencies: [numpy, blake3]
 -   repo: https://github.com/keith/pre-commit-buildifier
